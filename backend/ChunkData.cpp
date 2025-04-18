@@ -48,9 +48,23 @@ bool ChunkData::loadFromFile(const std::string& filename) {
         chunk->data.resize(chunk->length);
         file.read(reinterpret_cast<char*>(chunk->data.data()), chunk->length);
 
-        // Recursively parse children from inside the chunk's data
-        std::istringstream childStream(std::string(reinterpret_cast<char*>(chunk->data.data()), chunk->length));
-        parseChunk(childStream, chunk);
+        // Only parse child chunks if this is a known container
+        switch (chunk->id) {
+        case 0x0100: // HIERARCHY
+        case 0x0102: // PIVOTS
+        //case 0x0103: // PIVOT_FIXUPS
+        case 0x0410: // GEOMETRY
+        case 0x0810: // MESH
+        {
+            std::string subData(reinterpret_cast<char*>(chunk->data.data()), chunk->length);
+            std::istringstream subStream(subData);
+            parseChunk(subStream, chunk);
+        }
+        break;
+        default:
+            // treat as leaf chunk — don't parse further
+            break;
+        }
 
         file.seekg(dataEnd);  // Move back to outer stream position
         chunks.push_back(chunk);
@@ -78,9 +92,20 @@ bool ChunkData::parseChunk(std::istream& stream, std::shared_ptr<ChunkItem>& par
 
         parent->children.push_back(child);
 
-        // Recursively parse deeper chunks (if needed — no heuristic yet)
-        std::istringstream subStream(std::string(reinterpret_cast<char*>(child->data.data()), child->length));
-        parseChunk(subStream, child);
+        switch (child->id) {
+        case 0x0100: // HIERARCHY
+        case 0x0102: // PIVOTS
+        case 0x0410: // GEOMETRY
+        case 0x0810: // MESH
+        {
+            std::string subData(reinterpret_cast<char*>(child->data.data()), child->length);
+            std::istringstream subStream(subData);
+            parseChunk(subStream, child);
+        }
+        break;
+        default:
+            break;  // don't recurse into flat chunks like PIVOT_FIXUPS
+        }
     }
     return true;
 }

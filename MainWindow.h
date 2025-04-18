@@ -16,6 +16,7 @@ public:
 
 private slots:
     void openFile();
+    void handleTreeSelection();
 
 private:
     void populateTree();
