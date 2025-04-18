@@ -1,12 +1,13 @@
-#include "ChunkData.h"
-
+#include <sstream>
 #include <fstream>
 #include <iostream>
+#include <memory>
+#include <vector>
+#include "ChunkData.h"
 
-// Helper to read a 4-byte little-endian integer from file
-static uint32_t readUint32(std::ifstream& stream) {
+static uint32_t readUint32(std::istream& stream) {
     uint32_t value = 0;
-    stream.read(reinterpret_cast<char*>(&value), sizeof(uint32_t));
+    stream.read(reinterpret_cast<char*>(&value), sizeof(value));
     return value;
 }
 
@@ -17,53 +18,72 @@ bool ChunkData::loadFromFile(const std::string& filename) {
         return false;
     }
 
-    clear();
 
-    while (file.peek() != EOF) {
-        auto chunk = std::make_shared<ChunkItem>();
+    
 
-        std::streampos chunkStart = file.tellg();
+    file.seekg(0, std::ios::end);
+    auto fileSize = file.tellg();
+    file.seekg(0, std::ios::beg);
+
+    while (file.tellg() < fileSize) {
+        std::shared_ptr<ChunkItem> chunk = std::make_shared<ChunkItem>();
+
+        std::streampos startPos = file.tellg();
         chunk->id = readUint32(file);
-        chunk->length = readUint32(file);
-        std::streampos chunkEnd = file.tellg() + static_cast<std::streamoff>(chunk->length);
+        chunk->length = readUint32(file) & 0x7FFFFFFF;
+        std::streampos endPos = file.tellg() + static_cast<std::streamoff>(chunk->length);
 
-        // Read raw data
+        // Sanity check
+        if (chunk->length > fileSize || endPos > fileSize || chunk->length > 100000000) {
+            std::cerr << "Suspicious chunk size at " << startPos << " ID: " << chunk->id << ", size: " << chunk->length << "\n";
+            break;
+        }
+
+        std::streampos dataStart = file.tellg();
+        file.seekg(chunk->length, std::ios::cur);
+        std::streampos dataEnd = file.tellg();
+
+        // Save raw data
+        file.seekg(dataStart);
         chunk->data.resize(chunk->length);
         file.read(reinterpret_cast<char*>(chunk->data.data()), chunk->length);
 
-        // Recursively check for nested chunks (if any)
-        parseChunk(file, chunk, chunkEnd);
+        // Recursively parse children from inside the chunk's data
+        std::istringstream childStream(std::string(reinterpret_cast<char*>(chunk->data.data()), chunk->length));
+        parseChunk(childStream, chunk);
 
+        file.seekg(dataEnd);  // Move back to outer stream position
         chunks.push_back(chunk);
-
-        // Move to next chunk
-        file.seekg(chunkEnd);
     }
 
     return true;
 }
 
-bool ChunkData::parseChunk(std::ifstream& file, std::shared_ptr<ChunkItem>& parent, std::streampos endPos) {
-    while (file.tellg() < endPos) {
+bool ChunkData::parseChunk(std::istream& stream, std::shared_ptr<ChunkItem>& parent) {
+    while (stream && stream.peek() != EOF) {
+        std::streampos pos = stream.tellg();
+        if (stream.rdbuf()->in_avail() < 8) break;
+
         auto child = std::make_shared<ChunkItem>();
-        child->id = readUint32(file);
-        child->length = readUint32(file);
-        std::streampos childEnd = file.tellg() + static_cast<std::streamoff>(child->length);
+        child->id = readUint32(stream);
+        child->length = readUint32(stream) & 0x7FFFFFFF;
 
-        // Read child data
+        if (stream.rdbuf()->in_avail() < static_cast<std::streamsize>(child->length)) {
+            std::cerr << "Incomplete child chunk at " << pos << ", ID: " << child->id << ", expected size: " << child->length << "\n";
+            break;
+        }
+
         child->data.resize(child->length);
-        file.read(reinterpret_cast<char*>(child->data.data()), child->length);
-
-        // Recurse if possible
-        parseChunk(file, child, childEnd);
+        stream.read(reinterpret_cast<char*>(child->data.data()), child->length);
 
         parent->children.push_back(child);
 
-        file.seekg(childEnd);
+        // Recursively parse deeper chunks (if needed — no heuristic yet)
+        std::istringstream subStream(std::string(reinterpret_cast<char*>(child->data.data()), child->length));
+        parseChunk(subStream, child);
     }
     return true;
 }
-
 void ChunkData::clear() {
     chunks.clear();
 }
