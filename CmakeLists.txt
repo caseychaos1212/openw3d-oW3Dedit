@@ -1,0 +1,20 @@
+cmake_minimum_required(VERSION 3.22)
+project(oW3DDumpQt LANGUAGES CXX)
+
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_AUTOMOC ON)
+set(CMAKE_AUTORCC ON)
+set(CMAKE_AUTOUIC ON)
+
+find_package(Qt6 REQUIRED COMPONENTS Widgets)
+
+add_executable(oW3DDumpQt
+    main.cpp
+    MainWindow.cpp
+    MainWindow.h
+    backend/ChunkItem.h
+    backend/ChunkData.h
+    backend/ChunkData.cpp
+)
+
+target_link_libraries(oW3DDumpQt PRIVATE Qt6::Widgets)
