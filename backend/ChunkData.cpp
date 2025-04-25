@@ -10,6 +10,24 @@ static uint32_t readUint32(std::istream& stream) {
     stream.read(reinterpret_cast<char*>(&value), sizeof(value));
     return value;
 }
+static bool isWrapperChunk(uint32_t id) {
+    switch (id) {
+    case 0x0000: // common root wrapper
+    case 0x0100: // HIERARCHY
+    case 0x0102: // PIVOTS
+    case 0x0410: // GEOMETRY
+    case 0x0810: // MESH
+    case 0x0910: // SHADERS
+    case 0x0A10: // TEXTURES
+    case 0x0B10: // MATERIAL_PASS
+    case 0x0C10: // AABTREE
+    case 0x02A: // W3D_CHUNK_VERTEX_MATERIALS
+    case 0x02B: // W3D_CHUNK_VERTEX_MATERIAL
+        return true;
+    default:
+        return false;
+    }
+}
 
 bool ChunkData::loadFromFile(const std::string& filename) {
     std::ifstream file(filename, std::ios::binary);
@@ -48,22 +66,10 @@ bool ChunkData::loadFromFile(const std::string& filename) {
         chunk->data.resize(chunk->length);
         file.read(reinterpret_cast<char*>(chunk->data.data()), chunk->length);
 
-        // Only parse child chunks if this is a known container
-        switch (chunk->id) {
-        case 0x0100: // HIERARCHY
-        case 0x0102: // PIVOTS
-        //case 0x0103: // PIVOT_FIXUPS
-        case 0x0410: // GEOMETRY
-        case 0x0810: // MESH
-        {
+        if (isWrapperChunk(chunk->id)) {
             std::string subData(reinterpret_cast<char*>(chunk->data.data()), chunk->length);
             std::istringstream subStream(subData);
             parseChunk(subStream, chunk);
-        }
-        break;
-        default:
-            // treat as leaf chunk — don't parse further
-            break;
         }
 
         file.seekg(dataEnd);  // Move back to outer stream position
@@ -92,20 +98,12 @@ bool ChunkData::parseChunk(std::istream& stream, std::shared_ptr<ChunkItem>& par
 
         parent->children.push_back(child);
 
-        switch (child->id) {
-        case 0x0100: // HIERARCHY
-        case 0x0102: // PIVOTS
-        case 0x0410: // GEOMETRY
-        case 0x0810: // MESH
-        {
+        if (isWrapperChunk(child->id)) {
             std::string subData(reinterpret_cast<char*>(child->data.data()), child->length);
             std::istringstream subStream(subData);
             parseChunk(subStream, child);
         }
-        break;
-        default:
-            break;  // don't recurse into flat chunks like PIVOT_FIXUPS
-        }
+
     }
     return true;
 }
