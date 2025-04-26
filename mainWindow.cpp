@@ -173,6 +173,58 @@ void MainWindow::handleTreeSelection() {
         case 0x0000002D: // W3D_CHUNK_VERTEX_MATERIAL_INFO
             fields = InterpretVertexMaterialInfo(target);
             break;
+        case 0x0310: 
+            fields = InterpretShaderName(target);
+            break;
+        case 0x0311: 
+            fields = InterpretShaderDetail(target);
+            break;
+        case 0x0029:
+            fields = InterpretShaders(target);
+            break;
+        case 0x0032: // W3D_CHUNK_TEXTURE_NAME
+            fields = InterpretTextureName(target); 
+            break;  
+        case 0x0033: // W3D_CHUNK_TEXTURE_INFO
+            fields = InterpretTextureInfo(target);
+            break;  
+        case 0x0039:
+            fields = InterpretVertexMaterialIDs(target);
+            break;
+        case 0x003A:
+            fields = InterpretShaderIDs(target);
+            break;
+        case 0x0048:
+            fields = InterpretTextureStage(target);
+            break;
+        case 0x0049:
+            fields = InterpretTextureIDs(target);
+            break;
+        case 0x004a:
+             fields = InterpretStageTexCoords(target);
+            break;
+        case 0x0091:
+            fields = InterpretAABTreeHeader(target);
+            break;
+        case 0x0092:
+            fields = InterpretAABTreePolyIndices(target);
+            break;
+        case 0x0093:
+            fields = InterpretAABTreeNodes(target);
+            break;
+        case 0x0701:
+            fields = InterpretHLODHeader(target);
+            break;
+        case 0x0702: // HLOD_LOD_ARRAY
+            fields = InterpretHLODLODArray(target);
+            break;
+        case 0x0703:
+            fields = InterpretHLODSubObjectArrayHeader(target);
+            break;
+        case 0x0704:
+            fields = InterpretHLODSubObject_LodArray(target);
+            break;
+
         default:
             break;
         }

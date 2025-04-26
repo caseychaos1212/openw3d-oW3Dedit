@@ -567,3 +567,340 @@ std::vector<ChunkField> InterpretVertexMaterialInfo(const std::shared_ptr<ChunkI
     return fields;
 }
 
+inline std::vector<ChunkField> InterpretShaderName(const std::shared_ptr<ChunkItem>& chunk) {
+    std::string name(reinterpret_cast<const char*>(chunk->data.data()));
+    return { { "Shader.Name", "string", name } };
+}
+inline std::vector<ChunkField> InterpretShaderDetail(const std::shared_ptr<ChunkItem>& chunk) {
+    std::ostringstream hexDump;
+    for (size_t i = 0; i < std::min<size_t>(chunk->data.size(), 16); ++i) {
+        hexDump << std::hex << (int)chunk->data[i] << " ";
+    }
+    return { { "Shader.Detail", "hex", hexDump.str() } };
+}
+std::vector<ChunkField> InterpretShaders(const std::shared_ptr<ChunkItem>& chunk) {
+    std::vector<ChunkField> fields;
+    const uint8_t* data = reinterpret_cast<const uint8_t*>(chunk->data.data());
+    size_t size = chunk->data.size();
+
+    static const char* depthCompare[] = { "Pass Never","Pass Less","Pass Equal","Pass Less or Equal", "Pass Greater","Pass Not Equal","Pass Greater or Equal","Pass Always" };
+    static const char* depthMask[] = { "Write Disable", "Write Enable" };
+    static const char* destBlend[] = { "Zero","One","Src Color","One Minus Src Color","Src Alpha","One Minus Src Alpha","Src Color Prefog" };
+    static const char* priGradient[] = { "Disable","Modulate","Add","Bump-Environment" };
+    static const char* secGradient[] = { "Disable","Enable" };
+    static const char* srcBlend[] = { "Zero","One","Src Alpha","One Minus Src Alpha" };
+    static const char* texturing[] = { "Disable","Enable" };
+    static const char* detailColor[] = { "Disable","Detail","Scale","InvScale","Add","Sub","SubR","Blend","DetailBlend" };
+    static const char* detailAlpha[] = { "Disable","Detail","Scale","InvScale" };
+    static const char* alphaTest[] = { "Alpha Test Disable", "Alpha Test Enable" };
+    static const char* PostDetailColor[] = { "Disable", "Detail", "Scale", "InvScale", "Add", "Sub", "SubR", "Blend", "DetailBlend" };
+    static const char* PostDetailAlpha[] = { "Disable", "Detail", "Scale", "InvScale" };
+
+
+    const size_t shaderSize = 16;
+    size_t count = size / shaderSize;
+
+    for (size_t i = 0; i + shaderSize <= chunk->data.size(); i += shaderSize) {
+        std::string prefix = "shader[" + std::to_string(i / shaderSize) + "]";
+
+        auto safeLookup = [](const char* const* arr, size_t len, uint8_t index) -> std::string {
+            return index < len ? arr[index] : ("Unknown(" + std::to_string(index) + ")");
+            };
+
+        fields.push_back({ prefix + ".DepthCompare", "string", depthCompare[data[i + 0]] });
+        fields.push_back({ prefix + ".DepthMask",    "string", depthMask[data[i + 1]] });
+        // i + 2 is unused
+        fields.push_back({ prefix + ".DestBlend",    "string", destBlend[data[i + 3]] });
+        // i + 4 is unused
+        fields.push_back({ prefix + ".PriGradient",  "string", priGradient[data[i + 5]] });
+        fields.push_back({ prefix + ".SecGradient",  "string", secGradient[data[i + 6]] });
+        fields.push_back({ prefix + ".SrcBlend",     "string", srcBlend[data[i + 7]] });
+        fields.push_back({ prefix + ".Texturing",    "string", texturing[data[i + 8]] });
+        fields.push_back({ prefix + ".DetailColor",  "string", detailColor[data[i + 9]] });
+        fields.push_back({ prefix + ".DetailAlpha",  "string", detailAlpha[data[i + 10]] });
+        // i + 11 is unused
+        fields.push_back({ prefix + ".AlphaTest",    "string", alphaTest[data[i + 12]] });
+        fields.push_back({ prefix + ".PostDetailColor",    "string", PostDetailColor[data[i + 13]] });
+        fields.push_back({ prefix + ".PostDetailAlpha",    "string", PostDetailAlpha[data[i + 14]] });
+        // i + 15 is padding
+    }
+
+    return fields;
+}
+
+
+std::vector<ChunkField> InterpretTextureName(const std::shared_ptr<ChunkItem>& chunk) {
+    std::string name(reinterpret_cast<const char*>(chunk->data.data()));
+    return { { "Texture Name", "string", name } };
+}
+
+std::vector<ChunkField> InterpretTextureInfo(const std::shared_ptr<ChunkItem>& chunk) {
+    std::vector<ChunkField> fields;
+    const uint8_t* data = reinterpret_cast<const uint8_t*>(chunk->data.data());
+    if (chunk->data.size() < 12) {
+        fields.push_back({ "Error", "string", "Texture info too short" });
+        return fields;
+    }
+
+    uint32_t attributes = *reinterpret_cast<const uint32_t*>(&data[0]);
+    uint32_t frameCount = *reinterpret_cast<const uint32_t*>(&data[4]);
+    float frameRate = *reinterpret_cast<const float*>(&data[8]);
+
+    fields.push_back({ "Texture.Attributes", "int32", std::to_string(attributes) });
+
+    if (attributes & 0x01) fields.push_back({ "Texture.Flag", "flag", "W3DTEXTURE_PUBLISH" });
+    if (attributes & 0x02) fields.push_back({ "Texture.Flag", "flag", "W3DTEXTURE_NO_LOD" });
+    if (attributes & 0x04) fields.push_back({ "Texture.Flag", "flag", "W3DTEXTURE_CLAMP_U" });
+    if (attributes & 0x08) fields.push_back({ "Texture.Flag", "flag", "W3DTEXTURE_CLAMP_V" });
+    if (attributes & 0x10) fields.push_back({ "Texture.Flag", "flag", "W3DTEXTURE_ALPHA_BITMAP" });
+
+    fields.push_back({ "Texture.FrameCount", "int32", std::to_string(frameCount) });
+    fields.push_back({ "Texture.FrameRate", "float", std::to_string(frameRate) });
+
+    return fields;
+}
+
+inline std::vector<ChunkField> InterpretVertexMaterialIDs(const std::shared_ptr<ChunkItem>& chunk) {
+    std::vector<ChunkField> fields;
+    const uint32_t* data = reinterpret_cast<const uint32_t*>(chunk->data.data());
+    size_t count = chunk->data.size() / sizeof(uint32_t);
+
+    for (size_t i = 0; i < count; ++i) {
+        std::string label = "Vertex[" + std::to_string(i) + "] Vertex Material Index";
+        fields.push_back({ label, "int32", std::to_string(data[i]) });
+    }
+
+
+    return fields;
+}
+
+inline std::vector<ChunkField> InterpretShaderIDs(const std::shared_ptr<ChunkItem>& chunk) {
+    std::vector<ChunkField> fields;
+    const uint8_t* data = reinterpret_cast<const uint8_t*>(chunk->data.data());
+    size_t size = chunk->data.size();
+
+    for (size_t i = 0; i + 4 <= size; i += 4) {
+        uint32_t shaderID = *reinterpret_cast<const uint32_t*>(&data[i]);
+        fields.push_back({ "Face[" + std::to_string(i / 4) + "] Shader Index", "int32", std::to_string(shaderID) });
+
+    }
+
+    return fields;
+}
+
+inline std::vector<ChunkField> InterpretTextureStage(const std::shared_ptr<ChunkItem>& chunk) {
+    std::vector<ChunkField> fields;
+    const uint8_t* data = reinterpret_cast<const uint8_t*>(chunk->data.data());
+    if (chunk->data.size() < 4) {
+        fields.push_back({ "Error", "string", "Stage data too short" });
+        return fields;
+    }
+
+    uint32_t stageNumber = *reinterpret_cast<const uint32_t*>(data);
+    fields.push_back({ "StageNumber", "uint32", std::to_string(stageNumber) });
+
+    return fields;
+}
+
+inline std::vector<ChunkField> InterpretStageTexCoords(const std::shared_ptr<ChunkItem>& chunk) {
+    std::vector<ChunkField> fields;
+    const uint8_t* data = reinterpret_cast<const uint8_t*>(chunk->data.data());
+    size_t size = chunk->data.size();
+
+    for (size_t i = 0; i + 8 <= size; i += 8) {
+        float u = *reinterpret_cast<const float*>(&data[i]);
+        float v = *reinterpret_cast<const float*>(&data[i + 4]);
+        std::ostringstream oss;
+        oss << std::fixed << std::setprecision(6) << u << ", " << v;
+        fields.push_back({ "Vertex[" + std::to_string(i) + "].UV", "vec2", oss.str() });
+
+    }
+
+    return fields;
+}
+
+inline std::vector<ChunkField> InterpretTextureIDs(const std::shared_ptr<ChunkItem>& chunk) {
+    std::vector<ChunkField> fields;
+    const uint32_t* data = reinterpret_cast<const uint32_t*>(chunk->data.data());
+    size_t count = chunk->data.size() / sizeof(uint32_t);
+
+    for (size_t i = 0; i < count; ++i) {
+        fields.push_back({ "Face[" + std::to_string(i) + "] Texture Index", "int32", std::to_string(data[i]) });
+    }
+
+    return fields;
+}
+
+inline std::vector<ChunkField> InterpretAABTreeHeader(const std::shared_ptr<ChunkItem>& chunk) {
+    std::vector<ChunkField> fields;
+    const uint32_t* data = reinterpret_cast<const uint32_t*>(chunk->data.data());
+
+    if (chunk->data.size() < 8) { // Only 2 uint32s
+        fields.push_back({ "Error", "string", "Header too short" });
+        return fields;
+    }
+
+    fields.push_back({ "NodeCount", "uint32", std::to_string(data[0]) });
+    fields.push_back({ "PolyCount", "uint32", std::to_string(data[1]) });
+
+    return fields;
+}
+
+
+inline std::vector<ChunkField> InterpretAABTreePolyIndices(const std::shared_ptr<ChunkItem>& chunk) {
+    std::vector<ChunkField> fields;
+    const uint16_t* data = reinterpret_cast<const uint16_t*>(chunk->data.data());
+    size_t count = chunk->data.size() / sizeof(uint16_t);
+
+    for (size_t i = 0, logicalIndex = 0; i + 1 < count; i += 2) {
+        // Skip every second index (padding)
+        fields.push_back({
+            "Polygon Index[" + std::to_string(logicalIndex++) + "]",
+            "int32",
+            std::to_string(data[i])
+            });
+    }
+
+    return fields;
+}
+
+
+
+inline std::vector<ChunkField> InterpretAABTreeNodes(const std::shared_ptr<ChunkItem>& chunk) {
+    std::vector<ChunkField> fields;
+    const uint8_t* raw = reinterpret_cast<const uint8_t*>(chunk->data.data());
+    const size_t stride = 32;
+
+    if (chunk->data.size() % stride != 0) {
+        fields.push_back({ "Error", "string", "Node size mismatch — expected 32-byte aligned data" });
+        return fields;
+    }
+
+    size_t count = chunk->data.size() / stride;
+
+    auto readF32 = [&](size_t offset) {
+        return *reinterpret_cast<const float*>(raw + offset);
+        };
+    auto readU32 = [&](size_t offset) {
+        return *reinterpret_cast<const uint32_t*>(raw + offset);
+        };
+
+    for (size_t i = 0; i < count; ++i) {
+        size_t base = i * stride;
+        std::string prefix = "Node[" + std::to_string(i) + "]";
+
+        std::ostringstream minStr, maxStr;
+        minStr << std::fixed << std::setprecision(6)
+            << readF32(base + 0) << " "
+            << readF32(base + 4) << " "
+            << readF32(base + 8);
+        maxStr << std::fixed << std::setprecision(6)
+            << readF32(base + 12) << " "
+            << readF32(base + 16) << " "
+            << readF32(base + 20);
+
+        fields.push_back({ prefix + ".Min", "vector", minStr.str() });
+        fields.push_back({ prefix + ".Max", "vector", maxStr.str() });
+
+        uint32_t frontOrPoly0 = readU32(base + 24);
+        uint32_t backOrPolyCount = readU32(base + 28);
+
+        if (frontOrPoly0 & 0x80000000) {
+            // Leaf node
+            fields.push_back({ prefix + ".Poly0", "uint32", std::to_string(frontOrPoly0 & 0x7FFFFFFF) });
+            fields.push_back({ prefix + ".PolyCount", "uint32", std::to_string(backOrPolyCount) });
+        }
+        else {
+            // Interior node
+            fields.push_back({ prefix + ".Front", "int32", std::to_string(static_cast<int32_t>(frontOrPoly0)) });
+            fields.push_back({ prefix + ".Back", "int32", std::to_string(static_cast<int32_t>(backOrPolyCount)) });
+        }
+    }
+
+    return fields;
+}
+
+inline std::vector<ChunkField> InterpretHLOD(const std::shared_ptr<ChunkItem>& chunk) {
+    std::vector<ChunkField> fields;
+    fields.push_back({ "Info", "string", "W3D_CHUNK_HLOD (wrapper)" });
+    return fields;
+}
+
+inline std::vector<ChunkField> InterpretHLODHeader(const std::shared_ptr<ChunkItem>& chunk) {
+    std::vector<ChunkField> fields;
+
+    if (chunk->data.size() < 0x28) {
+        fields.push_back({ "Error", "string", "HLOD header too short" });
+        return fields;
+    }
+
+    const uint8_t* raw = reinterpret_cast<const uint8_t*>(chunk->data.data());
+    uint8_t version = raw[2]; // Corrected offset
+    const uint32_t lodCount = *reinterpret_cast<const uint32_t*>(&raw[4]);
+    const char* namePtr = reinterpret_cast<const char*>(&raw[8]);
+    const char* htreeNamePtr = reinterpret_cast<const char*>(&raw[24]);
+
+    std::string name(namePtr, strnlen(namePtr, 16));
+    std::string htreeName(htreeNamePtr, strnlen(htreeNamePtr, 16));
+
+    fields.push_back({ "Version", "string", std::to_string(version) });
+    fields.push_back({ "LodCount", "int32", std::to_string(lodCount) });
+    fields.push_back({ "Name", "string", name });
+    fields.push_back({ "HTree Name", "string", htreeName });
+
+    return fields;
+}
+inline std::vector<ChunkField> InterpretHLODLODArray(const std::shared_ptr<ChunkItem>& chunk) {
+    return {}; // no fields, wrapper only
+}
+
+inline std::vector<ChunkField> InterpretHLODSubObjectArrayHeader(const std::shared_ptr<ChunkItem>& chunk) {
+    std::vector<ChunkField> fields;
+    const uint8_t* data = reinterpret_cast<const uint8_t*>(chunk->data.data());
+
+    if (chunk->data.size() < 8) {
+        fields.push_back({ "Error", "string", "Header too short" });
+        return fields;
+    }
+
+    int32_t modelCount = *reinterpret_cast<const int32_t*>(&data[0]);
+    float maxScreenSize = *reinterpret_cast<const float*>(&data[4]);
+
+    fields.push_back({ "ModelCount", "int32", std::to_string(modelCount) });
+
+    std::ostringstream ss;
+    ss << std::fixed << std::setprecision(6) << maxScreenSize;
+    fields.push_back({ "MaxScreenSize", "float", ss.str() });
+
+    return fields;
+}
+
+inline std::vector<ChunkField> InterpretHLODSubObject_LodArray(const std::shared_ptr<ChunkItem>& chunk) {
+    std::vector<ChunkField> fields;
+    const uint8_t* data = reinterpret_cast<const uint8_t*>(chunk->data.data());
+    size_t size = chunk->data.size();
+
+    if (size < 5) {
+        fields.push_back({ "Error", "string", "Too small for HLOD Sub Object" });
+        return fields;
+    }
+
+    // First 4 bytes: BoneIndex
+    int32_t boneIndex = *reinterpret_cast<const int32_t*>(data);
+
+    // Remaining bytes: name string
+    const char* namePtr = reinterpret_cast<const char*>(data + 4);
+    std::string name(namePtr);
+
+    fields.push_back({ "Name", "string", name });
+    fields.push_back({ "BoneIndex", "int32", std::to_string(boneIndex) });
+    
+
+    return fields;
+}
+
+
+
+
+
+

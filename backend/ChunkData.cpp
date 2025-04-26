@@ -12,17 +12,26 @@ static uint32_t readUint32(std::istream& stream) {
 }
 static bool isWrapperChunk(uint32_t id) {
     switch (id) {
-    case 0x0000: // common root wrapper
-    case 0x0100: // HIERARCHY
-    case 0x0102: // PIVOTS
-    case 0x0410: // GEOMETRY
-    case 0x0810: // MESH
-    case 0x0910: // SHADERS
-    case 0x0A10: // TEXTURES
-    case 0x0B10: // MATERIAL_PASS
-    case 0x0C10: // AABTREE
-    case 0x02A: // W3D_CHUNK_VERTEX_MATERIALS
-    case 0x02B: // W3D_CHUNK_VERTEX_MATERIAL
+    case 0x0000: // Root wrapper
+    case 0x0029: // W3D_CHUNK_SHADERS
+    case 0x002A: // W3D_CHUNK_VERTEX_MATERIALS
+    case 0x002B: // W3D_CHUNK_VERTEX_MATERIAL
+    case 0x0030: // W3D_CHUNK_TEXTURES
+    case 0x0031: // W3D_CHUNK_TEXTURE
+    case 0x0048: // W3D_CHUNK_TEXTURE_STAGE
+    case 0x0038: // W3D_CHUNK_MATERIAL_PASS
+    case 0x0090: // W3D_CHUNK_AABTREE
+    case 0x0100: // W3D_CHUNK_HIERARCHY
+    case 0x0102: // W3D_CHUNK_PIVOTS
+    case 0x0300: // W3D_CHUNK_SHADER
+    case 0x0410: // W3D_CHUNK_GEOMETRY
+    case 0x0810: // W3D_CHUNK_MESH
+    case 0x0A10: // W3D_CHUNK_TEXTURES (legacy style)
+    case 0x0B10: // W3D_CHUNK_MATERIAL_PASS (legacy)
+    case 0x0C10: // W3D_CHUNK_AABTREE
+    case 0x0700: // W3D_CHUNK_HLOD
+    case 0x0702: // W3D_CHUNK_HLOD_LOD_ARRAY
+    case 0x0705: // W3D_CHUNK_HLOD_AGGREGATE_ARRAY
         return true;
     default:
         return false;
