@@ -14,28 +14,40 @@ static uint32_t readUint32(std::istream& stream) {
 }
 static bool isWrapperChunk(uint32_t id) {
     switch (id) {
-    case 0x0000: // Root wrapper
+    case 0x0000: // W3D_CHUNK_MESH
     case 0x0029: // W3D_CHUNK_SHADERS
     case 0x002A: // W3D_CHUNK_VERTEX_MATERIALS
     case 0x002B: // W3D_CHUNK_VERTEX_MATERIAL
     case 0x0030: // W3D_CHUNK_TEXTURES
     case 0x0031: // W3D_CHUNK_TEXTURE
-    case 0x0048: // W3D_CHUNK_TEXTURE_STAGE
     case 0x0038: // W3D_CHUNK_MATERIAL_PASS
+    case 0x0048: // W3D_CHUNK_TEXTURE_STAGE
+	case 0x0058: // W3D_CHUNK_DEFORM
+	case 0x0059: // W3D_CHUNK_DEFORM_SET
+	case 0x005A: // W3D_CHUNK_DEFORM_KEYFRAME
     case 0x0090: // W3D_CHUNK_AABTREE
     case 0x0100: // W3D_CHUNK_HIERARCHY
     case 0x0102: // W3D_CHUNK_PIVOTS
-    case 0x0300: // W3D_CHUNK_SHADER
-    case 0x0410: // W3D_CHUNK_GEOMETRY
-    case 0x0810: // W3D_CHUNK_MESH
-    case 0x0A10: // W3D_CHUNK_TEXTURES (legacy style)
-    case 0x0B10: // W3D_CHUNK_MATERIAL_PASS (legacy)
-    case 0x0C10: // W3D_CHUNK_AABTREE
+    case 0x0200: // W3D_CHUNK_ANIMATION
+    case 0x0280: // W3D_CHUNK_COMPRESSED_ANIMATION
+	case 0x02C0: // W3D_CHUNK_MORPH_ANIMATION
+	case 0x02C2: // W3D_CHUNK_MORPHANIM_CHANNEL
+    case 0x0300: // W3D_CHUNK_HMODEL
+    case 0x0400: // W3D_CHUNK_LODMODEL
+	case 0x0420: // W3D_CHUNK_COLLECTION
+    case 0x0460: // W3D_CHUNK_LIGHT
+    case 0x0500: // W3D_CHUNK_EMITTER
+	case 0x0600: // W3D_CHUNK_AGGREGATE
+	case 0x0601: // W3D_CHUNK_AGGREGATE_HEADER
     case 0x0700: // W3D_CHUNK_HLOD
     case 0x0702: // W3D_CHUNK_HLOD_LOD_ARRAY
     case 0x0705: // W3D_CHUNK_HLOD_AGGREGATE_ARRAY
-	case 0x0200: // W3D_CHUNK_ANIMATION
-	case 0x0280: // W3D_CHUNK_COMPRESSED_ANIMATION
+    case 0x0800: // W3D_CHUNK_LIGHTSCAPE
+	case 0x0801: // W3D_CHUNK_LIGHTSCAPE_LIGHT
+	case 0x0900: // W3D_CHUNK_DAZZLE
+	case 0x0A00: // W3D_CHUNK_SOUNDROBJ
+
+
         return true;
     default:
         return false;
