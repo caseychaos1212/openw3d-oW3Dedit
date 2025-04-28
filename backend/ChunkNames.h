@@ -36,7 +36,7 @@ inline std::string GetChunkName(uint32_t id) {
         { 0x0101, "W3D_CHUNK_HIERARCHY_HEADER" },
         { 0x0102, "W3D_CHUNK_PIVOTS" },
         { 0x0103, "W3D_CHUNK_PIVOT_FIXUPS" },
-        { 0x0200, "W3D_CHUNK_VERTEX_ATTRIBUTE_DECLARATION" },
+        { 0x0200, "W3D_CHUNK_ANIMATION" },
         { 0x0300, "W3D_CHUNK_SHADER" },
         { 0x0410, "W3D_CHUNK_GEOMETRY" },
         { 0x0500, "W3D_CHUNK_VERTICES_X" },
@@ -49,8 +49,15 @@ inline std::string GetChunkName(uint32_t id) {
         { 0x0704, "W3D_CHUNK_HLOD_SUB_OBJECT" },
         { 0x0705, "W3D_CHUNK_HLOD_AGGREGATE_ARRAY" },
         { 0x0810, "W3D_CHUNK_MESH" },
-        { 0x0900, "W3D_CHUNK_ANIMATION" },
-        { 0x0910, "W3D_CHUNK_ANIMATION_CHANNEL" },
+        { 0x0201, "W3D_CHUNK_ANIMATION_HEADER" },
+        { 0x0202, "W3D_CHUNK_ANIMATION_CHANNEL" },
+        { 0x0203, "W3D_CHUNK_BIT_CHANNEL" },
+        { 0x0280, "W3D_CHUNK_COMPRESSED_ANIMATION"},
+        { 0x0281, "W3D_CHUNK_COMPRESSED_ANIMATION_HEADER"},							// describes playback rate, number of frames, and type of compression
+        { 0x0282, "W3D_CHUNK_COMPRESSED_ANIMATION_CHANNEL"},						// compressed channel, format dependent on type of compression
+        { 0x0283, "W3D_CHUNK_COMPRESSED_BIT_CHANNEL"},
+        { 0x000E, "W3D_CHUNK_VERTEX_INFLUENCES" },
+        { 0x0740, "W3D_CHUNK_BOX" },
     };
 
     auto it = chunkNames.find(id);

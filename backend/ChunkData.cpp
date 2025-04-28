@@ -4,6 +4,8 @@
 #include <memory>
 #include <vector>
 #include "ChunkData.h"
+#include "ChunkNames.h"
+
 
 static uint32_t readUint32(std::istream& stream) {
     uint32_t value = 0;
@@ -32,6 +34,8 @@ static bool isWrapperChunk(uint32_t id) {
     case 0x0700: // W3D_CHUNK_HLOD
     case 0x0702: // W3D_CHUNK_HLOD_LOD_ARRAY
     case 0x0705: // W3D_CHUNK_HLOD_AGGREGATE_ARRAY
+	case 0x0200: // W3D_CHUNK_ANIMATION
+	case 0x0280: // W3D_CHUNK_COMPRESSED_ANIMATION
         return true;
     default:
         return false;
@@ -51,6 +55,10 @@ bool ChunkData::loadFromFile(const std::string& filename) {
     file.seekg(0, std::ios::end);
     auto fileSize = file.tellg();
     file.seekg(0, std::ios::beg);
+    
+    std::cout << "Opening file: " << filename << "\n";
+    std::cout << "File size: " << fileSize << "\n";
+
 
     while (file.tellg() < fileSize) {
         std::shared_ptr<ChunkItem> chunk = std::make_shared<ChunkItem>();
@@ -70,6 +78,7 @@ bool ChunkData::loadFromFile(const std::string& filename) {
         file.seekg(chunk->length, std::ios::cur);
         std::streampos dataEnd = file.tellg();
 
+        std::cout << "Top-level chunk: 0x" << std::hex << chunk->id << " (" << GetChunkName(chunk->id).c_str() << ") size=" << std::dec << chunk->length << "\n";
         // Save raw data
         file.seekg(dataStart);
         chunk->data.resize(chunk->length);
@@ -110,6 +119,11 @@ bool ChunkData::parseChunk(std::istream& stream, std::shared_ptr<ChunkItem>& par
         if (isWrapperChunk(child->id)) {
             std::string subData(reinterpret_cast<char*>(child->data.data()), child->length);
             std::istringstream subStream(subData);
+            std::ostringstream oss;
+            std::string chunkName = GetChunkName(child->id);
+            std::cout << "Parsing subchunks of wrapper: 0x" << std::hex << child->id << " (" << chunkName << ")\n";
+
+
             parseChunk(subStream, child);
         }
 

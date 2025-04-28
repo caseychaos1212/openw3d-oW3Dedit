@@ -224,7 +224,24 @@ void MainWindow::handleTreeSelection() {
         case 0x0704:
             fields = InterpretHLODSubObject_LodArray(target);
             break;
-
+        case 0x0201: // ANIMATION_HEADER
+            fields = InterpretAnimationHeader(target);
+            break;
+        case 0x0202: // ANIMATION_CHANNEL
+            fields = InterpretAnimationChannel(target);
+            break;
+		case 0x0203: // BIT_CHANNEL
+			fields = InterpretBitChannel(target);
+			break;
+		case 0x0281: // COMPRESSED_ANIMATION_HEADER
+			fields = InterpretCompressedAnimationHeader(target);
+			break;
+		case 0x000E: // W3D_CHUNK_VERTEX_INFLUENCES
+			fields = InterpretVertexInfluences(target);
+			break;
+		case 0x0740: // W3D_CHUNK_BOX
+			fields = InterpretBox(target);
+			break;
         default:
             break;
         }
