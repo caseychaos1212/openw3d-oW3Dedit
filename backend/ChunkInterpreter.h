@@ -1153,6 +1153,279 @@ inline std::vector<ChunkField> InterpretBox(const std::shared_ptr<ChunkItem>& ch
 }
 
 
+inline std::vector<ChunkField> InterpretMeshUserText(const std::shared_ptr<ChunkItem>& chunk) {
+    std::vector<ChunkField> fields;
+
+    const uint8_t* data = reinterpret_cast<const uint8_t*>(chunk->data.data());
+    size_t size = chunk->data.size();
+    std::string fullText;
+    std::string currentString;
+
+    for (size_t i = 0; i < size; ++i) {
+        if (std::isprint(data[i]) || data[i] == '\t') {
+            // Printable character or tab - add to current string
+            currentString += static_cast<char>(data[i]);
+        }
+        else {
+            // Non-printable - flush currentString if not empty
+            if (!currentString.empty()) {
+                fullText += currentString;
+                fullText += ' '; // Optional: insert space between strings
+                currentString.clear();
+            }
+        }
+    }
+
+    // If leftover printable text at the end
+    if (!currentString.empty()) {
+        fullText += currentString;
+    }
+
+    // Trim any trailing space
+    if (!fullText.empty() && fullText.back() == ' ') {
+        fullText.pop_back();
+    }
+
+    fields.push_back({ "UserText", "string", fullText });
+
+    return fields;
+}
+
+
+inline std::vector<ChunkField> InterpretPrelitVertexWrapper(const std::shared_ptr<ChunkItem>& chunk) {
+    std::vector<ChunkField> fields;
+    fields.push_back({ "Info", "string", "W3D_CHUNK_PRELIT_VERTEX (wrapper)" });
+    fields.push_back({ "ChildCount", "int", std::to_string(chunk->children.size()) });
+    return fields;
+}
+
+
+inline std::vector<ChunkField> InterpretLightmapMultiPass(const std::shared_ptr<ChunkItem>& chunk) {
+    std::vector<ChunkField> fields;
+    fields.push_back({ "Info", "string", "W3D_CHUNK_LIGHTMAP_MULTI_PASS (wrapper)" });
+    fields.push_back({ "ChildCount", "int", std::to_string(chunk->children.size()) });
+    return fields;
+}
+
+
+inline std::vector<ChunkField> InterpretLightmapMultiTexture(const std::shared_ptr<ChunkItem>& chunk) {
+    std::vector<ChunkField> fields;
+    fields.push_back({ "Info", "string", "W3D_CHUNK_LIGHTMAP_MULTI_TEXTURE (wrapper)" });
+    fields.push_back({ "ChildCount", "int", std::to_string(chunk->children.size()) });
+    return fields;
+}
+
+inline std::vector<ChunkField> InterpretDiffuseColorChunk(const std::shared_ptr<ChunkItem>& chunk) {
+    std::vector<ChunkField> fields;
+    const uint8_t* data = reinterpret_cast<const uint8_t*>(chunk->data.data());
+    size_t count = chunk->data.size() / 4;
+
+    for (size_t i = 0; i < count; ++i) {
+        uint8_t r = data[i * 4 + 0];
+        uint8_t g = data[i * 4 + 1];
+        uint8_t b = data[i * 4 + 2];
+        uint8_t a = data[i * 4 + 3];
+
+        std::ostringstream value;
+        value << (int)r << " " << (int)g << " " << (int)b << " " << (int)a;
+
+        fields.push_back({ "Vertex[" + std::to_string(i) + "].Color", "RGBA", value.str() });
+    }
+
+    return fields;
+}
+
+inline std::vector<ChunkField> InterpretDeform(const std::shared_ptr<ChunkItem>& chunk) {
+    std::vector<ChunkField> fields;
+    fields.push_back({ "Info", "string", "W3D_CHUNK_DEFORM (wrapper for damage/deform data)" });
+    fields.push_back({ "ChildCount", "int", std::to_string(chunk->children.size()) });
+    return fields;
+}
+
+inline std::vector<ChunkField> InterpretDeformSet(const std::shared_ptr<ChunkItem>& chunk) {
+    std::vector<ChunkField> fields;
+
+    if (chunk->data.size() < 8) {
+        fields.push_back({ "Error", "string", "Deform Set chunk too short" });
+        return fields;
+    }
+
+    const uint8_t* data = reinterpret_cast<const uint8_t*>(chunk->data.data());
+
+    uint32_t version = *reinterpret_cast<const uint32_t*>(&data[0]);
+    uint32_t keyframeCount = *reinterpret_cast<const uint32_t*>(&data[4]);
+
+    fields.push_back({ "Version", "uint32", std::to_string(version) });
+    fields.push_back({ "KeyframeCount", "uint32", std::to_string(keyframeCount) });
+
+    return fields;
+}
+
+inline std::vector<ChunkField> InterpretDeformKeyframe(const std::shared_ptr<ChunkItem>& chunk) {
+    std::vector<ChunkField> fields;
+
+    if (chunk->data.size() < 4) {
+        fields.push_back({ "Error", "string", "Deform Keyframe chunk too short" });
+        return fields;
+    }
+
+    const uint8_t* data = reinterpret_cast<const uint8_t*>(chunk->data.data());
+    uint32_t time = *reinterpret_cast<const uint32_t*>(&data[0]);
+
+    fields.push_back({ "Time", "uint32", std::to_string(time) });
+
+    return fields;
+}
+
+
+inline std::vector<ChunkField> InterpretDeformData(const std::shared_ptr<ChunkItem>& chunk) {
+    std::vector<ChunkField> fields;
+    size_t entrySize = sizeof(uint32_t) + sizeof(float) * 3;
+
+    if (chunk->data.size() % entrySize != 0) {
+        fields.push_back({ "Error", "string", "Deform Data chunk misaligned" });
+        return fields;
+    }
+
+    const uint8_t* raw = reinterpret_cast<const uint8_t*>(chunk->data.data());
+    size_t count = chunk->data.size() / entrySize;
+
+    for (size_t i = 0; i < count; ++i) {
+        const uint32_t index = *reinterpret_cast<const uint32_t*>(raw + i * entrySize);
+        const float* vec = reinterpret_cast<const float*>(raw + i * entrySize + 4);
+
+        std::ostringstream displacement;
+        displacement << std::fixed << std::setprecision(6)
+            << vec[0] << " " << vec[1] << " " << vec[2];
+
+        fields.push_back({ "Vertex[" + std::to_string(i) + "].Index", "uint32", std::to_string(index) });
+        fields.push_back({ "Vertex[" + std::to_string(i) + "].Displacement", "vector3", displacement.str() });
+    }
+
+    return fields;
+}
+
+inline std::vector<ChunkField> InterpretCompressedAnimationChannel(const std::shared_ptr<ChunkItem>& chunk, uint16_t flavor = 0) {
+    std::vector<ChunkField> fields;
+    const uint8_t* data = reinterpret_cast<const uint8_t*>(chunk->data.data());
+    size_t size = chunk->data.size();
+
+    static const char* ChannelTypes[] = {
+        "X Translation", "Y Translation", "Z Translation",
+        "X Rotation", "Y Rotation", "Z Rotation",
+        "Quaternion Rotation", "Visibility"
+    };
+
+    if (flavor == 0) { // Timecoded
+        if (size < 12) {
+            fields.push_back({ "Error", "string", "Too small for W3dTimeCodedAnimChannelStruct" });
+            return fields;
+        }
+
+        uint32_t numTimeCodes = *reinterpret_cast<const uint32_t*>(&data[0]);
+        uint16_t pivot = *reinterpret_cast<const uint16_t*>(&data[4]);
+        uint8_t vectorLen = data[6];
+        uint8_t flags = data[7];
+
+        fields.push_back({ "NumTimeCodes", "uint32", std::to_string(numTimeCodes) });
+        fields.push_back({ "Pivot", "uint16", std::to_string(pivot) });
+        fields.push_back({ "VectorLen", "uint8", std::to_string(vectorLen) });
+        fields.push_back({ "ChannelType", "string", flags < 8 ? ChannelTypes[flags] : "Unknown" });
+
+        size_t datalen = (size - 8 + 3) / 4;  // packed int32s
+        const uint32_t* packed = reinterpret_cast<const uint32_t*>(data + 8);
+        for (size_t i = 0; i < datalen; ++i) {
+            fields.push_back({ "Data[" + std::to_string(i) + "]", "int32", std::to_string(packed[i]) });
+        }
+
+    }
+    else { // Adaptive Delta
+        if (size < 20) {
+            fields.push_back({ "Error", "string", "Too small for W3dAdaptiveDeltaAnimChannelStruct" });
+            return fields;
+        }
+
+        uint32_t numFrames = *reinterpret_cast<const uint32_t*>(&data[0]);
+        uint16_t pivot = *reinterpret_cast<const uint16_t*>(&data[4]);
+        uint8_t vectorLen = data[6];
+        uint8_t flags = data[7];
+        float scale = *reinterpret_cast<const float*>(&data[8]);
+
+        fields.push_back({ "NumFrames", "uint32", std::to_string(numFrames) });
+        fields.push_back({ "Pivot", "uint16", std::to_string(pivot) });
+        fields.push_back({ "VectorLen", "uint8", std::to_string(vectorLen) });
+        fields.push_back({ "ChannelType", "string", flags < 8 ? ChannelTypes[flags] : "Unknown" });
+        fields.push_back({ "Scale", "float", std::to_string(scale) });
+
+        size_t datalen = (size - 12 + 3) / 4;
+        const uint32_t* packed = reinterpret_cast<const uint32_t*>(data + 12);
+        for (size_t i = 0; i < datalen; ++i) {
+            fields.push_back({ "Data[" + std::to_string(i) + "]", "int32", std::to_string(packed[i]) });
+        }
+    }
+
+    return fields;
+}
+
+inline std::vector<ChunkField> InterpretCompressedBitChannel(const std::shared_ptr<ChunkItem>& chunk) {
+    std::vector<ChunkField> fields;
+
+    const uint8_t* data = reinterpret_cast<const uint8_t*>(chunk->data.data());
+    size_t size = chunk->data.size();
+
+    if (size < 9) {
+        fields.push_back({ "Error", "string", "Compressed Bit Channel chunk too small" });
+        return fields;
+    }
+
+    uint16_t firstFrame = *reinterpret_cast<const uint16_t*>(&data[0]);
+    uint16_t lastFrame = *reinterpret_cast<const uint16_t*>(&data[2]);
+    uint16_t flags = *reinterpret_cast<const uint16_t*>(&data[4]);
+    uint16_t pivot = *reinterpret_cast<const uint16_t*>(&data[6]);
+    uint8_t defaultVal = data[8];
+
+    fields.push_back({ "FirstFrame", "uint16", std::to_string(firstFrame) });
+    fields.push_back({ "LastFrame",  "uint16", std::to_string(lastFrame) });
+    fields.push_back({ "Pivot",      "uint16", std::to_string(pivot) });
+    fields.push_back({ "DefaultVal", "uint8",  std::to_string(defaultVal) });
+
+    static const char* flagNames[] = {
+        "Visibility",
+        "Timecoded Visibility"
+    };
+    std::string flagName = (flags < 2) ? flagNames[flags] : ("Unknown (" + std::to_string(flags) + ")");
+    fields.push_back({ "ChannelType", "string", flagName });
+
+    // Interpret packed bit stream
+    const uint8_t* bitData = &data[9];
+    int numFrames = lastFrame - firstFrame + 1;
+
+    for (int i = 0; i < numFrames; ++i) {
+        int byteIdx = i / 8;
+        int bitIdx = i % 8;
+
+        if ((size_t)(9 + byteIdx) >= size) break; // avoid overread
+
+        bool bit = (bitData[byteIdx] >> bitIdx) & 1;
+        fields.push_back({ "Frame[" + std::to_string(i + firstFrame) + "]", "bool", bit ? "true" : "false" });
+    }
+
+    return fields;
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 

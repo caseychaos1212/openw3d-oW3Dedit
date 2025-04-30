@@ -15,6 +15,9 @@ static uint32_t readUint32(std::istream& stream) {
 static bool isWrapperChunk(uint32_t id) {
     switch (id) {
     case 0x0000: // W3D_CHUNK_MESH
+	case 0x0024: // W3D_CHUNK_PRELIT_VERTEX
+    case 0x0025: // W3D_CHUNK_LIGHTMAP_MULTI_PASS
+    case 0x0026: // W3D_CHUNK_LIGHTMAP_MULTI_TEXTURE
     case 0x0029: // W3D_CHUNK_SHADERS
     case 0x002A: // W3D_CHUNK_VERTEX_MATERIALS
     case 0x002B: // W3D_CHUNK_VERTEX_MATERIAL
