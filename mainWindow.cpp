@@ -225,6 +225,9 @@ void MainWindow::handleTreeSelection() {
         case 0x0000002D: // W3D_CHUNK_VERTEX_MATERIAL_INFO
             fields = InterpretVertexMaterialInfo(target);
             break;
+        case 0x0301: // W3D_CHUNK_HMODEL_HEADER
+            fields = InterpretHModelHeader(target);
+            break;
         case 0x0310: 
             fields = InterpretShaderName(target);
             break;
@@ -279,6 +282,30 @@ void MainWindow::handleTreeSelection() {
         case 0x0093:
             fields = InterpretAABTreeNodes(target);
             break;
+        case 0x0501:
+            fields = InterpretEmitterHeader(target);
+            break;
+        case 0x0502:
+            fields = InterpretEmitterUserData(target);
+            break;
+        case 0x0503:
+            fields = InterpretEmitterInfo(target);
+            break;
+        case 0x0504:
+            fields = InterpretEmitterInfoV2(target);
+            break;
+        case 0x0505:
+            fields = InterpretEmitterProps(target);
+            break;
+        case 0x050A:
+            fields = InterpretEmitterRotationKeys(target);
+            break;
+        case 0x050B:
+            fields = InterpretEmitterFrameKeys(target);
+            break;
+        case 0x0500: // W3D_CHUNK_EMITTER
+            fields = InterpretEmitter(target);
+            break;
         case 0x0701:
             fields = InterpretHLODHeader(target);
             break;
@@ -300,6 +327,9 @@ void MainWindow::handleTreeSelection() {
 		case 0x0203: // BIT_CHANNEL
 			fields = InterpretBitChannel(target);
 			break;
+        case 0x0305: // OBSOLETE_W3D_CHUNK_HMODEL_AUX_DATA
+            fields = InterpretHModelAuxData(target);
+            break;
 		case 0x0281: // COMPRESSED_ANIMATION_HEADER
 			fields = InterpretCompressedAnimationHeader(target);
 			break;

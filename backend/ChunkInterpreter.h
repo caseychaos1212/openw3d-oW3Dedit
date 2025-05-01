@@ -1373,45 +1373,282 @@ inline std::vector<ChunkField> InterpretCompressedBitChannel(const std::shared_p
     const uint8_t* data = reinterpret_cast<const uint8_t*>(chunk->data.data());
     size_t size = chunk->data.size();
 
-    if (size < 9) {
-        fields.push_back({ "Error", "string", "Compressed Bit Channel chunk too small" });
+    if (size < 8) {
+        fields.push_back({ "Error", "string", "Compressed Bit Channel too small" });
         return fields;
     }
 
-    uint16_t firstFrame = *reinterpret_cast<const uint16_t*>(&data[0]);
-    uint16_t lastFrame = *reinterpret_cast<const uint16_t*>(&data[2]);
-    uint16_t flags = *reinterpret_cast<const uint16_t*>(&data[4]);
-    uint16_t pivot = *reinterpret_cast<const uint16_t*>(&data[6]);
-    uint8_t defaultVal = data[8];
+    uint32_t numTimeCodes = *reinterpret_cast<const uint32_t*>(&data[0]);
+    uint16_t pivot = *reinterpret_cast<const uint16_t*>(&data[4]);
+    uint8_t  flags = data[6];
+    uint8_t  defaultVal = data[7];
 
-    fields.push_back({ "FirstFrame", "uint16", std::to_string(firstFrame) });
-    fields.push_back({ "LastFrame",  "uint16", std::to_string(lastFrame) });
-    fields.push_back({ "Pivot",      "uint16", std::to_string(pivot) });
-    fields.push_back({ "DefaultVal", "uint8",  std::to_string(defaultVal) });
+    fields.push_back({ "NumTimeCodes", "uint32", std::to_string(numTimeCodes) });
+    fields.push_back({ "Pivot", "uint16", std::to_string(pivot) });
 
-    static const char* flagNames[] = {
+    static const char* BitChannelTypes[] = {
         "Visibility",
         "Timecoded Visibility"
     };
-    std::string flagName = (flags < 2) ? flagNames[flags] : ("Unknown (" + std::to_string(flags) + ")");
-    fields.push_back({ "ChannelType", "string", flagName });
+    std::string channelTypeStr = (flags < 2) ? BitChannelTypes[flags] : ("Unknown (" + std::to_string(flags) + ")");
+    fields.push_back({ "ChannelType", "string", channelTypeStr });
 
-    // Interpret packed bit stream
-    const uint8_t* bitData = &data[9];
-    int numFrames = lastFrame - firstFrame + 1;
+    fields.push_back({ "Default Value", "uint8", std::to_string(defaultVal) });
 
-    for (int i = 0; i < numFrames; ++i) {
-        int byteIdx = i / 8;
-        int bitIdx = i % 8;
+    // Interpret bit-packed stream as uint32 blocks
+    size_t dataStart = 8;
+    size_t expectedSize = dataStart + numTimeCodes * 4;
 
-        if ((size_t)(9 + byteIdx) >= size) break; // avoid overread
+    if (size < expectedSize) {
+        fields.push_back({ "Warning", "string", "Chunk smaller than expected for declared NumTimeCodes" });
+    }
 
-        bool bit = (bitData[byteIdx] >> bitIdx) & 1;
-        fields.push_back({ "Frame[" + std::to_string(i + firstFrame) + "]", "bool", bit ? "true" : "false" });
+    size_t actualCodes = std::min<size_t>(numTimeCodes, (size - dataStart) / 4);
+    const uint32_t* codeData = reinterpret_cast<const uint32_t*>(data + dataStart);
+
+    for (size_t i = 0; i < actualCodes; ++i) {
+        fields.push_back({ "Data[" + std::to_string(i) + "]", "int32", std::to_string(codeData[i]) });
     }
 
     return fields;
 }
+
+inline std::vector<ChunkField> InterpretHModelHeader(const std::shared_ptr<ChunkItem>& chunk) {
+    std::vector<ChunkField> fields;
+    const uint8_t* data = reinterpret_cast<const uint8_t*>(chunk->data.data());
+
+    if (chunk->data.size() < 38) {
+        fields.push_back({ "Error", "string", "HMODEL_HEADER too small" });
+        return fields;
+    }
+
+    uint32_t version = *reinterpret_cast<const uint32_t*>(&data[0]);
+    const char* namePtr = reinterpret_cast<const char*>(&data[4]);
+    const char* hierPtr = reinterpret_cast<const char*>(&data[20]);
+    uint16_t numConnections = *reinterpret_cast<const uint16_t*>(&data[36]);
+
+    std::string name(namePtr, strnlen(namePtr, 16));
+    std::string hier(hierPtr, strnlen(hierPtr, 16));
+
+    std::ostringstream vstr;
+    vstr << ((version >> 16) & 0xFFFF) << "." << (version & 0xFFFF);
+
+    fields.push_back({ "Version", "string", vstr.str() });
+    fields.push_back({ "Name", "string", name });
+    fields.push_back({ "HierarchyName", "string", hier });
+    fields.push_back({ "NumConnections", "uint16", std::to_string(numConnections) });
+
+    return fields;
+}
+
+inline std::vector<ChunkField> InterpretHModelAuxData(const std::shared_ptr<ChunkItem>& chunk) {
+    std::vector<ChunkField> fields;
+
+    const uint8_t* data = reinterpret_cast<const uint8_t*>(chunk->data.data());
+    if (chunk->data.size() < 180) {
+        fields.push_back({ "Error", "string", "Aux data chunk too small" });
+        return fields;
+    }
+
+    uint32_t attributes = *reinterpret_cast<const uint32_t*>(&data[0]);
+    uint32_t meshCount = *reinterpret_cast<const uint32_t*>(&data[4]);
+    uint32_t collisionCount = *reinterpret_cast<const uint32_t*>(&data[8]);
+    uint32_t skinCount = *reinterpret_cast<const uint32_t*>(&data[12]);
+
+    fields.push_back({ "Attributes", "uint32", std::to_string(attributes) });
+    fields.push_back({ "MeshCount", "uint32", std::to_string(meshCount) });
+    fields.push_back({ "CollisionCount", "uint32", std::to_string(collisionCount) });
+    fields.push_back({ "SkinCount", "uint32", std::to_string(skinCount) });
+
+    for (int i = 0; i < 8; ++i) {
+        uint32_t val = *reinterpret_cast<const uint32_t*>(&data[16 + i * 4]);
+        fields.push_back({ "FutureCounts[" + std::to_string(i) + "]", "uint32", std::to_string(val) });
+    }
+
+    float lodMin = *reinterpret_cast<const float*>(&data[48]);
+    float lodMax = *reinterpret_cast<const float*>(&data[52]);
+
+    fields.push_back({ "LODMin", "float", std::to_string(lodMin) });
+    fields.push_back({ "LODMax", "float", std::to_string(lodMax) });
+
+    for (int i = 0; i < 32; ++i) {
+        uint32_t val = *reinterpret_cast<const uint32_t*>(&data[56 + i * 4]);
+        fields.push_back({ "FutureUse[" + std::to_string(i) + "]", "uint32", std::to_string(val) });
+    }
+
+    return fields;
+}
+
+
+inline std::vector<ChunkField> InterpretEmitter(const std::shared_ptr<ChunkItem>& chunk) {
+    std::vector<ChunkField> fields;
+    fields.push_back({ "Info", "string", "W3D_CHUNK_EMITTER (wrapper for particle emitter data)" });
+    fields.push_back({ "ChildCount", "int", std::to_string(chunk->children.size()) });
+    return fields;
+}
+
+inline std::vector<ChunkField> InterpretEmitterHeader(const std::shared_ptr<ChunkItem>& chunk) {
+    std::vector<ChunkField> fields;
+    const uint8_t* data = reinterpret_cast<const uint8_t*>(chunk->data.data());
+
+    if (chunk->data.size() < 20) {
+        fields.push_back({ "Error", "string", "Emitter header too short" });
+        return fields;
+    }
+
+    uint32_t versionRaw = *reinterpret_cast<const uint32_t*>(&data[0]);
+    uint16_t major = (versionRaw >> 16) & 0xFFFF;
+    uint16_t minor = versionRaw & 0xFFFF;
+
+    std::ostringstream versionStr;
+    versionStr << major << "." << minor;
+
+    std::string name(reinterpret_cast<const char*>(&data[4]), strnlen(reinterpret_cast<const char*>(&data[4]), 16));
+
+    fields.push_back({ "Version", "string", versionStr.str() });
+    fields.push_back({ "Name", "string", name });
+
+    return fields;
+}
+
+
+inline std::vector<ChunkField> InterpretEmitterUserData(const std::shared_ptr<ChunkItem>& chunk) {
+    std::vector<ChunkField> fields;
+
+    if (chunk->data.empty()) {
+        fields.push_back({ "User Data", "string", "" });
+        return fields;
+    }
+
+    const char* str = reinterpret_cast<const char*>(chunk->data.data());
+    size_t len = strnlen(str, chunk->data.size());  // Safe bounded read
+
+    std::string result(str, len);
+    fields.push_back({ "User Data", "string", result });
+    return fields;
+}
+
+
+
+inline std::vector<ChunkField> InterpretEmitterInfo(const std::shared_ptr<ChunkItem>& chunk) {
+    std::vector<ChunkField> fields;
+    const uint8_t* data = reinterpret_cast<const uint8_t*>(chunk->data.data());
+
+    if (chunk->data.size() < 0x58) {
+        fields.push_back({ "Error", "string", "Emitter Info chunk too small (expected 88 bytes)" });
+        return fields;
+    }
+
+    std::string texture(reinterpret_cast<const char*>(&data[0]), strnlen(reinterpret_cast<const char*>(&data[0]), 16));
+    fields.push_back({ "Texture Name", "string", texture });
+
+    auto readF32 = [&](size_t offset) -> float {
+        return *reinterpret_cast<const float*>(&data[offset]);
+        };
+
+    fields.push_back({ "StartSize", "float", std::to_string(readF32(0x10)) });
+    fields.push_back({ "EndSize", "float", std::to_string(readF32(0x14)) });
+    fields.push_back({ "Lifetime", "float", std::to_string(readF32(0x18)) });
+    fields.push_back({ "EmissionRate", "float", std::to_string(readF32(0x1C)) });
+    fields.push_back({ "MaxEmissions", "float", std::to_string(readF32(0x20)) });
+    fields.push_back({ "VelocityRandom", "float", std::to_string(readF32(0x24)) });
+    fields.push_back({ "PositionRandom", "float", std::to_string(readF32(0x28)) });
+    fields.push_back({ "FadeTime", "float", std::to_string(readF32(0x2C)) });
+    fields.push_back({ "Gravity", "float", std::to_string(readF32(0x30)) });
+    fields.push_back({ "Elasticity", "float", std::to_string(readF32(0x34)) });
+
+    std::ostringstream velStr, accStr;
+    for (int i = 0; i < 3; ++i) velStr << readF32(0x38 + i * 4) << (i < 2 ? " " : "");
+    for (int i = 0; i < 3; ++i) accStr << readF32(0x44 + i * 4) << (i < 2 ? " " : "");
+
+    fields.push_back({ "Velocity", "vector3", velStr.str() });
+    fields.push_back({ "Acceleration", "vector3", accStr.str() });
+
+    auto rgbaToString = [&](size_t offset) {
+        const uint8_t* rgba = &data[offset];
+        std::ostringstream s;
+        s << (int)rgba[0] << " " << (int)rgba[1] << " " << (int)rgba[2] << " " << (int)rgba[3];
+        return s.str();
+        };
+
+    fields.push_back({ "StartColor", "RGBA", rgbaToString(0x50) });
+    fields.push_back({ "EndColor", "RGBA", rgbaToString(0x54) });
+
+    return fields;
+}
+
+
+inline std::vector<ChunkField> InterpretEmitterInfoV2(const std::shared_ptr<ChunkItem>& chunk) {
+    std::vector<ChunkField> fields;
+    const float* f = reinterpret_cast<const float*>(chunk->data.data());
+    size_t count = chunk->data.size() / sizeof(float);
+
+    for (size_t i = 0; i < count; ++i) {
+        std::ostringstream label;
+        label << "ParamV2[" << i << "]";
+        fields.push_back({ label.str(), "float", std::to_string(f[i]) });
+    }
+
+    return fields;
+}
+
+
+inline std::vector<ChunkField> InterpretEmitterProps(const std::shared_ptr<ChunkItem>& chunk) {
+    std::vector<ChunkField> fields;
+    const float* f = reinterpret_cast<const float*>(chunk->data.data());
+    size_t count = chunk->data.size() / sizeof(float);
+
+    for (size_t i = 0; i < count; ++i) {
+        std::ostringstream label;
+        label << "Keyframe[" << i << "]";
+        fields.push_back({ label.str(), "float", std::to_string(f[i]) });
+    }
+
+    return fields;
+}
+
+
+inline std::vector<ChunkField> InterpretEmitterRotationKeys(const std::shared_ptr<ChunkItem>& chunk) {
+    std::vector<ChunkField> fields;
+    const float* f = reinterpret_cast<const float*>(chunk->data.data());
+    size_t count = chunk->data.size() / (2 * sizeof(float));
+
+    for (size_t i = 0; i < count; ++i) {
+        float time = f[i * 2];
+        float angle = f[i * 2 + 1];
+        std::ostringstream label;
+        label << "Key[" << i << "]";
+        fields.push_back({ label.str() + ".Time", "float", std::to_string(time) });
+        fields.push_back({ label.str() + ".Angle", "float", std::to_string(angle) });
+    }
+
+    return fields;
+}
+
+
+inline std::vector<ChunkField> InterpretEmitterFrameKeys(const std::shared_ptr<ChunkItem>& chunk) {
+    std::vector<ChunkField> fields;
+    const uint8_t* data = reinterpret_cast<const uint8_t*>(chunk->data.data());
+    size_t entrySize = 8;
+    size_t count = chunk->data.size() / entrySize;
+
+    for (size_t i = 0; i < count; ++i) {
+        float time = *reinterpret_cast<const float*>(&data[i * entrySize]);
+        uint32_t frame = *reinterpret_cast<const uint32_t*>(&data[i * entrySize + 4]);
+
+        std::ostringstream label;
+        label << "Key[" << i << "]";
+        fields.push_back({ label.str() + ".Time", "float", std::to_string(time) });
+        fields.push_back({ label.str() + ".Frame", "uint32", std::to_string(frame) });
+    }
+
+    return fields;
+}
+
+
+
+
+
 
 
 
