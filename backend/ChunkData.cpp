@@ -15,6 +15,7 @@ static uint32_t readUint32(std::istream& stream) {
 static bool isWrapperChunk(uint32_t id) {
     switch (id) {
     case 0x0000: // W3D_CHUNK_MESH
+    case 0x0002: // W3D_CHUNK_VERTICES
 	case 0x0024: // W3D_CHUNK_PRELIT_VERTEX
     case 0x0025: // W3D_CHUNK_LIGHTMAP_MULTI_PASS
     case 0x0026: // W3D_CHUNK_LIGHTMAP_MULTI_TEXTURE
@@ -45,11 +46,12 @@ static bool isWrapperChunk(uint32_t id) {
     case 0x0700: // W3D_CHUNK_HLOD
     case 0x0702: // W3D_CHUNK_HLOD_LOD_ARRAY
     case 0x0705: // W3D_CHUNK_HLOD_AGGREGATE_ARRAY
+	case 0x0741: // W3D_CHUNK_SPHERE
     case 0x0800: // W3D_CHUNK_LIGHTSCAPE
 	case 0x0801: // W3D_CHUNK_LIGHTSCAPE_LIGHT
 	case 0x0900: // W3D_CHUNK_DAZZLE
 	case 0x0A00: // W3D_CHUNK_SOUNDROBJ
-
+    case 0x03150809: //W3D_CHUNK_CHUNKID_DATA
 
         return true;
     default:
@@ -115,6 +117,32 @@ bool ChunkData::loadFromFile(const std::string& filename) {
 bool ChunkData::parseChunk(std::istream& stream, std::shared_ptr<ChunkItem>& parent) {
     while (stream && stream.peek() != EOF) {
         std::streampos pos = stream.tellg();
+
+        // Handle microchunks inside CHUNKID_DATA
+        if (parent && parent->id == 0x03150809) {
+            if (stream.rdbuf()->in_avail() < 2) break;
+
+            auto micro = std::make_shared<ChunkItem>();
+            uint8_t microId = 0;
+            uint8_t microSize = 0;
+            stream.read(reinterpret_cast<char*>(&microId), 1);
+            stream.read(reinterpret_cast<char*>(&microSize), 1);
+
+            if (stream.rdbuf()->in_avail() < microSize) {
+                std::cerr << "Incomplete microchunk at " << pos << ", ID: " << (int)microId << ", size: " << (int)microSize << "\n";
+                break;
+            }
+
+            micro->id = static_cast<uint32_t>(microId);
+            micro->length = static_cast<uint32_t>(microSize);
+            micro->data.resize(microSize);
+            stream.read(reinterpret_cast<char*>(micro->data.data()), microSize);
+            micro->parent = parent.get();
+            parent->children.push_back(micro);
+            continue;
+        }
+
+        // Normal chunk
         if (stream.rdbuf()->in_avail() < 8) break;
 
         auto child = std::make_shared<ChunkItem>();
@@ -128,23 +156,28 @@ bool ChunkData::parseChunk(std::istream& stream, std::shared_ptr<ChunkItem>& par
 
         child->data.resize(child->length);
         stream.read(reinterpret_cast<char*>(child->data.data()), child->length);
-
+        child->parent = parent.get();
         parent->children.push_back(child);
 
-        if (isWrapperChunk(child->id)) {
-            std::string subData(reinterpret_cast<char*>(child->data.data()), child->length);
-            std::istringstream subStream(subData);
-            std::ostringstream oss;
-            std::string chunkName = GetChunkName(child->id);
-            std::cout << "Parsing subchunks of wrapper: 0x" << std::hex << child->id << " (" << chunkName << ")\n";
+        bool treatAsWrapper = isWrapperChunk(child->id);
 
-
-            parseChunk(subStream, child);
+        // Special wrapper handling for sphere channel chunks
+        if (!treatAsWrapper && parent && parent->id == 0x0741 &&
+            (child->id == 0x0002 || child->id == 0x0003 || child->id == 0x0004 || child->id == 0x0005)) {
+            treatAsWrapper = true;
         }
 
+        if (treatAsWrapper) {
+            std::string subData(reinterpret_cast<char*>(child->data.data()), child->length);
+            std::istringstream subStream(subData);
+            std::cout << "Parsing subchunks of wrapper: 0x" << std::hex << child->id
+                << " (" << GetChunkName(child->id, parent ? parent->id : 0) << ")\n";
+            parseChunk(subStream, child);
+        }
     }
     return true;
 }
+
 void ChunkData::clear() {
     chunks.clear();
 }

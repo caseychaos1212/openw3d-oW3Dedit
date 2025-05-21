@@ -6,6 +6,7 @@
 #include <iomanip> // for std::setw
 #include <iostream>
 
+
 static const std::unordered_map<uint32_t, std::string> vertexMatFlags = {
     {0x00000001, "W3DVERTMAT_USE_DEPTH_CUE"},
     {0x00000002, "W3DVERTMAT_ARGB_EMISSIVE_ONLY"},
@@ -1534,74 +1535,225 @@ inline std::vector<ChunkField> InterpretEmitterInfo(const std::shared_ptr<ChunkI
     std::vector<ChunkField> fields;
     const uint8_t* data = reinterpret_cast<const uint8_t*>(chunk->data.data());
 
-    if (chunk->data.size() < 0x58) {
-        fields.push_back({ "Error", "string", "Emitter Info chunk too small (expected 88 bytes)" });
+    constexpr size_t TEXTURE_NAME_SIZE = 260;
+
+    if (chunk->data.size() < TEXTURE_NAME_SIZE + 60) {
+        fields.push_back({ "Error", "string", "Emitter Info chunk too small (expected at least 320 bytes)" });
         return fields;
     }
 
-    std::string texture(reinterpret_cast<const char*>(&data[0]), strnlen(reinterpret_cast<const char*>(&data[0]), 16));
+    // Read null-terminated string from fixed-size buffer
+    std::string texture(reinterpret_cast<const char*>(&data[0]), strnlen(reinterpret_cast<const char*>(&data[0]), TEXTURE_NAME_SIZE));
     fields.push_back({ "Texture Name", "string", texture });
 
-    auto readF32 = [&](size_t offset) -> float {
-        return *reinterpret_cast<const float*>(&data[offset]);
+    auto readF32Str = [&](size_t offset, int precision = 6) -> std::string {
+        std::ostringstream oss;
+        oss << std::fixed << std::setprecision(precision)
+            << *reinterpret_cast<const float*>(&data[offset]);
+        return oss.str();
         };
 
-    fields.push_back({ "StartSize", "float", std::to_string(readF32(0x10)) });
-    fields.push_back({ "EndSize", "float", std::to_string(readF32(0x14)) });
-    fields.push_back({ "Lifetime", "float", std::to_string(readF32(0x18)) });
-    fields.push_back({ "EmissionRate", "float", std::to_string(readF32(0x1C)) });
-    fields.push_back({ "MaxEmissions", "float", std::to_string(readF32(0x20)) });
-    fields.push_back({ "VelocityRandom", "float", std::to_string(readF32(0x24)) });
-    fields.push_back({ "PositionRandom", "float", std::to_string(readF32(0x28)) });
-    fields.push_back({ "FadeTime", "float", std::to_string(readF32(0x2C)) });
-    fields.push_back({ "Gravity", "float", std::to_string(readF32(0x30)) });
-    fields.push_back({ "Elasticity", "float", std::to_string(readF32(0x34)) });
+    size_t offset = TEXTURE_NAME_SIZE;
+
+    fields.push_back({ "StartSize", "float", readF32Str(offset + 0x00) });
+    fields.push_back({ "EndSize", "float", readF32Str(offset + 0x04) });
+    fields.push_back({ "Lifetime", "float", readF32Str(offset + 0x08) });
+    fields.push_back({ "EmissionRate", "float", readF32Str(offset + 0x0C) });
+    fields.push_back({ "MaxEmissions", "float", readF32Str(offset + 0x10) });
+    fields.push_back({ "VelocityRandom", "float", readF32Str(offset + 0x14) });
+    fields.push_back({ "PositionRandom", "float", readF32Str(offset + 0x18) });
+    fields.push_back({ "FadeTime", "float", readF32Str(offset + 0x1C) });
+    fields.push_back({ "Gravity", "float", readF32Str(offset + 0x20) });
+    fields.push_back({ "Elasticity", "float", readF32Str(offset + 0x24) });
 
     std::ostringstream velStr, accStr;
-    for (int i = 0; i < 3; ++i) velStr << readF32(0x38 + i * 4) << (i < 2 ? " " : "");
-    for (int i = 0; i < 3; ++i) accStr << readF32(0x44 + i * 4) << (i < 2 ? " " : "");
+    for (int i = 0; i < 3; ++i) velStr << readF32Str(offset + 0x28 + i * 4) << (i < 2 ? " " : "");
+    for (int i = 0; i < 3; ++i) accStr << readF32Str(offset + 0x34 + i * 4) << (i < 2 ? " " : "");
 
     fields.push_back({ "Velocity", "vector3", velStr.str() });
     fields.push_back({ "Acceleration", "vector3", accStr.str() });
 
-    auto rgbaToString = [&](size_t offset) {
-        const uint8_t* rgba = &data[offset];
+    auto rgbaToString = [&](size_t localOffset) {
+        const uint8_t* rgba = &data[localOffset];
         std::ostringstream s;
         s << (int)rgba[0] << " " << (int)rgba[1] << " " << (int)rgba[2] << " " << (int)rgba[3];
         return s.str();
         };
 
-    fields.push_back({ "StartColor", "RGBA", rgbaToString(0x50) });
-    fields.push_back({ "EndColor", "RGBA", rgbaToString(0x54) });
+    fields.push_back({ "StartColor", "RGBA", rgbaToString(offset + 0x40) });
+    fields.push_back({ "EndColor", "RGBA", rgbaToString(offset + 0x44) });
 
     return fields;
 }
+
+
+inline void InterpretShaderStruct(std::vector<ChunkField>& fields, const uint8_t* data, size_t baseOffset) {
+    const char* DepthCompareValues[] = { "Pass Never", "Pass Less", "Pass Equal", "Pass Less or Equal", "Pass Greater", "Pass Not Equal", "Pass Greater or Equal", "Pass Always" };
+    const char* DepthMaskValues[] = { "Write Disable", "Write Enable" };
+    const char* DestBlendValues[] = { "Zero", "One", "Src Color", "One Minus Src Color", "Src Alpha", "One Minus Src Alpha", "Src Color Prefog", "Disable", "Enable", "Scale Fragment", "Replace Fragment" };
+    const char* PriGradientValues[] = { "Disable", "Modulate", "Add", "Bump-Environment", "Bump-Environment Luminance", "Modulate 2x" };
+    const char* SecGradientValues[] = { "Disable", "Enable" };
+    const char* SrcBlendValues[] = { "Zero", "One", "Src Alpha", "One Minus Src Alpha" };
+    const char* TexturingValues[] = { "Disable", "Enable" };
+    const char* DetailColorValues[] = { "Disable", "Detail", "Scale", "InvScale", "Add", "Sub", "SubR", "Blend", "DetailBlend", "Add Signed", "Add Signed 2x", "Scale 2x", "Mod Alpha Add Color" };
+    const char* DetailAlphaValues[] = { "Disable", "Detail", "Scale", "InvScale", "Disable", "Enable", "Smooth", "Flat" };
+    const char* AlphaTestValues[] = { "Alpha Test Disable", "Alpha Test Enable" };
+
+    auto readEnum = [&](size_t offset, const char* fieldName, const char** values, size_t valueCount) {
+        uint8_t value = data[baseOffset + offset];
+        std::string strValue = (value < valueCount) ? values[value] : ("Unknown (" + std::to_string(value) + ")");
+        fields.push_back({ std::string("Shader.") + fieldName, "string", strValue });
+        };
+
+    readEnum(0, "DepthCompare", DepthCompareValues, std::size(DepthCompareValues));
+    readEnum(1, "DepthMask", DepthMaskValues, std::size(DepthMaskValues));
+    // skip 2 = ColorMask
+    readEnum(3, "DestBlend", DestBlendValues, std::size(DestBlendValues));
+    // skip 4 = FogFunc
+    readEnum(5, "PriGradient", PriGradientValues, std::size(PriGradientValues));
+    readEnum(6, "SecGradient", SecGradientValues, std::size(SecGradientValues));
+    readEnum(7, "SrcBlend", SrcBlendValues, std::size(SrcBlendValues));
+    readEnum(8, "Texturing", TexturingValues, std::size(TexturingValues));
+    readEnum(9, "DetailColor", DetailColorValues, std::size(DetailColorValues));
+    readEnum(10, "DetailAlpha", DetailAlphaValues, std::size(DetailAlphaValues));
+    // skip 11 = ShaderPreset
+    readEnum(12, "AlphaTest", AlphaTestValues, std::size(AlphaTestValues));
+    // skip 13 = PostDetailColorFunc
+    // skip 14 = PostDetailAlphaFunc
+    // skip 15 = pad
+}
+
+
+
+
 
 
 inline std::vector<ChunkField> InterpretEmitterInfoV2(const std::shared_ptr<ChunkItem>& chunk) {
     std::vector<ChunkField> fields;
-    const float* f = reinterpret_cast<const float*>(chunk->data.data());
-    size_t count = chunk->data.size() / sizeof(float);
+    const uint8_t* data = reinterpret_cast<const uint8_t*>(chunk->data.data());
 
-    for (size_t i = 0; i < count; ++i) {
-        std::ostringstream label;
-        label << "ParamV2[" << i << "]";
-        fields.push_back({ label.str(), "float", std::to_string(f[i]) });
+    if (chunk->data.size() < 124) {
+        fields.push_back({ "Error", "string", "EmitterInfoV2 chunk too small (expected at least 124 bytes)" });
+        return fields;
     }
+
+    auto readU32 = [&](size_t offset) -> uint32_t {
+        return *reinterpret_cast<const uint32_t*>(&data[offset]);
+        };
+    auto readF32 = [&](size_t offset) -> float {
+        return *reinterpret_cast<const float*>(&data[offset]);
+        };
+
+    size_t offset = 0;
+    fields.push_back({ "BurstSize", "uint32", std::to_string(readU32(offset)) }); offset += 4;
+
+    fields.push_back({ "CreationVolume.ClassID", "uint32", std::to_string(readU32(offset)) }); offset += 4;
+    fields.push_back({ "CreationVolume.Value1", "float", std::to_string(readF32(offset)) }); offset += 4;
+    fields.push_back({ "CreationVolume.Value2", "float", std::to_string(readF32(offset)) }); offset += 4;
+    fields.push_back({ "CreationVolume.Value3", "float", std::to_string(readF32(offset)) }); offset += 4;
+    offset += 4 * 4; // skip CreationVolume.Reserved[4]
+
+    fields.push_back({ "VelRandom.ClassID", "uint32", std::to_string(readU32(offset)) }); offset += 4;
+    fields.push_back({ "VelRandom.Value1", "float", std::to_string(readF32(offset)) }); offset += 4;
+    fields.push_back({ "VelRandom.Value2", "float", std::to_string(readF32(offset)) }); offset += 4;
+    fields.push_back({ "VelRandom.Value3", "float", std::to_string(readF32(offset)) }); offset += 4;
+    offset += 4 * 4; // skip VelRandom.Reserved[4]
+
+    fields.push_back({ "OutwardVel", "float", std::to_string(readF32(offset)) }); offset += 4;
+    fields.push_back({ "VelInherit", "float", std::to_string(readF32(offset)) }); offset += 4;
+
+    InterpretShaderStruct(fields, data, offset); offset += 16;
+
+    fields.push_back({ "RenderMode", "uint32", std::to_string(readU32(offset)) }); offset += 4;
+    fields.push_back({ "FrameMode", "uint32", std::to_string(readU32(offset)) }); offset += 4;
+
+    // skip reserved[6]
+    offset += 4 * 6;
 
     return fields;
 }
 
 
+
+
+
+
+
+
 inline std::vector<ChunkField> InterpretEmitterProps(const std::shared_ptr<ChunkItem>& chunk) {
     std::vector<ChunkField> fields;
-    const float* f = reinterpret_cast<const float*>(chunk->data.data());
-    size_t count = chunk->data.size() / sizeof(float);
+    const uint8_t* data = reinterpret_cast<const uint8_t*>(chunk->data.data());
 
-    for (size_t i = 0; i < count; ++i) {
-        std::ostringstream label;
-        label << "Keyframe[" << i << "]";
-        fields.push_back({ label.str(), "float", std::to_string(f[i]) });
+    auto readU32 = [&](size_t offset) -> uint32_t {
+        return *reinterpret_cast<const uint32_t*>(&data[offset]);
+        };
+    auto readF32 = [&](size_t offset) -> float {
+        return *reinterpret_cast<const float*>(&data[offset]);
+        };
+    auto readRGBA = [&](size_t offset) -> std::string {
+        std::ostringstream ss;
+        ss << (int)data[offset] << " " << (int)data[offset + 1] << " "
+            << (int)data[offset + 2] << " " << (int)data[offset + 3];
+        return ss.str();
+        };
+
+    size_t offset = 0;
+    if (chunk->data.size() < 44) {
+        fields.push_back({ "Error", "string", "EmitterProps chunk too small (expected at least 44 bytes)" });
+        return fields;
+    }
+
+    // Keyframe counts
+    uint32_t colorCount = readU32(offset); offset += 4;
+    uint32_t opacityCount = readU32(offset); offset += 4;
+    uint32_t sizeCount = readU32(offset); offset += 4;
+
+    fields.push_back({ "ColorKeyframes", "uint32", std::to_string(colorCount) });
+    fields.push_back({ "OpacityKeyframes", "uint32", std::to_string(opacityCount) });
+    fields.push_back({ "SizeKeyframes", "uint32", std::to_string(sizeCount) });
+
+    // ColorRandom (RGBA stored as 4 bytes)
+    fields.push_back({ "ColorRandom", "rgba", readRGBA(offset) });
+    offset += 4;
+
+    // Scalars
+    fields.push_back({ "OpacityRandom", "float", std::to_string(readF32(offset)) }); offset += 4;
+    fields.push_back({ "SizeRandom", "float", std::to_string(readF32(offset)) }); offset += 4;
+
+    // Skip 4x reserved
+    offset += 4 * 4;
+
+    // --- Color keyframes ---
+    for (uint32_t i = 0; i < colorCount; ++i) {
+        if (offset + 8 > chunk->data.size()) break;
+        float time = readF32(offset); offset += 4;
+        uint8_t r = data[offset++];
+        uint8_t g = data[offset++];
+        uint8_t b = data[offset++];
+        uint8_t a = data[offset++];
+
+        fields.push_back({ "ColorTime[" + std::to_string(i) + "]", "float", std::to_string(time) });
+        std::ostringstream ss;
+        ss << (int)r << " " << (int)g << " " << (int)b << " " << (int)a;
+        fields.push_back({ "Color[" + std::to_string(i) + "]", "rgba", ss.str() });
+    }
+
+    // --- Opacity keyframes ---
+    for (uint32_t i = 0; i < opacityCount; ++i) {
+        if (offset + 8 > chunk->data.size()) break;
+        float time = readF32(offset); offset += 4;
+        float val = readF32(offset); offset += 4;
+        fields.push_back({ "OpacityTime[" + std::to_string(i) + "]", "float", std::to_string(time) });
+        fields.push_back({ "Opacity[" + std::to_string(i) + "]", "float", std::to_string(val) });
+    }
+
+    // --- Size keyframes ---
+    for (uint32_t i = 0; i < sizeCount; ++i) {
+        if (offset + 8 > chunk->data.size()) break;
+        float time = readF32(offset); offset += 4;
+        float val = readF32(offset); offset += 4;
+        fields.push_back({ "SizeTime[" + std::to_string(i) + "]", "float", std::to_string(time) });
+        fields.push_back({ "Size[" + std::to_string(i) + "]", "float", std::to_string(val) });
     }
 
     return fields;
@@ -1610,40 +1762,581 @@ inline std::vector<ChunkField> InterpretEmitterProps(const std::shared_ptr<Chunk
 
 inline std::vector<ChunkField> InterpretEmitterRotationKeys(const std::shared_ptr<ChunkItem>& chunk) {
     std::vector<ChunkField> fields;
-    const float* f = reinterpret_cast<const float*>(chunk->data.data());
-    size_t count = chunk->data.size() / (2 * sizeof(float));
+    const uint8_t* data = reinterpret_cast<const uint8_t*>(chunk->data.data());
 
-    for (size_t i = 0; i < count; ++i) {
-        float time = f[i * 2];
-        float angle = f[i * 2 + 1];
-        std::ostringstream label;
-        label << "Key[" << i << "]";
-        fields.push_back({ label.str() + ".Time", "float", std::to_string(time) });
-        fields.push_back({ label.str() + ".Angle", "float", std::to_string(angle) });
+    if (chunk->data.size() < 16) {
+        fields.push_back({ "Error", "string", "Chunk too small for RotationHeader (expected at least 16 bytes)" });
+        return fields;
+    }
+
+    auto readU32 = [&](size_t offset) -> uint32_t {
+        return *reinterpret_cast<const uint32_t*>(&data[offset]);
+    };
+    auto readF32 = [&](size_t offset) -> float {
+        return *reinterpret_cast<const float*>(&data[offset]);
+    };
+
+    size_t offset = 0;
+    uint32_t keyframeCount = readU32(offset); offset += 4;
+    float randomVelocity = readF32(offset); offset += 4;
+    float orientationRandom = readF32(offset); offset += 4;
+    offset += 4; // Skip reserved
+
+    fields.push_back({ "KeyframeCount", "uint32", std::to_string(keyframeCount) });
+    fields.push_back({ "RandomVelocity", "float", std::to_string(randomVelocity) });
+    fields.push_back({ "OrientationRandom", "float", std::to_string(orientationRandom) });
+
+    for (uint32_t i = 0; i < keyframeCount; ++i) {
+        if (offset + 8 > chunk->data.size()) break;
+        float time = readF32(offset); offset += 4;
+        float rotation = readF32(offset); offset += 4;
+
+        fields.push_back({ "Time[" + std::to_string(i) + "]", "float", std::to_string(time) });
+        fields.push_back({ "Rotation[" + std::to_string(i) + "]", "float", std::to_string(rotation) });
     }
 
     return fields;
 }
-
 
 inline std::vector<ChunkField> InterpretEmitterFrameKeys(const std::shared_ptr<ChunkItem>& chunk) {
     std::vector<ChunkField> fields;
     const uint8_t* data = reinterpret_cast<const uint8_t*>(chunk->data.data());
-    size_t entrySize = 8;
-    size_t count = chunk->data.size() / entrySize;
 
-    for (size_t i = 0; i < count; ++i) {
-        float time = *reinterpret_cast<const float*>(&data[i * entrySize]);
-        uint32_t frame = *reinterpret_cast<const uint32_t*>(&data[i * entrySize + 4]);
+    if (chunk->data.size() < 16) {
+        fields.push_back({ "Error", "string", "Chunk too small for FrameHeader (expected at least 16 bytes)" });
+        return fields;
+    }
 
-        std::ostringstream label;
-        label << "Key[" << i << "]";
-        fields.push_back({ label.str() + ".Time", "float", std::to_string(time) });
-        fields.push_back({ label.str() + ".Frame", "uint32", std::to_string(frame) });
+    auto readU32 = [&](size_t offset) -> uint32_t {
+        return *reinterpret_cast<const uint32_t*>(&data[offset]);
+        };
+    auto readF32 = [&](size_t offset) -> float {
+        return *reinterpret_cast<const float*>(&data[offset]);
+        };
+
+    size_t offset = 0;
+
+    // --- Header ---
+    uint32_t keyframeCount = readU32(offset); offset += 4;
+    float random = readF32(offset); offset += 4;
+    offset += 4 * 2; // Reserved[2]
+
+    fields.push_back({ "KeyframeCount", "uint32", std::to_string(keyframeCount) });
+    fields.push_back({ "Random", "float", std::to_string(random) });
+
+    // --- Keyframes ---
+    for (uint32_t i = 0; i < keyframeCount + 1; ++i) {
+        if (offset + 8 > chunk->data.size()) break;
+
+        float time = readF32(offset); offset += 4;
+        float frame = readF32(offset); offset += 4;
+
+        fields.push_back({ "Time[" + std::to_string(i) + "]", "float", std::to_string(time) });
+        fields.push_back({ "Frame[" + std::to_string(i) + "]", "float", std::to_string(frame) });
     }
 
     return fields;
 }
+
+inline std::vector<ChunkField> InterpretAggregateHeader(const std::shared_ptr<ChunkItem>& chunk) {
+    std::vector<ChunkField> fields;
+    const uint8_t* data = reinterpret_cast<const uint8_t*>(chunk->data.data());
+
+    if (chunk->data.size() < 20) {
+        return { { "Error", "string", "Chunk too small for AggregateHeader (expected 20 bytes)" } };
+    }
+
+    uint16_t major = *reinterpret_cast<const uint16_t*>(&data[0]);
+    uint16_t minor = *reinterpret_cast<const uint16_t*>(&data[2]);
+    std::ostringstream versionStr;
+    versionStr << minor << "." << major;
+    
+    std::string name(reinterpret_cast<const char*>(&data[4]), 16);
+    name = name.c_str(); // truncate at null
+
+    fields.push_back({ "Version", "uint32", versionStr.str() });
+    fields.push_back({ "Name", "string", name });
+
+    return fields;
+}
+
+
+inline std::vector<ChunkField> InterpretAggregateInfo(const std::shared_ptr<ChunkItem>& chunk) {
+    std::vector<ChunkField> fields;
+    const uint8_t* data = reinterpret_cast<const uint8_t*>(chunk->data.data());
+
+    if (chunk->data.size() < 36) {
+        return { { "Error", "string", "Chunk too small for AggregateInfo (expected at least 36 bytes)" } };
+    }
+
+    std::string baseModel(reinterpret_cast<const char*>(&data[0]), 32);
+    baseModel = baseModel.c_str();
+    uint32_t subCount = *reinterpret_cast<const uint32_t*>(&data[32]);
+
+    fields.push_back({ "BaseModelName", "string", baseModel });
+    fields.push_back({ "SubobjectCount", "uint32", std::to_string(subCount) });
+
+    size_t offset = 36;
+    for (uint32_t i = 0; i < subCount; ++i) {
+        if (offset + 64 > chunk->data.size()) break;
+
+        std::string subName(reinterpret_cast<const char*>(&data[offset]), 32);
+        std::string boneName(reinterpret_cast<const char*>(&data[offset + 32]), 32);
+
+        subName = subName.c_str();
+        boneName = boneName.c_str();
+
+        fields.push_back({ "SubObject[" + std::to_string(i) + "].SubobjectName", "string", subName });
+        fields.push_back({ "SubObject[" + std::to_string(i) + "].BoneName", "string", boneName });
+
+        offset += 64;
+    }
+
+    return fields;
+}
+
+
+inline std::vector<ChunkField> InterpretAggregateClassInfo(const std::shared_ptr<ChunkItem>& chunk) {
+    std::vector<ChunkField> fields;
+    const uint8_t* data = reinterpret_cast<const uint8_t*>(chunk->data.data());
+
+    if (chunk->data.size() < 8) {
+        return { { "Error", "string", "Chunk too small for AggregateClassInfo (expected 8 bytes)" } };
+    }
+
+    uint32_t classID = *reinterpret_cast<const uint32_t*>(&data[0]);
+    uint32_t flags = *reinterpret_cast<const uint32_t*>(&data[4]);
+
+    fields.push_back({ "OriginalClassID", "uint32", std::to_string(classID) });
+    fields.push_back({ "Flags", "uint32", std::to_string(flags) });
+
+    return fields;
+}
+
+inline std::vector<ChunkField> InterpretTextureReplacerInfo(const std::shared_ptr<ChunkItem>& chunk) {
+    std::vector<ChunkField> fields;
+    const uint8_t* data = reinterpret_cast<const uint8_t*>(chunk->data.data());
+    size_t offset = 0;
+
+    const size_t headerSize = 4;
+    const size_t meshPathCount = 15;
+    const size_t pathEntryLength = 16 * 2;
+    const size_t texNameLength = 260;
+    const size_t replacerSize = (meshPathCount * pathEntryLength) * 2 + (texNameLength * 2) + sizeof(uint16_t) * 2 + sizeof(uint32_t) + sizeof(float);
+
+    if (chunk->data.size() < headerSize) {
+        fields.push_back({ "Error", "string", "TextureReplacerHeader too small" });
+        return fields;
+    }
+
+    uint32_t count = *reinterpret_cast<const uint32_t*>(&data[offset]); offset += 4;
+    fields.push_back({ "ReplacedTexturesCount", "uint32", std::to_string(count) });
+
+    for (uint32_t i = 0; i < count; ++i) {
+        if (offset + replacerSize > chunk->data.size()) {
+            fields.push_back({ "Error", "string", "TextureReplacerStruct out of bounds" });
+            break;
+        }
+
+        // Mesh Paths
+        for (int j = 0; j < meshPathCount; ++j) {
+            std::string str(reinterpret_cast<const char*>(&data[offset]), pathEntryLength);
+            str = str.c_str();
+            fields.push_back({ "Replacer[" + std::to_string(i) + "].MeshPath[" + std::to_string(j) + "]", "string", str });
+            offset += pathEntryLength;
+        }
+
+        // Bone Paths
+        for (int j = 0; j < meshPathCount; ++j) {
+            std::string str(reinterpret_cast<const char*>(&data[offset]), pathEntryLength);
+            str = str.c_str();
+            fields.push_back({ "Replacer[" + std::to_string(i) + "].BonePath[" + std::to_string(j) + "]", "string", str });
+            offset += pathEntryLength;
+        }
+
+        // Texture names
+        std::string oldTex(reinterpret_cast<const char*>(&data[offset]), texNameLength);
+        oldTex = oldTex.c_str(); fields.push_back({ "Replacer[" + std::to_string(i) + "].OldTextureName", "string", oldTex });
+        offset += texNameLength;
+
+        std::string newTex(reinterpret_cast<const char*>(&data[offset]), texNameLength);
+        newTex = newTex.c_str(); fields.push_back({ "Replacer[" + std::to_string(i) + "].NewTextureName", "string", newTex });
+        offset += texNameLength;
+
+        // Texture Params
+        uint16_t attr = *reinterpret_cast<const uint16_t*>(&data[offset]); offset += 2;
+        uint16_t anim = *reinterpret_cast<const uint16_t*>(&data[offset]); offset += 2;
+        uint32_t frameCount = *reinterpret_cast<const uint32_t*>(&data[offset]); offset += 4;
+        float frameRate = *reinterpret_cast<const float*>(&data[offset]); offset += 4;
+
+        fields.push_back({ "Replacer[" + std::to_string(i) + "].TextureParams.Attributes", "uint16", std::to_string(attr) });
+        fields.push_back({ "Replacer[" + std::to_string(i) + "].TextureParams.AnimType", "uint16", std::to_string(anim) });
+        fields.push_back({ "Replacer[" + std::to_string(i) + "].TextureParams.FrameCount", "uint32", std::to_string(frameCount) });
+        fields.push_back({ "Replacer[" + std::to_string(i) + "].TextureParams.FrameRate", "float", std::to_string(frameRate) });
+    }
+
+    return fields;
+}
+
+inline void InterpretSphereShaderStruct(std::vector<ChunkField>& fields, const uint8_t* data, size_t baseOffset) {
+    const char* DepthCompareValues[] = {
+        "Pass Never", "Pass Less", "Pass Equal", "Pass Less or Equal",
+        "Pass Greater", "Pass Not Equal", "Pass Greater or Equal", "Pass Always"
+    };
+    const char* DepthMaskValues[] = { "Disable", "Enable" };
+    const char* DestBlendValues[] = {
+        "Zero", "One", "Src Color", "One Minus Src Color", "Src Alpha", "One Minus Src Alpha",
+        "Src Color Prefog", "Disable", "Enable", "Scale Fragment", "Replace Fragment"
+    };
+    const char* PriGradientValues[] = {
+        "Disable", "Modulate", "Add", "Bump-Environment", "Bump-Environment Luminance", "Modulate 2x"
+    };
+    const char* SecGradientValues[] = { "Disable", "Enable" };
+    const char* SrcBlendValues[] = { "Zero", "One", "Src Alpha", "One Minus Src Alpha" };
+    const char* TexturingValues[] = { "Disable", "Enable" };
+    const char* DetailColorValues[] = {
+        "Disable", "Detail", "Scale", "InvScale", "Add", "Sub", "SubR", "Blend", "DetailBlend",
+        "Add Signed", "Add Signed 2x", "Scale 2x", "Mod Alpha Add Color"
+    };
+    const char* DetailAlphaValues[] = {
+        "Disable", "Detail", "Scale", "InvScale", "Disable", "Enable", "Smooth", "Flat"
+    };
+    const char* AlphaTestValues[] = { "Alpha Test Disable", "Alpha Test Enable" };
+
+    auto readEnum = [&](const char* label, uint8_t value, const char* const* values, size_t count) {
+        std::string val = (value < count) ? values[value] : ("Unknown (" + std::to_string(value) + ")");
+        fields.push_back({ std::string("Shader.") + label, "enum", val });
+        };
+
+    readEnum("DepthCompare", data[baseOffset + 0], DepthCompareValues, std::size(DepthCompareValues));
+    readEnum("DepthMask", data[baseOffset + 1], DepthMaskValues, std::size(DepthMaskValues));
+    readEnum("DestBlend", data[baseOffset + 3], DestBlendValues, std::size(DestBlendValues)); // skip ColorMask
+    readEnum("PriGradient", data[baseOffset + 5], PriGradientValues, std::size(PriGradientValues)); // skip FogFunc
+    readEnum("SecGradient", data[baseOffset + 6], SecGradientValues, std::size(SecGradientValues));
+    readEnum("SrcBlend", data[baseOffset + 7], SrcBlendValues, std::size(SrcBlendValues));
+    readEnum("Texturing", data[baseOffset + 8], TexturingValues, std::size(TexturingValues));
+    readEnum("DetailColor", data[baseOffset + 9], DetailColorValues, std::size(DetailColorValues));
+    readEnum("DetailAlpha", data[baseOffset + 10], DetailAlphaValues, std::size(DetailAlphaValues));
+    readEnum("AlphaTest", data[baseOffset + 12], AlphaTestValues, std::size(AlphaTestValues)); // skip ShaderPreset
+}
+
+
+inline std::vector<ChunkField> InterpretSphereHeader(const std::shared_ptr<ChunkItem>& chunk) {
+    std::vector<ChunkField> fields;
+    const uint8_t* data = reinterpret_cast<const uint8_t*>(chunk->data.data());
+
+    // Version (2x uint32)
+    uint32_t versionMinor = *reinterpret_cast<const uint32_t*>(&data[0x00]);
+    uint32_t versionMajor = *reinterpret_cast<const uint32_t*>(&data[0x04]);
+    fields.push_back({ "Version", "version", std::to_string(versionMajor) + "." + std::to_string(versionMinor) });
+
+    // Name (null-terminated string, max 256 bytes)
+    std::string name(reinterpret_cast<const char*>(&data[0x08]), strnlen(reinterpret_cast<const char*>(&data[0x08]), 256));
+    fields.push_back({ "Name", "string", name });
+
+    // Center
+    fields.push_back({ "Center.X", "float", std::to_string(*reinterpret_cast<const float*>(&data[0x28])) });
+    fields.push_back({ "Center.Y", "float", std::to_string(*reinterpret_cast<const float*>(&data[0x2C])) });
+    fields.push_back({ "Center.Z", "float", std::to_string(*reinterpret_cast<const float*>(&data[0x30])) });
+
+    // Extent
+    fields.push_back({ "Extent.X", "float", std::to_string(*reinterpret_cast<const float*>(&data[0x34])) });
+    fields.push_back({ "Extent.Y", "float", std::to_string(*reinterpret_cast<const float*>(&data[0x38])) });
+    fields.push_back({ "Extent.Z", "float", std::to_string(*reinterpret_cast<const float*>(&data[0x3C])) });
+
+    // AnimationDuration
+    fields.push_back({ "AnimationDuration", "float", std::to_string(*reinterpret_cast<const float*>(&data[0x40])) });
+
+    // Color
+    fields.push_back({ "Color.R", "float", std::to_string(*reinterpret_cast<const float*>(&data[0x44])) });
+    fields.push_back({ "Color.G", "float", std::to_string(*reinterpret_cast<const float*>(&data[0x48])) });
+    fields.push_back({ "Color.B", "float", std::to_string(*reinterpret_cast<const float*>(&data[0x4C])) });
+
+    // Alpha
+    fields.push_back({ "Alpha", "float", std::to_string(*reinterpret_cast<const float*>(&data[0x50])) });
+
+    // Scale
+    fields.push_back({ "Scale.X", "float", std::to_string(*reinterpret_cast<const float*>(&data[0x54])) });
+    fields.push_back({ "Scale.Y", "float", std::to_string(*reinterpret_cast<const float*>(&data[0x58])) });
+    fields.push_back({ "Scale.Z", "float", std::to_string(*reinterpret_cast<const float*>(&data[0x5C])) });
+
+    // Vector Quat
+    fields.push_back({ "Vector.Quat.X", "float", std::to_string(*reinterpret_cast<const float*>(&data[0x60])) });
+    fields.push_back({ "Vector.Quat.Y", "float", std::to_string(*reinterpret_cast<const float*>(&data[0x64])) });
+    fields.push_back({ "Vector.Quat.Z", "float", std::to_string(*reinterpret_cast<const float*>(&data[0x68])) });
+    fields.push_back({ "Vector.Quat.W", "float", std::to_string(*reinterpret_cast<const float*>(&data[0x6C])) });
+
+    // Vector Magnitude
+    fields.push_back({ "Vector.Magnitude", "float", std::to_string(*reinterpret_cast<const float*>(&data[0x70])) });
+
+    // TextureName (null-terminated, max 64 bytes)
+    std::string tex(reinterpret_cast<const char*>(&data[0x74]), strnlen(reinterpret_cast<const char*>(&data[0x74]), 64));
+    fields.push_back({ "TextureName", "string", tex });
+    
+    InterpretSphereShaderStruct(fields, data, /* shaderOffset */ 0x94);
+   
+    return fields;
+}
+
+inline void InterpretMicroChunkKeyframes(
+    std::vector<ChunkField>& fields,
+    const std::vector<uint8_t>& data,
+    const std::string& prefix,
+    int valueSize)
+{
+    size_t offset = 0;
+    size_t index = 0;
+
+    while (offset + 2 + valueSize <= data.size()) {
+        uint8_t id = data[offset++];
+        uint8_t size = data[offset++];
+
+        std::ostringstream valStream;
+        for (int i = 0; i < valueSize / 4 - 1; ++i) {
+            float val = *reinterpret_cast<const float*>(&data[offset]);
+            offset += 4;
+            valStream << std::fixed << std::setprecision(6) << val;
+            if (i < (valueSize / 4 - 2)) valStream << " ";
+        }
+
+        float time = *reinterpret_cast<const float*>(&data[offset]);
+        offset += 4;
+
+        fields.push_back({ prefix + "[" + std::to_string(index) + "].Value", (valueSize == 16 ? "vec3" : "float"), valStream.str() });
+        fields.push_back({ prefix + "[" + std::to_string(index) + "].Time", "float", std::to_string(time) });
+
+        index++;
+    }
+}
+inline void InterpretMicroChunkKeyframes(
+    std::vector<ChunkField>& fields,
+    const std::vector<uint8_t>& data,
+    const std::string& prefix,
+    int framePayloadSize,
+    std::function<void(const uint8_t*, size_t, size_t, std::vector<ChunkField>&)> decoder)
+{
+    size_t offset = 0;
+    size_t index = 0;
+
+    while (offset + 2 <= data.size()) {
+        uint8_t id = data[offset++];
+        uint8_t size = data[offset++];
+
+        if (size != framePayloadSize || offset + size > data.size()) {
+            fields.push_back({ prefix + "[" + std::to_string(index) + "]", "error", "Unexpected size or out-of-bounds" });
+            break;
+        }
+
+        decoder(data.data() + offset, size, index, fields);
+        offset += size;
+        index++;
+    }
+}
+
+inline std::vector<ChunkField> InterpretSphereColorChannel(const std::shared_ptr<ChunkItem>& chunk) {
+    std::vector<ChunkField> fields;
+    InterpretMicroChunkKeyframes(fields, chunk->data, "ColorKey", 16,
+        [](const uint8_t* p, size_t, size_t i, std::vector<ChunkField>& f) {
+            float x = *reinterpret_cast<const float*>(p + 0);
+            float y = *reinterpret_cast<const float*>(p + 4);
+            float z = *reinterpret_cast<const float*>(p + 8);
+            float t = *reinterpret_cast<const float*>(p + 12);
+            f.push_back({ "ColorKey[" + std::to_string(i) + "].Value.X", "float", std::to_string(x) });
+            f.push_back({ "ColorKey[" + std::to_string(i) + "].Value.Y", "float", std::to_string(y) });
+            f.push_back({ "ColorKey[" + std::to_string(i) + "].Value.Z", "float", std::to_string(z) });
+            f.push_back({ "ColorKey[" + std::to_string(i) + "].Time",    "float", std::to_string(t) });
+        });
+    return fields;
+}
+
+
+inline std::vector<ChunkField> InterpretSphereAlphaChannel(const std::shared_ptr<ChunkItem>& chunk) {
+    std::vector<ChunkField> fields;
+    InterpretMicroChunkKeyframes(fields, chunk->data, "AlphaKey", 8,
+        [](const uint8_t* p, size_t, size_t i, std::vector<ChunkField>& f) {
+            float value = *reinterpret_cast<const float*>(p + 0);
+            float t = *reinterpret_cast<const float*>(p + 4);
+            f.push_back({ "AlphaKey[" + std::to_string(i) + "].Value", "float", std::to_string(value) });
+            f.push_back({ "AlphaKey[" + std::to_string(i) + "].Time",  "float", std::to_string(t) });
+        });
+    return fields;
+}
+
+
+
+inline std::vector<ChunkField> InterpretSphereScaleChannel(const std::shared_ptr<ChunkItem>& chunk) {
+    std::vector<ChunkField> fields;
+    InterpretMicroChunkKeyframes(fields, chunk->data, "ScaleKey", 16,
+        [](const uint8_t* p, size_t, size_t i, std::vector<ChunkField>& f) {
+            float x = *reinterpret_cast<const float*>(p + 0);
+            float y = *reinterpret_cast<const float*>(p + 4);
+            float z = *reinterpret_cast<const float*>(p + 8);
+            float t = *reinterpret_cast<const float*>(p + 12);
+            f.push_back({ "ScaleKey[" + std::to_string(i) + "].Value.X", "float", std::to_string(x) });
+            f.push_back({ "ScaleKey[" + std::to_string(i) + "].Value.Y", "float", std::to_string(y) });
+            f.push_back({ "ScaleKey[" + std::to_string(i) + "].Value.Z", "float", std::to_string(z) });
+            f.push_back({ "ScaleKey[" + std::to_string(i) + "].Time",    "float", std::to_string(t) });
+        });
+    return fields;
+}
+
+
+inline std::vector<ChunkField> InterpretSphereVectorChannel(const std::shared_ptr<ChunkItem>& chunk) {
+    std::vector<ChunkField> fields;
+    InterpretMicroChunkKeyframes(fields, chunk->data, "VectorKey", 24,
+        [](const uint8_t* p, size_t, size_t i, std::vector<ChunkField>& f) {
+            float x = *reinterpret_cast<const float*>(p + 0);
+            float y = *reinterpret_cast<const float*>(p + 4);
+            float z = *reinterpret_cast<const float*>(p + 8);
+            float w = *reinterpret_cast<const float*>(p + 12);
+            float mag = *reinterpret_cast<const float*>(p + 16);
+            float t = *reinterpret_cast<const float*>(p + 20);
+            std::ostringstream quatStr;
+            quatStr << x << " " << y << " " << z << " " << w;
+            f.push_back({ "VectorKey[" + std::to_string(i) + "].Quat",      "quaternion", quatStr.str() });
+            f.push_back({ "VectorKey[" + std::to_string(i) + "].Magnitude", "float",      std::to_string(mag) });
+            f.push_back({ "VectorKey[" + std::to_string(i) + "].Time",      "float",      std::to_string(t) });
+        });
+    return fields;
+}
+
+
+inline std::vector<ChunkField> InterpretSphereMicrochunk(const std::shared_ptr<ChunkItem>& chunk, uint32_t parentChunkId) {
+    std::vector<ChunkField> fields;
+
+    if (!chunk || chunk->id != 0x01 || !chunk->parent) {
+        fields.push_back({ "Frame[0]", "error", "Invalid chunk or missing parent" });
+        return fields;
+    }
+
+    const std::vector<uint8_t>& data = chunk->data;
+    size_t size = data.size();
+
+    // Compute frameIndex by locating position within parent's children
+    int frameIndex = 0;
+    const auto& siblings = chunk->parent->children;
+    auto it = std::find_if(siblings.begin(), siblings.end(),
+        [&](const std::shared_ptr<ChunkItem>& sibling) { return sibling.get() == chunk.get(); });
+    if (it != siblings.end()) {
+        frameIndex = static_cast<int>(std::distance(siblings.begin(), it));
+    }
+
+    std::string prefix;
+    switch (parentChunkId) {
+    case 0x0002: prefix = "ColorKey"; break;
+    case 0x0003: prefix = "AlphaKey"; break;
+    case 0x0004: prefix = "ScaleKey"; break;
+    case 0x0005: prefix = "VectorKey"; break;
+    default:
+        fields.push_back({ "Frame[" + std::to_string(frameIndex) + "]", "error", "Unknown parent chunk ID: 0x" + ToHex(parentChunkId) });
+        return fields;
+    }
+
+    const uint8_t* payload = data.data();
+
+    if ((parentChunkId == 0x0002 || parentChunkId == 0x0004) && size == 16) {
+        float x = *reinterpret_cast<const float*>(&payload[0]);
+        float y = *reinterpret_cast<const float*>(&payload[4]);
+        float z = *reinterpret_cast<const float*>(&payload[8]);
+        float t = *reinterpret_cast<const float*>(&payload[12]);
+
+        fields.push_back({ prefix + "[" + std::to_string(frameIndex) + "].Value.X", "float", std::to_string(x) });
+        fields.push_back({ prefix + "[" + std::to_string(frameIndex) + "].Value.Y", "float", std::to_string(y) });
+        fields.push_back({ prefix + "[" + std::to_string(frameIndex) + "].Value.Z", "float", std::to_string(z) });
+        fields.push_back({ prefix + "[" + std::to_string(frameIndex) + "].Time",    "float", std::to_string(t) });
+
+    }
+    else if (parentChunkId == 0x0003 && size == 8) {
+        float value = *reinterpret_cast<const float*>(&payload[0]);
+        float t = *reinterpret_cast<const float*>(&payload[4]);
+
+        fields.push_back({ prefix + "[" + std::to_string(frameIndex) + "].Value", "float", std::to_string(value) });
+        fields.push_back({ prefix + "[" + std::to_string(frameIndex) + "].Time",  "float", std::to_string(t) });
+
+    }
+    else if (parentChunkId == 0x0005 && size == 24) {
+        float x = *reinterpret_cast<const float*>(&payload[0]);
+        float y = *reinterpret_cast<const float*>(&payload[4]);
+        float z = *reinterpret_cast<const float*>(&payload[8]);
+        float w = *reinterpret_cast<const float*>(&payload[12]);
+        float mag = *reinterpret_cast<const float*>(&payload[16]);
+        float t = *reinterpret_cast<const float*>(&payload[20]);
+
+        std::ostringstream quatStr;
+        quatStr << x << " " << y << " " << z << " " << w;
+
+        fields.push_back({ prefix + "[" + std::to_string(frameIndex) + "].Quat",      "quaternion", quatStr.str() });
+        fields.push_back({ prefix + "[" + std::to_string(frameIndex) + "].Magnitude", "float",      std::to_string(mag) });
+        fields.push_back({ prefix + "[" + std::to_string(frameIndex) + "].Time",      "float",      std::to_string(t) });
+
+    }
+    else {
+        fields.push_back({ "Frame[" + std::to_string(frameIndex) + "]", "error", "Unexpected size (" + std::to_string(size) + ") for parent ID 0x" + ToHex(parentChunkId) });
+    }
+
+    return fields;
+}
+
+
+
+
+
+
+
+
+    
+
+
+inline std::vector<ChunkField> InterpretSphereChannelChunk(const std::shared_ptr<ChunkItem>& chunk) {
+    std::vector<ChunkField> result;
+
+    // Defensive: if no parent, bail
+    if (!chunk->parent) {
+        result.push_back({ "Error", "string", "Missing parent chunk" });
+        return result;
+    }
+
+    // Check if parent is a known Sphere object (e.g., 0x0001 = Sphere Header)
+    bool isUnderSphere = (chunk->parent->id == 0x0001);  // W3D_CHUNK_SPHERE_HEADER
+
+    if (!isUnderSphere) {
+        result.push_back({ "Error", "string", "Ambiguous chunk ID outside of sphere context" });
+        return result;
+    }
+
+    static const std::unordered_map<uint32_t, std::string> chunkNames = {
+        {0x00000002, "Color Channel"},
+        {0x00000003, "Alpha Channel"},
+        {0x00000004, "Scale Channel"},
+        {0x00000005, "Vector Channel"},
+    };
+
+    std::string label = chunkNames.count(chunk->id)
+        ? chunkNames.at(chunk->id)
+        : "Unknown Sphere Channel";
+
+    result.push_back({ "ChannelType", "string", label });
+
+    for (const auto& sub : chunk->children) {
+        if (sub->id == 0x09081503) {
+            auto fields = InterpretSphereMicrochunk(sub, chunk->id);
+            result.insert(result.end(), fields.begin(), fields.end());
+        }
+    }
+
+    return result;
+}
+
+
+
+
+
+
+
+
+
+
+
 
 
 

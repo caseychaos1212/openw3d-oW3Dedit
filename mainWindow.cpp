@@ -22,15 +22,15 @@
 
 Q_DECLARE_METATYPE(void*)
 
-static std::string LabelForChunk(uint32_t id) {
-    std::string name = GetChunkName(id);
-    if (name == "UNKNOWN") {
-        std::ostringstream fallback;
-        fallback << "0x" << std::hex << id;
-        return fallback.str();
-    }
-    return name;
-}
+//static std::string LabelForChunk(uint32_t id) {
+//    std::string name = GetChunkName(id);
+//    if (name == "UNKNOWN") {
+//        std::ostringstream fallback;
+//        fallback << "0x" << std::hex << id;
+//        return fallback.str();
+//    }
+//    return name;
+//}
 
 MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     // Menu bar
@@ -63,6 +63,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
 
 }
 
+
 void MainWindow::openFile(const QString& path) {
     QString filePath = path;
     if (filePath.isEmpty()) {
@@ -78,8 +79,10 @@ void MainWindow::openFile(const QString& path) {
     ClearChunkTree();
     populateTree();
 
-    AddRecentFile(filePath);   //<-- <<< Add this here!
+    AddRecentFile(filePath);  
 }
+
+
 
 void MainWindow::populateTree() {
     treeWidget->clear();
@@ -88,7 +91,11 @@ void MainWindow::populateTree() {
     for (const auto& chunk : chunks) {
         QTreeWidgetItem* item = new QTreeWidgetItem();
         
-        QString label = QString("0x%1 (%2)").arg(chunk->id, 0, 16).arg(QString::fromStdString(GetChunkName(chunk->id)));
+        QString label = QString("0x%1 (%2)")
+            .arg(chunk->id, 0, 16)
+            .arg(QString::fromStdString(LabelForChunk(chunk->id, chunk.get())));
+
+
         item->setText(0, QString("%1 (size %2)").arg(label).arg(chunk->length));
         item->setData(0, Qt::UserRole, QVariant::fromValue<void*>(chunk.get()));
         treeWidget->addTopLevelItem(item);
@@ -97,7 +104,11 @@ void MainWindow::populateTree() {
         addChildren = [&](QTreeWidgetItem* parent, const std::shared_ptr<ChunkItem>& current) {
             for (const auto& child : current->children) {
                 QTreeWidgetItem* childItem = new QTreeWidgetItem();
-                QString label = QString("0x%1 (%2)").arg(child->id, 0, 16).arg(QString::fromStdString(GetChunkName(child->id)));
+                QString label = QString("0x%1 (%2)")
+                    .arg(child->id, 0, 16)
+                    .arg(QString::fromStdString(LabelForChunk(child->id, child.get())));
+
+
                 childItem->setText(0, QString("%1 (size %2)").arg(label).arg(child->length));
                 childItem->setData(0, Qt::UserRole, QVariant::fromValue<void*>(child.get()));
                 parent->addChild(childItem);
@@ -149,19 +160,25 @@ void MainWindow::handleTreeSelection() {
     std::cout << "Selected chunk ID: 0x" << std::hex << target->id << std::dec << "\n";
     std::cout << "Chunk length: " << target->length << " bytes\n";
 
+    // EARLY CHECK: Interpret microchunk data first before assuming it's just a wrapper
+    if (target->id == 0x01 && target->parent && target->parent->id == 0x03150809) {
+        uint32_t grandParentId = target->parent->parent ? target->parent->parent->id : 0;
+        fields = InterpretSphereMicrochunk(target, grandParentId);
+    }
+
+    // Skip remaining chunk-wrapper child summary if we've interpreted real data
+    if (!fields.empty()) goto show_table;
+
+    // Populate children if present
     if (!target->children.empty()) {
         for (const auto& child : target->children) {
-            std::string name = LabelForChunk(child->id);
+            std::string name = LabelForChunk(child->id, child.get());
             fields.push_back({ name, "chunk", "" });
         }
     }
-
-
     else {
-
         uint16_t flavor = 0xFFFF;
         if (target->id == 0x0282) {
-            // Look for 0x0281 among siblings or parent->children
             for (const auto& topChunk : chunkData->getChunks()) {
                 std::function<bool(const std::shared_ptr<ChunkItem>&, uint16_t&)> findFlavor;
                 findFlavor = [&](const std::shared_ptr<ChunkItem>& node, uint16_t& outFlavor) -> bool {
@@ -174,180 +191,95 @@ void MainWindow::handleTreeSelection() {
                     }
                     return false;
                     };
-
                 if (findFlavor(topChunk, flavor)) break;
             }
         }
-        // No children: decode based on ID
-        switch (target->id) {
-        case 0x0101: // HIERARCHY_HEADER
-            fields = InterpretHierarchyHeader(target);
-            break;
-        case 0x0102: // PIVOTS
-            fields = InterpretPivots(target);
-            break;
-        case 0x0103: // PIVOT_FIXUPS
-            fields = InterpretPivotFixups(target);
-            break;
-        case 0x001F: // W3D_CHUNK_MESH_HEADER3
-            fields = InterpretMeshHeader3(target);
-            break;
-        case 0x0002: // W3D_CHUNK_VERTICES
-            fields = InterpretVertices(target);
-            break;
-		case 0x0003: // W3D_CHUNK_VERTEX_NORMALS
-            fields = InterpretVertexNormals(target);
-            break;
-        case 0x003B: // W3D_CHUNK_DCG
-            fields = InterpretDiffuseColorChunk(target);
-            break;
-        case 0x00000020: // W3D_CHUNK_TRIANGLES
-            fields = InterpretTriangles(target);
-            break;
-        case 0x00000022: // W3D_CHUNK_VERTEX_SHADE_INDICES
-            fields = InterpretVertexShadeIndices(target);
-            break;
-        case 0x0024: // W3D_CHUNK_PRELIT_VERTEX
-            fields = InterpretPrelitVertexWrapper(target);
-            break;
-        case 0x0026: // W3D_CHUNK_LIGHTMAP_MULTI_TEXTURE
-            fields = InterpretLightmapMultiTexture(target);
-            break;
-        case 0x00000028: // W3D_CHUNK_MATERIAL_INFO
-            fields = InterpretMaterialInfo(target);
-            break;
-        case 0x0282: // W3D_CHUNK_COMPRESSED_ANIMATION_CHANNEL
-            fields = InterpretCompressedAnimationChannel(target, (flavor != 0xFFFF ? flavor : 0)); // Default to 0 if not found
-            break;
-        case 0x0000002C: // W3D_CHUNK_VERTEX_MATERIAL_NAME
-            fields = InterpretVertexMaterialName(target);
-            break;
-        case 0x0000002D: // W3D_CHUNK_VERTEX_MATERIAL_INFO
-            fields = InterpretVertexMaterialInfo(target);
-            break;
-        case 0x0301: // W3D_CHUNK_HMODEL_HEADER
-            fields = InterpretHModelHeader(target);
-            break;
-        case 0x0310: 
-            fields = InterpretShaderName(target);
-            break;
-        case 0x0311: 
-            fields = InterpretShaderDetail(target);
-            break;
-        case 0x0283: // W3D_CHUNK_COMPRESSED_BIT_CHANNEL
-            fields = InterpretCompressedBitChannel(target);
-            break;
-        case 0x0029:
-            fields = InterpretShaders(target);
-            break;
-        case 0x0032: // W3D_CHUNK_TEXTURE_NAME
-            fields = InterpretTextureName(target); 
-            break;  
-        case 0x0033: // W3D_CHUNK_TEXTURE_INFO
-            fields = InterpretTextureInfo(target);
-            break;  
-        case 0x0039:
-            fields = InterpretVertexMaterialIDs(target);
-            break;
-        case 0x003A:
-            fields = InterpretShaderIDs(target);
-            break;
-        case 0x0048:
-            fields = InterpretTextureStage(target);
-            break;
-        case 0x0049:
-            fields = InterpretTextureIDs(target);
-            break;
-        case 0x004a:
-             fields = InterpretStageTexCoords(target);
-            break;
-        case 0x0058: // W3D_CHUNK_DEFORM
-            fields = InterpretDeform(target);
-            break;
-        case 0x0059: // W3D_CHUNK_DEFORM_SET
-            fields = InterpretDeformSet(target);
-            break;
-        case 0x005A: // W3D_CHUNK_DEFORM_KEYFRAME
-            fields = InterpretDeformKeyframe(target);
-            break;
-        case 0x005B: // W3D_CHUNK_DEFORM_DATA
-            fields = InterpretDeformData(target);
-            break;
-        case 0x0091:
-            fields = InterpretAABTreeHeader(target);
-            break;
-        case 0x0092:
-            fields = InterpretAABTreePolyIndices(target);
-            break;
-        case 0x0093:
-            fields = InterpretAABTreeNodes(target);
-            break;
-        case 0x0501:
-            fields = InterpretEmitterHeader(target);
-            break;
-        case 0x0502:
-            fields = InterpretEmitterUserData(target);
-            break;
-        case 0x0503:
-            fields = InterpretEmitterInfo(target);
-            break;
-        case 0x0504:
-            fields = InterpretEmitterInfoV2(target);
-            break;
-        case 0x0505:
-            fields = InterpretEmitterProps(target);
-            break;
-        case 0x050A:
-            fields = InterpretEmitterRotationKeys(target);
-            break;
-        case 0x050B:
-            fields = InterpretEmitterFrameKeys(target);
-            break;
-        case 0x0500: // W3D_CHUNK_EMITTER
-            fields = InterpretEmitter(target);
-            break;
-        case 0x0701:
-            fields = InterpretHLODHeader(target);
-            break;
-        case 0x0702: // HLOD_LOD_ARRAY
-            fields = InterpretHLODLODArray(target);
-            break;
-        case 0x0703:
-            fields = InterpretHLODSubObjectArrayHeader(target);
-            break;
-        case 0x0704:
-            fields = InterpretHLODSubObject_LodArray(target);
-            break;
-        case 0x0201: // ANIMATION_HEADER
-            fields = InterpretAnimationHeader(target);
-            break;
-        case 0x0202: // ANIMATION_CHANNEL
-            fields = InterpretAnimationChannel(target);
-            break;
-		case 0x0203: // BIT_CHANNEL
-			fields = InterpretBitChannel(target);
-			break;
-        case 0x0305: // OBSOLETE_W3D_CHUNK_HMODEL_AUX_DATA
-            fields = InterpretHModelAuxData(target);
-            break;
-		case 0x0281: // COMPRESSED_ANIMATION_HEADER
-			fields = InterpretCompressedAnimationHeader(target);
-			break;
-		case 0x000E: // W3D_CHUNK_VERTEX_INFLUENCES
-			fields = InterpretVertexInfluences(target);
-			break;
-		case 0x0740: // W3D_CHUNK_BOX
-			fields = InterpretBox(target);
-			break;
-        case 0x000C: // W3D_CHUNK_MESH_USER_TEXT
-            fields = InterpretMeshUserText(target);
-            break;
 
-        default:
+        switch (target->id) {
+        case 0x0101: fields = InterpretHierarchyHeader(target); break;
+        case 0x0102: fields = InterpretPivots(target); break;
+        case 0x0103: fields = InterpretPivotFixups(target); break;
+        case 0x001F: fields = InterpretMeshHeader3(target); break;
+        case 0x0002: {
+            uint32_t pid = target->parent ? target->parent->id : 0;
+            if (pid == 0x0741) {
+                fields = InterpretSphereMicrochunk(target, target->id);
+            }
+            else {
+                fields = InterpretVertices(target);
+            }
             break;
+        }
+        case 0x0003: {
+            uint32_t pid = target->parent ? target->parent->id : 0;
+            if (pid == 0x0741) {
+                fields = InterpretSphereMicrochunk(target, target->id);
+            }
+            else {
+                fields = InterpretVertexNormals(target);
+            }
+            break;
+        }
+        case 0x003B: fields = InterpretDiffuseColorChunk(target); break;
+        case 0x00000020: fields = InterpretTriangles(target); break;
+        case 0x00000022: fields = InterpretVertexShadeIndices(target); break;
+        case 0x0024: fields = InterpretPrelitVertexWrapper(target); break;
+        case 0x0026: fields = InterpretLightmapMultiTexture(target); break;
+        case 0x00000028: fields = InterpretMaterialInfo(target); break;
+        case 0x0282: fields = InterpretCompressedAnimationChannel(target, (flavor != 0xFFFF ? flavor : 0)); break;
+        case 0x0000002C: fields = InterpretVertexMaterialName(target); break;
+        case 0x0000002D: fields = InterpretVertexMaterialInfo(target); break;
+        case 0x0301: fields = InterpretHModelHeader(target); break;
+        case 0x0310: fields = InterpretShaderName(target); break;
+        case 0x0311: fields = InterpretShaderDetail(target); break;
+        case 0x0283: fields = InterpretCompressedBitChannel(target); break;
+        case 0x0029: fields = InterpretShaders(target); break;
+        case 0x0032: fields = InterpretTextureName(target); break;
+        case 0x0033: fields = InterpretTextureInfo(target); break;
+        case 0x0039: fields = InterpretVertexMaterialIDs(target); break;
+        case 0x003A: fields = InterpretShaderIDs(target); break;
+        case 0x0048: fields = InterpretTextureStage(target); break;
+        case 0x0049: fields = InterpretTextureIDs(target); break;
+        case 0x004a: fields = InterpretStageTexCoords(target); break;
+        case 0x0058: fields = InterpretDeform(target); break;
+        case 0x0059: fields = InterpretDeformSet(target); break;
+        case 0x005A: fields = InterpretDeformKeyframe(target); break;
+        case 0x005B: fields = InterpretDeformData(target); break;
+        case 0x0091: fields = InterpretAABTreeHeader(target); break;
+        case 0x0092: fields = InterpretAABTreePolyIndices(target); break;
+        case 0x0093: fields = InterpretAABTreeNodes(target); break;
+        case 0x0501: fields = InterpretEmitterHeader(target); break;
+        case 0x0502: fields = InterpretEmitterUserData(target); break;
+        case 0x0503: fields = InterpretEmitterInfo(target); break;
+        case 0x0504: fields = InterpretEmitterInfoV2(target); break;
+        case 0x0505: fields = InterpretEmitterProps(target); break;
+        case 0x050A: fields = InterpretEmitterRotationKeys(target); break;
+        case 0x050B: fields = InterpretEmitterFrameKeys(target); break;
+        case 0x0500: fields = InterpretEmitter(target); break;
+        case 0x0601: fields = InterpretAggregateHeader(target); break;
+        case 0x0602: fields = InterpretAggregateInfo(target); break;
+        case 0x0603: fields = InterpretTextureReplacerInfo(target); break;
+        case 0x0604: fields = InterpretAggregateClassInfo(target); break;
+        case 0x0701: fields = InterpretHLODHeader(target); break;
+        case 0x0702: fields = InterpretHLODLODArray(target); break;
+        case 0x0703: fields = InterpretHLODSubObjectArrayHeader(target); break;
+        case 0x0704: fields = InterpretHLODSubObject_LodArray(target); break;
+        case 0x0001: fields = InterpretSphereHeader(target); break;
+        case 0x0201: fields = InterpretAnimationHeader(target); break;
+        case 0x0202: fields = InterpretAnimationChannel(target); break;
+        case 0x0203: fields = InterpretBitChannel(target); break;
+        case 0x0305: fields = InterpretHModelAuxData(target); break;
+        case 0x0281: fields = InterpretCompressedAnimationHeader(target); break;
+        case 0x000E: fields = InterpretVertexInfluences(target); break;
+        case 0x0740: fields = InterpretBox(target); break;
+        case 0x000C: fields = InterpretMeshUserText(target); break;
+        case 0x00000004:
+        case 0x00000005: fields = InterpretSphereChannelChunk(target); break;
+        default: break;
         }
     }
 
+show_table:
     tableWidget->setRowCount(static_cast<int>(fields.size()));
     for (int i = 0; i < fields.size(); ++i) {
         tableWidget->setItem(i, 0, new QTableWidgetItem(QString::fromStdString(fields[i].field)));
@@ -422,5 +354,6 @@ void MainWindow::OpenRecentFile() {
         }
     }
 }
+
 
 

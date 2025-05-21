@@ -2,12 +2,26 @@
 #include <unordered_map>
 #include <string>
 
-inline std::string GetChunkName(uint32_t id) {
+
+inline std::string GetChunkName(uint32_t id, uint32_t parentId = 0) {
+    if (parentId == 0x0741 && id == 0x0002) {
+        return "W3D_CHUNK_SPHERE_CHUNKID_COLOR_CHANNEL";
+    }
+    if (parentId == 0x0741 && id == 0x0003) {
+        return "W3D_CHUNK_SPHERE_CHUNKID_ALPHA_CHANNEL";
+    }  
+    if (parentId == 0x31550809 && id == 0x1) {
+        return "ChunkID_FRAME";
+    }
+
+
     static const std::unordered_map<uint32_t, std::string> chunkNames = {
         { 0x0000, "W3D_CHUNK_MESH" }, // Mesh definition
-        { 0x0001, "W3D_CHUNK_HEADER" }, // Header for mesh
+        { 0x0001, "W3D_CHUNK_HEADER" }, // Header for mesh (Legacy)
         { 0x0002, "W3D_CHUNK_VERTICES" }, // array of vertices (array of W3dVectorStruct's)
         { 0x0003, "W3D_CHUNK_VERTEX_NORMALS" }, // array of normals (array of W3dVectorStruct's)
+		{ 0x0004, "W3D_CHUNK_SPHERE_CHUNKID_SCALE_CHANNEL" }, // array of vertex colors (array of W3dRGBAStruct's)
+		{ 0x0005, "W3D_CHUNK_SPHERE_CHUNKID_VECTOR_CHANNEL" }, // array of texture coordinates (array of W3dTexCoordStruct's)        
         { 0x000C, "W3D_CHUNK_MESH_USER_TEXT"}, // Text from the MAX comment field (Null terminated string)
         { 0x000E, "W3D_CHUNK_VERTEX_INFLUENCES" }, // Mesh Deformation vertex connections (array of W3dVertInfStruct's)
         { 0x001F, "W3D_CHUNK_MESH_HEADER3" }, // mesh header contains general info about the mesh. (W3dMeshHeader3Struct)
@@ -73,6 +87,7 @@ inline std::string GetChunkName(uint32_t id) {
 		{ 0x0304, "W3D_CHUNK_SKIN_NODE" }, // skins connected to the hierarchy
 		{ 0x0305, "OBSOLETE_W3D_CHUNK_HMODEL_AUX_DATA" }, // extension of the hierarchy model header
         { 0x0306, "OBSOLETE_W3D_CHUNK_SHADOW_NODE" },  // shadow object connected to the hierarchy
+        { 0x03150809, "W3D_CHUNK_CHUNKID_DATA" },
         { 0x0400, "W3D_CHUNK_LODMODEL" }, // blueprint for an LOD model.  This is simply a collection of 'n' render objects, ordered in terms of their expected rendering costs. (highest is first)
 		{ 0x0401, "W3D_CHUNK_LODMODEL_HEADER" }, // Header
 		{ 0x0402, "W3D_CHUNK_LOD" },          //LOD
@@ -131,4 +146,34 @@ inline std::string GetChunkName(uint32_t id) {
     if (it != chunkNames.end()) return it->second;
     return "UNKNOWN";
 }
+inline std::string LabelForChunk(uint32_t id, ChunkItem* item) {
+    uint32_t parentId = item && item->parent ? item->parent->id : 0;
+
+    // Special case: label microchunks inside CHUNKID_DATA as frame array entries
+    if (parentId == 0x03150809) {
+        if (item && item->parent) {
+            const auto& siblings = item->parent->children;
+            auto it = std::find_if(siblings.begin(), siblings.end(),
+                [&](const std::shared_ptr<ChunkItem>& sibling) { return sibling.get() == item; });
+
+            if (it != siblings.end()) {
+                int index = std::distance(siblings.begin(), it);
+                return "ChunkID_FRAME[" + std::to_string(index) + "]";
+            }
+        }
+        return "ChunkID_FRAME[?]";
+    }
+
+    // Fallback to regular GetChunkName logic
+    std::string name = GetChunkName(id, parentId);
+    if (name == "UNKNOWN") {
+        std::ostringstream fallback;
+        fallback << "0x" << std::hex << id;
+        return fallback.str();
+    }
+
+    return name;
+}
+
+
 
