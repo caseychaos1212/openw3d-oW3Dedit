@@ -2078,6 +2078,70 @@ inline std::vector<ChunkField> InterpretSphereHeader(const std::shared_ptr<Chunk
     return fields;
 }
 
+inline std::vector<ChunkField> InterpretRingHeader(const std::shared_ptr<ChunkItem>& chunk) {
+    std::vector<ChunkField> fields;
+    const uint8_t* data = reinterpret_cast<const uint8_t*>(chunk->data.data());
+
+    // Version (2x uint32)
+    uint32_t versionMinor = *reinterpret_cast<const uint32_t*>(&data[0x00]);
+    uint32_t versionMajor = *reinterpret_cast<const uint32_t*>(&data[0x04]);
+    fields.push_back({ "Version", "version", std::to_string(versionMajor) + "." + std::to_string(versionMinor) });
+
+    // Name (null-terminated string, max 256 bytes)
+    std::string name(reinterpret_cast<const char*>(&data[0x08]), strnlen(reinterpret_cast<const char*>(&data[0x08]), 256));
+    fields.push_back({ "Name", "string", name });
+
+    // Center
+    fields.push_back({ "Center.X", "float", std::to_string(*reinterpret_cast<const float*>(&data[0x28])) });
+    fields.push_back({ "Center.Y", "float", std::to_string(*reinterpret_cast<const float*>(&data[0x2C])) });
+    fields.push_back({ "Center.Z", "float", std::to_string(*reinterpret_cast<const float*>(&data[0x30])) });
+
+    // Extent
+    fields.push_back({ "Extent.X", "float", std::to_string(*reinterpret_cast<const float*>(&data[0x34])) });
+    fields.push_back({ "Extent.Y", "float", std::to_string(*reinterpret_cast<const float*>(&data[0x38])) });
+    fields.push_back({ "Extent.Z", "float", std::to_string(*reinterpret_cast<const float*>(&data[0x3C])) });
+
+    // AnimationDuration
+    fields.push_back({ "AnimationDuration", "float", std::to_string(*reinterpret_cast<const float*>(&data[0x40])) });
+
+    // Color
+    fields.push_back({ "Color.R", "float", std::to_string(*reinterpret_cast<const float*>(&data[0x44])) });
+    fields.push_back({ "Color.G", "float", std::to_string(*reinterpret_cast<const float*>(&data[0x48])) });
+    fields.push_back({ "Color.B", "float", std::to_string(*reinterpret_cast<const float*>(&data[0x4C])) });
+
+    // Alpha
+    fields.push_back({ "Alpha", "float", std::to_string(*reinterpret_cast<const float*>(&data[0x50])) });
+
+    // InnerScale
+    fields.push_back({ "InnerScale.X", "float", std::to_string(*reinterpret_cast<const float*>(&data[0x54])) });
+    fields.push_back({ "InnerScale.Y", "float", std::to_string(*reinterpret_cast<const float*>(&data[0x58])) });
+
+    // OuterScale
+    fields.push_back({ "OuterScale.X", "float", std::to_string(*reinterpret_cast<const float*>(&data[0x5C])) });
+    fields.push_back({ "OuterScale.Y", "float", std::to_string(*reinterpret_cast<const float*>(&data[0x60])) });
+    
+    // InnerExtent
+    fields.push_back({ "InnerExtent.X", "float", std::to_string(*reinterpret_cast<const float*>(&data[0x64])) });
+    fields.push_back({ "InnerExtent.Y", "float", std::to_string(*reinterpret_cast<const float*>(&data[0x68])) });
+
+    // OuterExtent
+    fields.push_back({ "OuterExtent.X", "float", std::to_string(*reinterpret_cast<const float*>(&data[0x6C])) });
+    fields.push_back({ "OuterExtent.Y", "float", std::to_string(*reinterpret_cast<const float*>(&data[0x70])) });
+
+    // TextureName (null-terminated, max 64 bytes)
+    std::string tex(reinterpret_cast<const char*>(&data[0x74]), strnlen(reinterpret_cast<const char*>(&data[0x74]), 64));
+    fields.push_back({ "TextureName", "string", tex });
+
+    InterpretSphereShaderStruct(fields, data, /* shaderOffset */ 0x94);
+
+    // TextureTileCount
+    fields.push_back({ "TextureTileCount", "uint8_t", std::to_string(*reinterpret_cast<const uint8_t*>(&data[0xA4])) });
+    
+
+
+    return fields;
+}
+
 inline void InterpretMicroChunkKeyframes(
     std::vector<ChunkField>& fields,
     const std::vector<uint8_t>& data,
@@ -2123,7 +2187,7 @@ inline void InterpretMicroChunkKeyframes(
         uint8_t size = data[offset++];
 
         if (size != framePayloadSize || offset + size > data.size()) {
-            fields.push_back({ prefix + "[" + std::to_string(index) + "]", "error", "Unexpected size or out-of-bounds" });
+            fields.push_back({ prefix + "[" + std::to_string(index) + "]", "error", "1Unexpected size or out-of-bounds" });
             break;
         }
 
@@ -2271,13 +2335,82 @@ inline std::vector<ChunkField> InterpretSphereMicrochunk(const std::shared_ptr<C
 
     }
     else {
-        fields.push_back({ "Frame[" + std::to_string(frameIndex) + "]", "error", "Unexpected size (" + std::to_string(size) + ") for parent ID 0x" + ToHex(parentChunkId) });
+        fields.push_back({ "Frame[" + std::to_string(frameIndex) + "]", "error", "2Unexpected size (" + std::to_string(size) + ") for parent ID 0x" + ToHex(parentChunkId) });
     }
 
     return fields;
 }
 
+inline std::vector<ChunkField> InterpretRingMicrochunk(const std::shared_ptr<ChunkItem>& chunk, uint32_t parentChunkId) {
+    std::vector<ChunkField> fields;
 
+    if (!chunk || chunk->id != 0x01 || !chunk->parent) {
+        fields.push_back({ "Frame[0]", "error", "Invalid chunk or missing parent" });
+        return fields;
+    }
+
+    const std::vector<uint8_t>& data = chunk->data;
+    size_t size = data.size();
+
+    // Compute frameIndex by locating position within parent's children
+    int frameIndex = 0;
+    const auto& siblings = chunk->parent->children;
+    auto it = std::find_if(siblings.begin(), siblings.end(),
+        [&](const std::shared_ptr<ChunkItem>& sibling) { return sibling.get() == chunk.get(); });
+    if (it != siblings.end()) {
+        frameIndex = static_cast<int>(std::distance(siblings.begin(), it));
+    }
+
+    std::string prefix;
+    switch (parentChunkId) {
+    case 0x0002: prefix = "ColorKey"; break;
+    case 0x0003: prefix = "AlphaKey"; break;
+    case 0x0004: prefix = "InnerScaleKey"; break;
+    case 0x0005: prefix = "OuterScaleKey"; break;
+    default:
+        fields.push_back({ "Frame[" + std::to_string(frameIndex) + "]", "error", "Unknown parent chunk ID: 0x" + ToHex(parentChunkId) });
+        return fields;
+    }
+
+    const uint8_t* payload = data.data();
+
+    if ((parentChunkId == 0x0002 ) && size == 16) {
+        float x = *reinterpret_cast<const float*>(&payload[0]);
+        float y = *reinterpret_cast<const float*>(&payload[4]);
+        float z = *reinterpret_cast<const float*>(&payload[8]);
+        float t = *reinterpret_cast<const float*>(&payload[12]);
+
+        fields.push_back({ prefix + "[" + std::to_string(frameIndex) + "].Value.X", "float", std::to_string(x) });
+        fields.push_back({ prefix + "[" + std::to_string(frameIndex) + "].Value.Y", "float", std::to_string(y) });
+        fields.push_back({ prefix + "[" + std::to_string(frameIndex) + "].Value.Z", "float", std::to_string(z) });
+        fields.push_back({ prefix + "[" + std::to_string(frameIndex) + "].Time",    "float", std::to_string(t) });
+
+    }
+    else if (parentChunkId == 0x0003 && size == 8) {
+        float value = *reinterpret_cast<const float*>(&payload[0]);
+        float t = *reinterpret_cast<const float*>(&payload[4]);
+
+        fields.push_back({ prefix + "[" + std::to_string(frameIndex) + "].Value", "float", std::to_string(value) });
+        fields.push_back({ prefix + "[" + std::to_string(frameIndex) + "].Time",  "float", std::to_string(t) });
+
+    }
+    else if (parentChunkId == 0x0005 || parentChunkId == 0x0004 && size == 12) {
+        float x = *reinterpret_cast<const float*>(&payload[0]);
+        float y = *reinterpret_cast<const float*>(&payload[4]);
+        float t = *reinterpret_cast<const float*>(&payload[8]);
+
+
+        fields.push_back({ prefix + "[" + std::to_string(frameIndex) + "].Value.X", "float", std::to_string(x) });
+        fields.push_back({ prefix + "[" + std::to_string(frameIndex) + "].Value.Y", "float", std::to_string(y) });
+        fields.push_back({ prefix + "[" + std::to_string(frameIndex) + "].Time",    "float", std::to_string(t) });
+
+    }
+    else {
+        fields.push_back({ "Frame[" + std::to_string(frameIndex) + "]", "error", "3Unexpected size (" + std::to_string(size) + ") for parent ID 0x" + ToHex(parentChunkId) });
+    }
+
+    return fields;
+}
 
 
 
@@ -2328,19 +2461,461 @@ inline std::vector<ChunkField> InterpretSphereChannelChunk(const std::shared_ptr
 }
 
 
+inline std::vector<ChunkField> InterpretRingChannelChunk(const std::shared_ptr<ChunkItem>& chunk) {
+    std::vector<ChunkField> result;
+
+    // Defensive: if no parent, bail
+    if (!chunk->parent) {
+        result.push_back({ "Error", "string", "Missing parent chunk" });
+        return result;
+    }
+
+    // Check if parent is a known Sphere object (e.g., 0x0001 = Sphere Header)
+    bool isUnderRing = (chunk->parent->id == 0x0001);  // W3D_CHUNK_SPHERE_HEADER
+
+    if (!isUnderRing) {
+        result.push_back({ "Error", "string", "Ambiguous chunk ID outside of ring context" });
+        return result;
+    }
+
+    static const std::unordered_map<uint32_t, std::string> chunkNames = {
+        {0x00000002, "Color Channel"},
+        {0x00000003, "Alpha Channel"},
+        {0x00000004, "Inner Scale Channel"},
+        {0x00000005, "Outer Scale Channel"},
+    };
+
+    std::string label = chunkNames.count(chunk->id)
+        ? chunkNames.at(chunk->id)
+        : "Unknown Ring Channel";
+
+    result.push_back({ "ChannelType", "string", label });
+
+    for (const auto& sub : chunk->children) {
+        if (sub->id == 0x09081503) {
+            auto fields = InterpretRingMicrochunk(sub, chunk->id);
+            result.insert(result.end(), fields.begin(), fields.end());
+        }
+    }
+
+    return result;
+}
+
+struct PackedW3dLight
+{
+    uint32_t Attributes;
+    uint32_t Unused;      // skip
+    uint8_t  AmbientR, AmbientG, AmbientB, AmbientPad;
+    uint8_t  DiffuseR, DiffuseG, DiffuseB, DiffusePad;
+    uint8_t  SpecularR, SpecularG, SpecularB, SpecularPad;
+    float    Intensity;
+};
+
+inline std::vector<ChunkField> InterpretLightInfo(
+    const std::shared_ptr<ChunkItem>& chunk
+) {
+    std::vector<ChunkField> fields;
+
+    // sanity check
+    if (!chunk || chunk->data.size() < sizeof(PackedW3dLight)) {
+        fields.push_back({ "error", "string", "Invalid LIGHT_INFO chunk size" });
+        return fields;
+    }
+
+    // reinterpret
+    auto const* p = reinterpret_cast<const PackedW3dLight*>(chunk->data.data());
+
+    // 1) Attributes (type + shadows)
+    uint32_t mask = p->Attributes & 0x000000FF;
+    switch (mask) {
+    case 0x01: fields.push_back({ "Attributes.Type", "string", "W3D_LIGHT_ATTRIBUTE_POINT" });        break;
+    case 0x02: fields.push_back({ "Attributes.Type", "string", "W3D_LIGHT_ATTRIBUTE_DIRECTIONAL" }); break;
+    case 0x03: fields.push_back({ "Attributes.Type", "string", "W3D_LIGHT_ATTRIBUTE_SPOT" });        break;
+    default:   fields.push_back({ "Attributes.Type","string",
+                     "UNKNOWN(0x" + ToHex(mask) + ")" });                      break;
+    }
+    if (p->Attributes & 0x00000100) {
+        fields.push_back({ "Attributes.CastShadows", "flag", "W3D_LIGHT_ATTRIBUTE_CAST_SHADOWS" });
+    }
+
+    // 2) Ambient / Diffuse / Specular (0–255)
+    // one row per channel, value as “(R G B)”
+    auto emitRGB = [&](const char* name, uint8_t r, uint8_t g, uint8_t b) {
+        // build a single value string "(R G B)"
+        std::string val = "("
+            + std::to_string(r) + " "
+            + std::to_string(g) + " "
+            + std::to_string(b) + ")";
+        // push one field: name="Diffuse", type="RGB[1]", value="(139 35 147)"
+        fields.push_back({ std::string(name), "RGB[1]", val });
+        };
+
+    emitRGB("Ambient", p->AmbientR, p->AmbientG, p->AmbientB);
+    emitRGB("Diffuse", p->DiffuseR, p->DiffuseG, p->DiffuseB);
+    emitRGB("Specular", p->SpecularR, p->SpecularG, p->SpecularB);
 
 
+    // 3) Intensity
+    fields.push_back({ "Intensity", "float", std::to_string(p->Intensity) });
+
+    return fields;
+}
+
+struct PackedW3dSpotLight
+{
+    float SpotDirX;      // W3dVectorStruct
+    float SpotDirY;
+    float SpotDirZ;
+    float SpotAngle;     // in radians
+    float SpotExponent;  // falloff exponent
+};
+
+inline std::vector<ChunkField> InterpretSpotLightInfo(
+    const std::shared_ptr<ChunkItem>& chunk
+) {
+    std::vector<ChunkField> fields;
+    // sanity
+    if (!chunk || chunk->data.size() < sizeof(PackedW3dSpotLight)) {
+        fields.push_back({ "error", "string", "Invalid SPOT_LIGHT_INFO size" });
+        return fields;
+    }
+    auto const* p = reinterpret_cast<const PackedW3dSpotLight*>(chunk->data.data());
+
+    // 1) SpotDirection (vector3)
+    {
+        std::string val = "("
+            + std::to_string(p->SpotDirX) + " "
+            + std::to_string(p->SpotDirY) + " "
+            + std::to_string(p->SpotDirZ) + ")";
+        fields.push_back({ "SpotDirection", "Vector", val });
+    }
+
+    // 2) SpotAngle
+    fields.push_back({ "SpotAngle", "float", std::to_string(p->SpotAngle) });
+
+    // 3) SpotExponent
+    fields.push_back({ "SpotExponent", "float", std::to_string(p->SpotExponent) });
+
+    return fields;
+}
 
 
+struct PackedW3dLightAttenuation
+{
+    float Start;
+    float End;
+};
+
+inline std::vector<ChunkField> InterpretNearAtten(
+    const std::shared_ptr<ChunkItem>& chunk
+) {
+    std::vector<ChunkField> fields;
+    // sanity
+    if (!chunk || chunk->data.size() < sizeof(PackedW3dLightAttenuation)) {
+        fields.push_back({ "error", "string", "Invalid NEAR_ATTENUATION size" });
+        return fields;
+    }
+    auto const* p = reinterpret_cast<const PackedW3dLightAttenuation*>(chunk->data.data());
+
+   
+    fields.push_back({ "Near Atten Start", "float", std::to_string(p->Start) });
+    fields.push_back({ "Near Atten End", "float", std::to_string(p->End) });
+
+    return fields;
+}
+
+inline std::vector<ChunkField> InterpretFarAtten(
+    const std::shared_ptr<ChunkItem>& chunk
+) {
+    std::vector<ChunkField> fields;
+    // sanity
+    if (!chunk || chunk->data.size() < sizeof(PackedW3dLightAttenuation)) {
+        fields.push_back({ "error", "string", "Invalid FAR_ATTENUATION size" });
+        return fields;
+    }
+    auto const* p = reinterpret_cast<const PackedW3dLightAttenuation*>(chunk->data.data());
 
 
+    fields.push_back({ "Far Atten Start", "float", std::to_string(p->Start) });
+    fields.push_back({ "Far Atten End", "float", std::to_string(p->End) });
+
+    return fields;
+}
+
+struct PackedW3dLightTransform
+{
+    float Transform[3][4];
+};
+
+inline std::vector<ChunkField> InterpretLightTransform(
+    const std::shared_ptr<ChunkItem>& chunk
+) {
+    std::vector<ChunkField> fields;
+    // sanity
+    if (!chunk || chunk->data.size() < sizeof(PackedW3dLightTransform)) {
+        fields.push_back({ "error", "string", "Invalid LIGHT_TRANSFORM size" });
+        return fields;
+    }
+
+    auto const* p = reinterpret_cast<const PackedW3dLightTransform*>(chunk->data.data());
+
+    // each of the 3 rows is a float[4]
+    for (int row = 0; row < 3; ++row) {
+        // build "(x y z w)"
+        std::string val = "("
+            + std::to_string(p->Transform[row][0]) + " "
+            + std::to_string(p->Transform[row][1]) + " "
+            + std::to_string(p->Transform[row][2]) + " "
+            + std::to_string(p->Transform[row][3]) + ")";
+        fields.push_back({ "Transform", "float[4]", val });
+    }
+
+    return fields;
+}
+
+inline std::vector<ChunkField> InterpretDazzleName(
+    const std::shared_ptr<ChunkItem>& chunk
+) {
+    std::vector<ChunkField> fields;
+    if (!chunk) {
+        fields.push_back({ "error", "string", "Null chunk" });
+        return fields;
+    }
+    std::string s(reinterpret_cast<const char*>(chunk->data.data()),
+        chunk->data.size());
+    // strip any trailing zeros
+    if (!s.empty() && s.back() == '\0') s.pop_back();
+    fields.push_back({ "Dazzle Name", "string", s });
+    return fields;
+}
+
+inline std::vector<ChunkField> InterpretDazzleTypeName(
+    const std::shared_ptr<ChunkItem>& chunk
+) {
+    std::vector<ChunkField> fields;
+    if (!chunk) {
+        fields.push_back({ "error", "string", "Null chunk" });
+        return fields;
+    }
+    std::string s(reinterpret_cast<const char*>(chunk->data.data()),
+        chunk->data.size());
+    if (!s.empty() && s.back() == '\0') s.pop_back();
+    fields.push_back({ "Dazzle Type Name", "string", s });
+    return fields;
+}
+
+struct PackedW3dSoundRObjHeader
+{
+    uint32_t Version;
+    char     Name[16];       // W3D_NAME_LEN
+    uint32_t Flags;
+    uint32_t Padding[8];     // skip
+};
+
+inline std::vector<ChunkField> InterpretSoundRObjHeader(
+    const std::shared_ptr<ChunkItem>& chunk
+) {
+    std::vector<ChunkField> fields;
+    // sanity check
+    if (!chunk || chunk->data.size() < sizeof(PackedW3dSoundRObjHeader)) {
+        fields.push_back({ "error", "string", "Invalid SOUNDROBJ_HEADER size" });
+        return fields;
+    }
+
+    auto const* p = reinterpret_cast<const PackedW3dSoundRObjHeader*>(chunk->data.data());
+
+    
+    uint32_t ver = p->Version;
+    uint16_t minor = static_cast<uint16_t>(ver & 0xFFFF);
+    uint16_t major = static_cast<uint16_t>(ver >> 16);
+    fields.push_back({
+        "Version",
+        "version",
+        std::to_string(major) + "." + std::to_string(minor)
+        });
+
+    
+    size_t len = strnlen(p->Name, sizeof(p->Name));
+    fields.push_back({
+        "Name",
+        "string",
+        std::string(p->Name, len)
+        });
+
+    
+    fields.push_back({
+        "Flags",
+        "uint32_t",
+        std::to_string(p->Flags)
+        });
+
+    return fields;
+}
 
 
+inline std::vector<ChunkField> InterpretSoundRObjDefinition(
+    const std::shared_ptr<ChunkItem>& chunk
+) {
+    std::vector<ChunkField> fields;
+    if (!chunk) {
+        fields.push_back({ "error","string","Empty SOUNDROBJ_DEFINITION" });
+        return fields;
+    }
 
 
+    constexpr uint32_t SOUND_RENDER_DEF_EXT = 0x0200;
+    if (chunk->parent && chunk->parent->id == SOUND_RENDER_DEF_EXT) {
+        for (auto& child : chunk->children) {
+            switch (child->id) {
+            case 0x01: {
+                // m_ID is stored as a 4-byte uint
+                uint32_t v = *reinterpret_cast<const uint32_t*>(child->data.data());
+                fields.push_back({ "m_ID", "int32", std::to_string(v) });
+                break;
+            }
+            case 0x03: {
+                // m_Name is a null-terminated string
+                std::string s(
+                    reinterpret_cast<const char*>(child->data.data()),
+                    child->data.size()
+                );
+                if (!s.empty() && s.back() == '\0') s.pop_back();
+                fields.push_back({ "m_Name", "string", s });
+                break;
+            }
+            default:
+                // you can ignore or log other micro-IDs here
+                break;
+            }
+        }
+        return fields;
+    }
 
+    // For each saved variable sub-chunk, dispatch by its ID:
+    for (auto& child : chunk->children) {
+        uint32_t id = child->id;
+        switch (id) {
+            
+        case 0x03: {
+            float v = *reinterpret_cast<const float*>(child->data.data());
+            fields.push_back({ "m_Priority", "float", std::to_string(v) });
+            break;
+        }
+        case 0x04: {
+            float v = *reinterpret_cast<const float*>(child->data.data());
+            fields.push_back({ "m_Volume", "float", std::to_string(v) });
+            break;
+        }
+        case 0x05: {
+            float v = *reinterpret_cast<const float*>(child->data.data());
+            fields.push_back({ "m_Pan", "float", std::to_string(v) });
+            break;
+        }
+        case 0x06: {
+            uint32_t v = *reinterpret_cast<const uint32_t*>(child->data.data());
+            fields.push_back({ "m_LoopCount", "int32", std::to_string(v) });
+            break;
+        }
+        case 0x07: {
+            float v = *reinterpret_cast<const float*>(child->data.data());
+            fields.push_back({ "m_DropoffRadius", "float", std::to_string(v) });
+            break;
+        }
+        case 0x08: {
+            float v = *reinterpret_cast<const float*>(child->data.data());
+            fields.push_back({ "m_MaxVolRadius", "float", std::to_string(v) });
+            break;
+        }
+        case 0x09: {
+            uint32_t v = *reinterpret_cast<const uint32_t*>(child->data.data());
+            fields.push_back({ "m_Type", "int32", std::to_string(v) });
+            break;
+        }                                               
+        case 0x0A: {
+            uint8_t v = *reinterpret_cast<const uint8_t*>(child->data.data());
+            fields.push_back({ "m_is3DSound", "int8", std::to_string(v) });
+            break;
+        }                                  
+        case 0x0B: {
+            std::string s(reinterpret_cast<const char*>(child->data.data()), child->data.size());
+            if (!s.empty() && s.back() == '\0') s.pop_back();
+            fields.push_back({ "m_Filename", "string", s });
+            break;
+        }
+        case 0x0C: {
+            std::string s(reinterpret_cast<const char*>(child->data.data()), child->data.size());
+            if (!s.empty() && s.back() == '\0') s.pop_back();
+            fields.push_back({ "m_DisplayText", "string", s });
+            break;
+        }
+        case 0x12: {
+            float v = *reinterpret_cast<const float*>(child->data.data());
+            fields.push_back({ "m_StartOffset", "float", std::to_string(v) });
+            break;
+        }
+        case 0x13: {
+            float v = *reinterpret_cast<const float*>(child->data.data());
+            fields.push_back({ "m_PitchFactor", "float", std::to_string(v) });
+            break;
+        }
+        case 0x14: {
+            float v = *reinterpret_cast<const float*>(child->data.data());
+            fields.push_back({ "m_PitchFactorRandomizer", "float", std::to_string(v) });
+            break;
+        }
+        case 0x15: {
+            float v = *reinterpret_cast<const float*>(child->data.data());
+            fields.push_back({ "m_VolumeRandomizer", "float", std::to_string(v) });
+            break;
+        }
+        case 0x16: {
+            float v = *reinterpret_cast<const float*>(child->data.data());
+            fields.push_back({ "m_VirtualChannel", "float", std::to_string(v) });
+            break;
+        }
+        case 0x0D: {
+            uint32_t v = *reinterpret_cast<const uint32_t*>(child->data.data());
+            fields.push_back({ "m_LogicalType", "int32", std::to_string(v) });
+            break;
+        }
+        case 0x0E: {
+            float v = *reinterpret_cast<const float*>(child->data.data());
+            fields.push_back({ "m_LogicalNotifDelay", "float", std::to_string(v) });
+            break;
+        }
+        case 0x0F: {
+            uint8_t v = *reinterpret_cast<const uint8_t*>(child->data.data());
+            fields.push_back({ "m_CreateLogicalSound", "int8", std::to_string(v) });
+            break;
+        }
+        case 0x10: {
+            float v = *reinterpret_cast<const float*>(child->data.data());
+            fields.push_back({ "m_LogicalDropoffRadius", "float", std::to_string(v) });
+            break;
+        }
+        case 0x11: {
+            auto ptr = reinterpret_cast<const float*>(child->data.data());
+            std::string val = "("
+                + std::to_string(ptr[0]) + " "
+                + std::to_string(ptr[1]) + " "
+                + std::to_string(ptr[2]) + ")";
+            fields.push_back({ "m_SphereColor", "Vector", val });
+            break;
+        }
 
+        default:
+            // unknown or not-yet-supported
+            fields.push_back({
+              "UnknownVar(0x" + ToHex(id) + ")",
+              "bytes[" + std::to_string(child->data.size()) + "]",
+              std::to_string(child->data.size()) + " bytes"
+                });
+            break;
+        }
+    }
 
+    return fields;
+}
 
 
 

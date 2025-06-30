@@ -60,7 +60,12 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     recentFilesMenu = fileMenu->addMenu("Open Recent");
     LoadRecentFiles();
     UpdateRecentFilesMenu();
-
+    // create the menu & action
+    auto batchMenu = menuBar()->addMenu(tr("Batch Tools"));
+    auto exportChunksAct = new QAction(tr("Export Chunk List…"), this);
+    batchMenu->addAction(exportChunksAct);
+    connect(exportChunksAct, &QAction::triggered,
+        this, &MainWindow::on_actionExportChunkList_triggered);
 }
 
 
@@ -102,16 +107,41 @@ void MainWindow::populateTree() {
 
         std::function<void(QTreeWidgetItem*, const std::shared_ptr<ChunkItem>&)> addChildren;
         addChildren = [&](QTreeWidgetItem* parent, const std::shared_ptr<ChunkItem>& current) {
-            for (const auto& child : current->children) {
-                QTreeWidgetItem* childItem = new QTreeWidgetItem();
-                QString label = QString("0x%1 (%2)")
+            
+            
+            
+            // only suppress microchunks under the 0x0100 definition node
+            constexpr uint32_t SOUND_RENDER_DEF = 0x0100;
+            constexpr uint32_t SOUNDROBJ_DEFINITION = 0x0A02;
+			constexpr uint32_t SOUNDROBJ_DEFINITION_EXT = 0x0200;
+            // 1) if *I* am a 0x0100 under 0x0A02 or under its EXT, stop right here:
+            if (current->id == SOUND_RENDER_DEF
+                && current->parent
+                && (current->parent->id == SOUNDROBJ_DEFINITION
+                    || current->parent->id == SOUNDROBJ_DEFINITION_EXT))
+            {
+                return;
+            }
+
+            // 2) if *my parent* is a 0x0100 under 0x0A02 or under its EXT, also stop:
+            if (current->parent
+                && (current->parent->id == SOUND_RENDER_DEF
+                    && current->parent->parent
+                    && (current->parent->parent->id == SOUNDROBJ_DEFINITION
+                        || current->parent->parent->id == SOUNDROBJ_DEFINITION_EXT)))
+            {
+                return;
+            }
+
+            // otherwise, recurse
+            for (auto& child : current->children) {
+                QTreeWidgetItem* childItem = new QTreeWidgetItem(parent);
+                QString lbl = QString("0x%1 (%2)")
                     .arg(child->id, 0, 16)
                     .arg(QString::fromStdString(LabelForChunk(child->id, child.get())));
-
-
-                childItem->setText(0, QString("%1 (size %2)").arg(label).arg(child->length));
-                childItem->setData(0, Qt::UserRole, QVariant::fromValue<void*>(child.get()));
-                parent->addChild(childItem);
+                childItem->setText(0, QString("%1 (size %2)").arg(lbl).arg(child->length));
+                childItem->setData(0, Qt::UserRole,
+                    QVariant::fromValue<void*>(child.get()));
                 addChildren(childItem, child);
             }
             };
@@ -124,6 +154,14 @@ void MainWindow::populateTree() {
 
 }
 
+// Constants for clarity
+constexpr uint32_t MICRO_ID = 0x01;
+constexpr uint32_t SPHERE_ID = 0x0741;
+constexpr uint32_t RING_ID = 0x0742;
+constexpr uint32_t CHANNEL_WRAPPER = 0x03150809; 
+constexpr uint32_t SOUND_RENDER_DEF = 0x0100;
+constexpr uint32_t SOUND_RENDER_DEF_EXT = 0x0200;
+constexpr uint32_t SOUNDROBJ_DEFINITION = 0x0A02;
 
 void MainWindow::handleTreeSelection() {
     auto selectedItems = treeWidget->selectedItems();
@@ -160,12 +198,42 @@ void MainWindow::handleTreeSelection() {
     std::cout << "Selected chunk ID: 0x" << std::hex << target->id << std::dec << "\n";
     std::cout << "Chunk length: " << target->length << " bytes\n";
 
-    // EARLY CHECK: Interpret microchunk data first before assuming it's just a wrapper
-    if (target->id == 0x01 && target->parent && target->parent->id == 0x03150809) {
-        uint32_t grandParentId = target->parent->parent ? target->parent->parent->id : 0;
-        fields = InterpretSphereMicrochunk(target, grandParentId);
+    if (target->id == SOUND_RENDER_DEF
+        
+        && target->parent
+        && (target->parent->id == SOUNDROBJ_DEFINITION
+            || target->parent->id == SOUND_RENDER_DEF_EXT))
+    {
+        // debug log:
+        std::cout << "DEBUG: firing InterpretSoundRObjDefinition – "
+            << "chunkId=0x" << std::hex << target->id
+            << " parentId=0x" << target->parent->id
+            << std::dec << "\n";
+
+        fields = InterpretSoundRObjDefinition(target);
+        goto show_table;
     }
 
+    if (target->id == MICRO_ID
+        && target->parent
+        && target->parent->id == CHANNEL_WRAPPER
+        && target->parent->parent
+        && target->parent->parent->parent)
+    {
+        auto wrapperId = target->parent->parent->id;           // usually 0x0002–0x0005
+        auto headerId = target->parent->parent->parent->id;    // sphere vs ring
+        
+        std::cout << "Dispatch micro: channel=0x"
+            << std::hex << wrapperId
+            << " header=0x" << headerId << std::dec << "\n";
+
+        if (headerId == SPHERE_ID) {
+            fields = InterpretSphereMicrochunk(target, wrapperId);
+        }
+        else if (headerId == RING_ID) {
+            fields = InterpretRingMicrochunk(target, wrapperId);
+        }
+    }
     // Skip remaining chunk-wrapper child summary if we've interpreted real data
     if (!fields.empty()) goto show_table;
 
@@ -205,6 +273,9 @@ void MainWindow::handleTreeSelection() {
             if (pid == 0x0741) {
                 fields = InterpretSphereMicrochunk(target, target->id);
             }
+            if (pid == 0x0742) {
+                fields = InterpretRingMicrochunk(target, target->id);
+            }
             else {
                 fields = InterpretVertices(target);
             }
@@ -214,6 +285,9 @@ void MainWindow::handleTreeSelection() {
             uint32_t pid = target->parent ? target->parent->id : 0;
             if (pid == 0x0741) {
                 fields = InterpretSphereMicrochunk(target, target->id);
+            }
+            if (pid == 0x0742) {
+                fields = InterpretRingMicrochunk(target, target->id);
             }
             else {
                 fields = InterpretVertexNormals(target);
@@ -264,7 +338,20 @@ void MainWindow::handleTreeSelection() {
         case 0x0702: fields = InterpretHLODLODArray(target); break;
         case 0x0703: fields = InterpretHLODSubObjectArrayHeader(target); break;
         case 0x0704: fields = InterpretHLODSubObject_LodArray(target); break;
-        case 0x0001: fields = InterpretSphereHeader(target); break;
+        case 0x0001: {
+            uint32_t pid = target->parent ? target->parent->id : 0;
+            if (pid == 0x0741) {
+                fields = InterpretSphereHeader(target);
+                std::cout << ">>> HEADER node clicked, parent="
+                    << std::hex << pid << std::dec << "\n";
+            }
+            else if (pid == 0x0742) {
+                fields = InterpretRingHeader(target);
+                std::cout << ">>> HEADER node clicked, parent="
+                    << std::hex << pid << std::dec << "\n";
+            }
+            break;
+        }
         case 0x0201: fields = InterpretAnimationHeader(target); break;
         case 0x0202: fields = InterpretAnimationChannel(target); break;
         case 0x0203: fields = InterpretBitChannel(target); break;
@@ -273,8 +360,30 @@ void MainWindow::handleTreeSelection() {
         case 0x000E: fields = InterpretVertexInfluences(target); break;
         case 0x0740: fields = InterpretBox(target); break;
         case 0x000C: fields = InterpretMeshUserText(target); break;
-        case 0x00000004:
+        case 0x00000004: fields = InterpretRingChannelChunk(target); break;
         case 0x00000005: fields = InterpretSphereChannelChunk(target); break;
+        {
+            uint32_t pid = target->parent ? target->parent->id : 0;
+            if (pid == 0x0741) {
+                fields = InterpretSphereChannelChunk(target);
+            }
+            else if (pid == 0x0742) {
+                fields = InterpretRingChannelChunk(target);
+
+            }
+            break;
+        }
+		case 0x461: fields = InterpretLightInfo(target); break;
+		case 0x462: fields = InterpretSpotLightInfo(target); break;
+		case 0x463: fields = InterpretNearAtten(target); break;
+        case 0x464: fields = InterpretFarAtten(target); break;
+        case 0x802: fields = InterpretLightTransform(target); break;
+		case 0x901: fields = InterpretDazzleName(target); break;
+		case 0x902: fields = InterpretDazzleTypeName(target); break;
+		case 0xa01: fields = InterpretSoundRObjHeader(target); break;
+        case 0x100: fields = InterpretSoundRObjDefinition(target); break;
+    
+//		case 0x200: fields = InterpretSoundRObjExt(target); break;
         default: break;
         }
     }
@@ -355,5 +464,89 @@ void MainWindow::OpenRecentFile() {
     }
 }
 
+
+
+extern void recursePrint(const std::shared_ptr<ChunkItem>& c, int depth, std::ostream& out);
+
+
+
+static void recursePrint(const std::shared_ptr<ChunkItem>& c,
+    int depth,
+    QTextStream& out)
+{
+    // 1) Skip raw micro chunks under the channel wrapper
+    if (c->id == MICRO_ID && c->parent && c->parent->id == CHANNEL_WRAPPER)
+        return;
+
+    // 2) Skip children of the SOUND_RENDER_DEF node
+    if (c->parent && c->parent->id == SOUND_RENDER_DEF)
+        return;
+
+    // 3) Print "0x######## NAME"
+    out
+        << QString(depth * 2, ' ')
+        << QString("0x%1 ").arg(c->id, 8, 16, QChar('0')).toUpper()
+        << QString::fromStdString(LabelForChunk(c->id, c.get()))
+        << "\n";
+
+    // Recurse
+    for (auto& ch : c->children) {
+        recursePrint(ch, depth + 1, out);
+    }
+}
+
+void MainWindow::on_actionExportChunkList_triggered()
+{
+    // 1) pick source folder
+    QString srcDir = QFileDialog::getExistingDirectory(
+        this,
+        tr("Select W3D Directory"),
+        QString(),
+        QFileDialog::ShowDirsOnly | QFileDialog::DontResolveSymlinks
+    );
+    if (srcDir.isEmpty()) return;
+
+    // 2) pick output file
+    QString outPath = QFileDialog::getSaveFileName(
+        this,
+        tr("Save Chunk List As…"),
+        QString(),
+        tr("Text Files (*.txt);;All Files (*)")
+    );
+    if (outPath.isEmpty()) return;
+
+    // 3) open output file
+    QFile file(outPath);
+    if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) {
+        QMessageBox::warning(this, tr("Error"),
+            tr("Cannot write to %1").arg(outPath));
+        return;
+    }
+    QTextStream txt(&file);
+
+    // 4) iterate .w3d files
+    QDir dir(srcDir);
+    auto w3dFiles = dir.entryList(QStringList{ "*.w3d" },
+        QDir::Files | QDir::NoSymLinks);
+    for (auto& fn : w3dFiles) {
+        QString full = dir.absoluteFilePath(fn);
+        txt << "=== " << full << " ===\n";
+
+        ChunkData cd;
+        if (!cd.loadFromFile(full.toStdString())) {
+            txt << "[ parse error ]\n\n";
+            continue;
+        }
+        // for each top chunk, recurse
+        for (auto& top : cd.getChunks()) {
+            recursePrint(top, 1, /* std::ostream& */ txt);
+        }
+        txt << "\n";
+    }
+
+    file.close();
+    QMessageBox::information(this, tr("Done"),
+        tr("Chunk list exported to %1").arg(outPath));
+}
 
 

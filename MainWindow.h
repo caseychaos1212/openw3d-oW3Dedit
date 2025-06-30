@@ -27,7 +27,7 @@ private slots:
     void UpdateRecentFilesMenu();
     void AddRecentFile(const QString& path);
     void OpenRecentFile();  // will be connected to recent file actions
-
+    void on_actionExportChunkList_triggered();
 private:
     void populateTree();
 

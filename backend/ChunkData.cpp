@@ -47,10 +47,12 @@ static bool isWrapperChunk(uint32_t id) {
     case 0x0702: // W3D_CHUNK_HLOD_LOD_ARRAY
     case 0x0705: // W3D_CHUNK_HLOD_AGGREGATE_ARRAY
 	case 0x0741: // W3D_CHUNK_SPHERE
+    case 0x0742: // W3D_CHUNK_RING
     case 0x0800: // W3D_CHUNK_LIGHTSCAPE
 	case 0x0801: // W3D_CHUNK_LIGHTSCAPE_LIGHT
 	case 0x0900: // W3D_CHUNK_DAZZLE
 	case 0x0A00: // W3D_CHUNK_SOUNDROBJ
+	case 0x0A02: // W3D_CHUNK_SOUNDROBJ_Definition
     case 0x03150809: //W3D_CHUNK_CHUNKID_DATA
 
         return true;
@@ -58,6 +60,17 @@ static bool isWrapperChunk(uint32_t id) {
         return false;
     }
 }
+//static bool isMicroChunk(uint32_t id) {
+//    switch (id) {
+//    case 0x0001: // MicroChunk Frame for Primitives
+//	case 0x0100: // MicroChunk for SoundRobjD
+//
+//
+//        return true;
+//    default:
+//       return false;
+//    }
+//}
 
 bool ChunkData::loadFromFile(const std::string& filename) {
     std::ifstream file(filename, std::ios::binary);
@@ -114,10 +127,91 @@ bool ChunkData::loadFromFile(const std::string& filename) {
     return true;
 }
 
-bool ChunkData::parseChunk(std::istream& stream, std::shared_ptr<ChunkItem>& parent) {
-    while (stream && stream.peek() != EOF) {
-        std::streampos pos = stream.tellg();
+bool ChunkData::parseChunk(std::istream& stream, std::shared_ptr<ChunkItem>& parent)
+    {
+        static constexpr uint32_t
+            DATA_WRAPPER = 0x03150809,
+            SOUNDROBJ_DEFINITION = 0x0A02,
+            SOUND_RENDER_DEF = 0x0100,
+            SOUND_RENDER_DEF_EXT = 0x0200;
 
+        while (stream && stream.peek() != EOF) {
+            std::streampos pos = stream.tellg();
+
+            // 1) Do we go into micromode?
+            //    If the current chunk (parent) is a DATA_WRAPPER
+            //    Or if it's one of the two SOUND_RENDER_DEF* chunks under SOUNDROBJ_DEFINITION
+            bool isDataWrapper = (parent && parent->id == DATA_WRAPPER);
+           // bool isSoundDef = (parent && parent->id == SOUND_RENDER_DEF);
+            bool isSoundDefChild =
+                parent                                    // 1) have a parent?
+                && parent->id == SOUND_RENDER_DEF          // 2) that parent is *exactly* 0x0100
+                && parent->parent                           // 3) have a grandparent?
+                && (parent->parent->id == SOUNDROBJ_DEFINITION
+                    || parent->parent->id == SOUND_RENDER_DEF_EXT
+
+                    );     // 4) grandparent is 0x0A02 *or* 0x0200
+
+            // DEBUG: print context for this iteration
+            std::cout << "DBG parseChunk @ pos=" << pos;
+
+            if (parent) {
+                std::cout << "  parent=0x" << std::hex << parent->id << std::dec;
+            }
+            else {
+                std::cout << "  parent=null";
+            }
+
+            if (parent && parent->parent) {
+                std::cout << "  grandparent=0x"
+                    << std::hex << parent->parent->id << std::dec;
+            }
+            else {
+                std::cout << "  grandparent=null";
+            }
+
+            std::cout << "  isDataWrapper=" << isDataWrapper
+                << "  isSoundDefChild=" << isSoundDefChild
+                << "\n";
+
+            if (isDataWrapper || isSoundDefChild) {
+                std::cout << "DBG >> entering micro-mode at pos=" << pos
+                    << " parent=0x" << std::hex << parent->id
+                    << std::dec << "\n";
+
+            // make sure we have at least 2 bytes for microId+microSize
+            if (stream.rdbuf()->in_avail() < 2) break;
+
+            uint8_t microId = 0;
+            uint8_t microSize = 0;
+            stream.read(reinterpret_cast<char*>(&microId), 1);
+            stream.read(reinterpret_cast<char*>(&microSize), 1);
+
+            std::cout << "DBG >> microId=0x" << std::hex << int(microId)
+                << " size=" << std::dec << int(microSize) << "\n";
+
+            // sanity
+            if (stream.rdbuf()->in_avail() < microSize) {
+                std::cerr
+                    << "Incomplete microchunk at " << pos
+                    << ", ID: " << int(microId)
+                    << ", size: " << int(microSize) << "\n";
+                break;
+            }
+
+            // build child
+            auto micro = std::make_shared<ChunkItem>();
+            micro->id = microId;
+            micro->length = microSize;
+            micro->data.resize(microSize);
+            stream.read(reinterpret_cast<char*>(micro->data.data()),
+                microSize);
+            micro->parent = parent.get();
+            parent->children.push_back(micro);
+            continue;
+        }
+                
+        /*
         // Handle microchunks inside CHUNKID_DATA
         if (parent && parent->id == 0x03150809) {
             if (stream.rdbuf()->in_avail() < 2) break;
@@ -141,6 +235,7 @@ bool ChunkData::parseChunk(std::istream& stream, std::shared_ptr<ChunkItem>& par
             parent->children.push_back(micro);
             continue;
         }
+        */
 
         // Normal chunk
         if (stream.rdbuf()->in_avail() < 8) break;
@@ -161,11 +256,52 @@ bool ChunkData::parseChunk(std::istream& stream, std::shared_ptr<ChunkItem>& par
 
         bool treatAsWrapper = isWrapperChunk(child->id);
 
-        // Special wrapper handling for sphere channel chunks
-        if (!treatAsWrapper && parent && parent->id == 0x0741 &&
-            (child->id == 0x0002 || child->id == 0x0003 || child->id == 0x0004 || child->id == 0x0005)) {
+        static constexpr uint32_t
+            SOUNDROBJ_DEFINITION = 0x00A2,
+            SOUND_RENDER_DEF = 0x0100,
+            SOUND_RENDER_DEF_EXT = 0x0200;
+
+        // 1) recurse into the definition so you get its two children:
+        //    - 0x0100 (render def) and
+        //    - 0x0200 (render ext)
+        if (!treatAsWrapper
+            && child->id == SOUNDROBJ_DEFINITION)
+        {
             treatAsWrapper = true;
         }
+
+        // 2) recurse into the *first* level render def so that
+        //    its micro mode logic can split the 1 byte entries
+        else if (!treatAsWrapper
+            && child->id == SOUND_RENDER_DEF
+            && parent
+            && parent->id == SOUNDROBJ_DEFINITION)
+        {
+            treatAsWrapper = true;
+        }
+
+        // 3) recurse into the extension wrapper so you get its nested 0x0100
+        else if (!treatAsWrapper
+            && child->id == SOUND_RENDER_DEF_EXT
+            && parent
+            && parent->id == SOUNDROBJ_DEFINITION)
+        {
+            treatAsWrapper = true;
+        }
+
+
+        // Special wrapper handling for sphere channel chunks
+        if (!treatAsWrapper
+            && parent
+            && (parent->id == 0x0741 || parent->id == 0x0742)
+            && (child->id == 0x0002 || child->id == 0x0003
+                || child->id == 0x0004 || child->id == 0x0005))
+        {
+            treatAsWrapper = true;
+        }
+        std::cout << "DBG wrapper-check: child=0x" << std::hex << child->id
+            << " parent=0x" << parent->id
+            << " wasWrapper=" << treatAsWrapper << std::dec << "\n";
 
         if (treatAsWrapper) {
             std::string subData(reinterpret_cast<char*>(child->data.data()), child->length);
@@ -177,6 +313,8 @@ bool ChunkData::parseChunk(std::istream& stream, std::shared_ptr<ChunkItem>& par
     }
     return true;
 }
+
+
 
 void ChunkData::clear() {
     chunks.clear();

@@ -7,14 +7,40 @@ inline std::string GetChunkName(uint32_t id, uint32_t parentId = 0) {
     if (parentId == 0x0741 && id == 0x0002) {
         return "W3D_CHUNK_SPHERE_CHUNKID_COLOR_CHANNEL";
     }
+    if (parentId == 0x0742 && id == 0x0002) {
+        return "W3D_CHUNK_RING_CHUNKID_COLOR_CHANNEL";
+    }
     if (parentId == 0x0741 && id == 0x0003) {
         return "W3D_CHUNK_SPHERE_CHUNKID_ALPHA_CHANNEL";
     }  
+    if (parentId == 0x0742 && id == 0x0003) {
+        return "W3D_CHUNK_RING_CHUNKID_ALPHA_CHANNEL";
+    }
+    if (parentId == 0x0741 && id == 0x0004) {
+        return "W3D_CHUNK_SPHERE_CHUNKID_SCALE_CHANNEL";
+    }
+    if (parentId == 0x0742 && id == 0x0004) {
+        return "W3D_CHUNK_RING_CHUNKID_INNERSCALE_CHANNEL";
+    }
+    if (parentId == 0x0741 && id == 0x0005) {
+        return "W3D_CHUNK_SPHERE_CHUNKID_VECTOR_CHANNEL";
+    }
+    if (parentId == 0x0742 && id == 0x0005) {
+        return "W3D_CHUNK_RING_CHUNKID_OUTERSCALE_CHANNEL";
+    }
     if (parentId == 0x31550809 && id == 0x1) {
         return "ChunkID_FRAME";
     }
-
-
+    if (parentId == 0xA02 && id == 0x100) {
+        return "W3D_CHUNK_SOUND_RENDER_DEFINITION";
+    }
+    if (parentId == 0xA02 && id == 0x200) {
+        return "W3D_CHUNK_SOUND_RENDER_DEFINITION_EXTENTION";
+    }
+    if (parentId == 0x200 && id == 0x100) {
+        return "W3D_CHUNK_SOUND_RENDER_DEFINITION";
+    }
+ 
     static const std::unordered_map<uint32_t, std::string> chunkNames = {
         { 0x0000, "W3D_CHUNK_MESH" }, // Mesh definition
         { 0x0001, "W3D_CHUNK_HEADER" }, // Header for mesh (Legacy)
