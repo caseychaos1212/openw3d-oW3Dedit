@@ -1786,6 +1786,8 @@ inline std::vector<ChunkField> InterpretEmitterRotationKeys(const std::shared_pt
     fields.push_back({ "RandomVelocity", "float", std::to_string(randomVelocity) });
     fields.push_back({ "OrientationRandom", "float", std::to_string(orientationRandom) });
 
+
+	// --- Keyframes --- Don't seem to be working here check "xe_COMROCKET" in wdump
     for (uint32_t i = 0; i < keyframeCount; ++i) {
         if (offset + 8 > chunk->data.size()) break;
         float time = readF32(offset); offset += 4;
@@ -2920,24 +2922,979 @@ inline std::vector<ChunkField> InterpretSoundRObjDefinition(
 
 
 
+std::vector<ChunkField> InterpretARGS(const std::shared_ptr<ChunkItem>& chunk) {
+    
+    std::string name(
+        reinterpret_cast<const char*>(chunk->data.data()),
+        chunk->data.size()
+    );
+
+    while (!name.empty() && (name.back() == '\0' || std::isspace((unsigned char)name.back()))) {
+        name.pop_back();
+    }
+
+    switch (chunk->id) {
+    case 0x002E:
+        return { { "Stage0 Mapper Args", "string", name } };
+    case 0x002F:
+        return { { "Stage1 Mapper Args", "string", name } };
+    default:
+        return {};
+    }
+}
+
+
+inline std::vector<ChunkField> InterpretDIG(const std::shared_ptr<ChunkItem>& chunk) {
+    std::vector<ChunkField> fields;
+    if (!chunk) {
+        fields.push_back({ "error", "string", "Empty DIG chunk" });
+        return fields;
+    }
+
+    const auto& data = chunk->data;
+    size_t len = data.size();
+
+   
+    if (len % 4 != 0) {
+        fields.push_back({ "error", "string",
+            "Unexpected DIG chunk size: " + std::to_string(len) });
+        return fields;
+    }
+
+    size_t count = len / 4;
+    const uint8_t* ptr = data.data();
+
+    for (size_t i = 0; i < count; ++i) {
+        uint8_t r = ptr[i * 4 + 0];
+        uint8_t g = ptr[i * 4 + 1];
+        uint8_t b = ptr[i * 4 + 2];
+        std::string base = "Vertex[" + std::to_string(i) + "].DIG";
+        fields.push_back({ base + ".R", "uint8_t", std::to_string(r) });
+        fields.push_back({ base + ".G", "uint8_t", std::to_string(g) });
+        fields.push_back({ base + ".B", "uint8_t", std::to_string(b) });
+    }
+
+    return fields;
+}
+
+inline std::vector<ChunkField> InterpretSCG(const std::shared_ptr<ChunkItem>& chunk) {
+    std::vector<ChunkField> fields;
+    if (!chunk) {
+        fields.push_back({ "error", "string", "Empty SCG chunk" });
+        return fields;
+    }
+
+    const auto& data = chunk->data;
+    size_t len = data.size();
+
+
+    if (len % 4 != 0) {
+        fields.push_back({ "error", "string",
+            "Unexpected SCG chunk size: " + std::to_string(len) });
+        return fields;
+    }
+
+    size_t count = len / 4;
+    const uint8_t* ptr = data.data();
+
+    for (size_t i = 0; i < count; ++i) {
+        uint8_t r = ptr[i * 4 + 0];
+        uint8_t g = ptr[i * 4 + 1];
+        uint8_t b = ptr[i * 4 + 2];
+        std::string base = "Vertex[" + std::to_string(i) + "].SCG";
+        fields.push_back({ base + ".R", "uint8_t", std::to_string(r) });
+        fields.push_back({ base + ".G", "uint8_t", std::to_string(g) });
+        fields.push_back({ base + ".B", "uint8_t", std::to_string(b) });
+    }
+
+    return fields;
+}
+
+
+inline std::vector<ChunkField> InterpretPerFaceTexcoordIds(
+    const std::shared_ptr<ChunkItem>& chunk
+) {
+    std::vector<ChunkField> fields;
+    if (!chunk) {
+        fields.push_back({ "error", "string", "Empty PER_FACE_TEXCOORD_IDS chunk" });
+        return fields;
+    }
+
+    const auto& data = chunk->data;
+    size_t len = data.size();
+
+    // Each Vector3i is 3×4 bytes = 12 bytes
+    if (len % 12 != 0) {
+        fields.push_back({
+            "error", "string",
+            "Unexpected PER_FACE_TEXCOORD_IDS chunk size: " + std::to_string(len)
+            });
+        return fields;
+    }
+
+    size_t count = len / 12;
+    auto ptr = reinterpret_cast<const int32_t*>(data.data());
+
+    for (size_t i = 0; i < count; ++i) {
+        int a = ptr[i * 3 + 0];
+        int b = ptr[i * 3 + 1];
+        int c = ptr[i * 3 + 2];
+
+        std::string label = "Face[" + std::to_string(i) + "] UV Indices";
+        std::string value = "("
+            + std::to_string(a) + " "
+            + std::to_string(b) + " "
+            + std::to_string(c) + ")";
+        fields.push_back({ label, "Vector3i", value });
+    }
+
+    return fields;
+}
+
+inline std::vector<ChunkField> InterpretMorphAnimHeader(
+    const std::shared_ptr<ChunkItem>& chunk
+) {
+    std::vector<ChunkField> fields;
+    if (!chunk || chunk->data.size() < 48) {
+        fields.push_back({ "error", "string", "Invalid MORPHANIM_HEADER" });
+        return fields;
+    }
+
+    const uint8_t* ptr = chunk->data.data();
+
+    // 1) Version (two 16-bit words: high=Major, low=Minor)
+    uint32_t rawVer = *reinterpret_cast<const uint32_t*>(ptr);
+    uint16_t minor = static_cast<uint16_t>(rawVer & 0xFFFF);
+    uint16_t major = static_cast<uint16_t>((rawVer >> 16) & 0xFFFF);
+    fields.push_back({
+        "Version", "uint32_t",
+        std::to_string(major) + "." + std::to_string(minor)
+        });
+
+    // 2) Name[16]
+    std::string name(reinterpret_cast<const char*>(ptr + 4), 16);
+    // trim trailing nulls/spaces:
+    while (!name.empty() && (name.back() == '\0' || std::isspace((unsigned char)name.back())))
+        name.pop_back();
+    fields.push_back({ "Name", "string", name });
+
+    // 3) HierarchyName[16]
+    std::string hier(reinterpret_cast<const char*>(ptr + 20), 16);
+    while (!hier.empty() && (hier.back() == '\0' || std::isspace((unsigned char)hier.back())))
+        hier.pop_back();
+    fields.push_back({ "HierarchyName", "string", hier });
+
+    // 4) FrameCount (uint32)
+    uint32_t frameCount = *reinterpret_cast<const uint32_t*>(ptr + 36);
+    fields.push_back({ "FrameCount", "uint32_t", std::to_string(frameCount) });
+
+    // 5) FrameRate (float)
+    float frameRate = *reinterpret_cast<const float*>(ptr + 40);
+    fields.push_back({ "FrameRate", "float", std::to_string(frameRate) });
+
+    // 6) ChannelCount (uint32)
+    uint32_t channelCount = *reinterpret_cast<const uint32_t*>(ptr + 44);
+    fields.push_back({ "ChannelCount", "uint32_t", std::to_string(channelCount) });
+
+    return fields;
+}
+
+inline std::vector<ChunkField> InterpretMorphAnimPoseName(
+    const std::shared_ptr<ChunkItem>& chunk
+) {
+    std::vector<ChunkField> fields;
+    if (!chunk) {
+        fields.push_back({ "error", "string", "Empty PoseName chunk" });
+        return fields;
+    }
+
+    // Read the entire buffer as a string (may include trailing NULs)
+    std::string name(
+        reinterpret_cast<const char*>(chunk->data.data()),
+        chunk->data.size()
+    );
+
+    // Trim trailing nulls or whitespace
+    while (!name.empty() && (name.back() == '\0' || std::isspace((unsigned char)name.back()))) {
+        name.pop_back();
+    }
+
+    // Push it as a single field
+    fields.push_back({ "PoseName", "string", name });
+    return fields;
+}
+inline std::vector<ChunkField> InterpretMorphAnimKeyData(
+    const std::shared_ptr<ChunkItem>& chunk
+) {
+    std::vector<ChunkField> fields;
+    if (!chunk) {
+        fields.push_back({ "error", "string", "Empty MORPHANIM_KEYDATA chunk" });
+        return fields;
+    }
+
+    const auto& data = chunk->data;
+    size_t len = data.size();
+
+    // Each key is two uint32s = 8 bytes
+    if (len % 8 != 0) {
+        fields.push_back({
+            "error", "string",
+            "Unexpected MORPHANIM_KEYDATA size: " + std::to_string(len)
+            });
+        return fields;
+    }
+
+    size_t count = len / 8;
+    auto ptr = reinterpret_cast<const uint32_t*>(data.data());
+
+    for (size_t i = 0; i < count; ++i) {
+        uint32_t morphFrame = ptr[i * 2 + 0];
+        uint32_t poseFrame = ptr[i * 2 + 1];
+
+        std::string base = "Key[" + std::to_string(i) + "]";
+        fields.push_back({ base + ".MorphFrame", "uint32", std::to_string(morphFrame) });
+        fields.push_back({ base + ".PoseFrame",  "uint32", std::to_string(poseFrame) });
+    }
+
+    return fields;
+}
+
+inline std::vector<ChunkField> InterpretMorphAnimPivotChannelData(
+    const std::shared_ptr<ChunkItem>& chunk
+) {
+    std::vector<ChunkField> fields;
+    if (!chunk) {
+        fields.push_back({ "error", "string", "Empty PIVOTCHANNELDATA chunk" });
+        return fields;
+    }
+
+    const auto& data = chunk->data;
+    size_t len = data.size();
+
+    // Each entry is a uint32_t
+    if (len % sizeof(uint32_t) != 0) {
+        fields.push_back({
+            "error", "string",
+            "Unexpected PIVOTCHANNELDATA size: " + std::to_string(len)
+            });
+        return fields;
+    }
+
+    size_t count = len / sizeof(uint32_t);
+    auto ptr = reinterpret_cast<const uint32_t*>(data.data());
+
+    for (size_t i = 0; i < count; ++i) {
+        std::string label = "PivotChannel[" + std::to_string(i) + "]";
+        fields.push_back({
+            label,
+            "uint32",
+            std::to_string(ptr[i])
+            });
+    }
+
+    return fields;
+}
+
+inline std::vector<ChunkField> InterpretShadowNode(
+    const std::shared_ptr<ChunkItem>& chunk
+) {
+    std::vector<ChunkField> fields;
+    if (!chunk || chunk->data.size() < 18) {
+        fields.push_back({ "error", "string", "Invalid SHADOW_NODE chunk" });
+        return fields;
+    }
+
+    const uint8_t* ptr = chunk->data.data();
+    size_t len = chunk->data.size();
+
+    // 1) RenderObjName[16]
+    std::string name(reinterpret_cast<const char*>(ptr), 16);
+    while (!name.empty() && (name.back() == '\0' || std::isspace((unsigned char)name.back()))) {
+        name.pop_back();
+    }
+    fields.push_back({ "ShadowMeshName", "string", name });
+
+    // 2) PivotIdx (uint16)
+    uint16_t pivot = *reinterpret_cast<const uint16_t*>(ptr + 16);
+    fields.push_back({ "PivotIdx", "uint16", std::to_string(pivot) });
+
+    return fields;
+}
+
+inline std::vector<ChunkField> InterpretLODModelHeader(
+    const std::shared_ptr<ChunkItem>& chunk
+) {
+    std::vector<ChunkField> fields;
+    if (!chunk || chunk->data.size() < 4 + 16 + 4) {
+        fields.push_back({ "error", "string", "Invalid LODMODEL_HEADER chunk" });
+        return fields;
+    }
+
+    const uint8_t* ptr = chunk->data.data();
+
+    // 1) Version (packed Major in high 16 bits, Minor in low 16 bits)
+    uint32_t rawVer = *reinterpret_cast<const uint32_t*>(ptr);
+    uint16_t major = static_cast<uint16_t>((rawVer >> 16) & 0xFFFF);
+    uint16_t minor = static_cast<uint16_t>(rawVer & 0xFFFF);
+    fields.push_back({
+        "Version", "uint32_t",
+        std::to_string(major) + "." + std::to_string(minor)
+        });
+
+    // 2) Name[W3D_NAME_LEN]
+    std::string name(reinterpret_cast<const char*>(ptr + 4), 16);
+    // trim trailing NULs/spaces
+    while (!name.empty() && (name.back() == '\0' || std::isspace((unsigned char)name.back()))) {
+        name.pop_back();
+    }
+    fields.push_back({ "Name", "string", name });
+
+    // 3) NumLODs (uint32_t)
+    uint32_t numLods = *reinterpret_cast<const uint32_t*>(ptr + 4 + 16);
+    fields.push_back({ "NumLODs", "uint32_t", std::to_string(numLods) });
+
+    return fields;
+}
+
+inline std::vector<ChunkField> InterpretLOD(
+    const std::shared_ptr<ChunkItem>& chunk
+) {
+    std::vector<ChunkField> fields;
+    if (!chunk || chunk->data.size() < (2 * 16) + sizeof(float) * 2) {
+        fields.push_back({ "error", "string", "Invalid LOD chunk" });
+        return fields;
+    }
+
+    const uint8_t* ptr = chunk->data.data();
+    size_t offset = 0;
+
+    // 1) RenderObjName (2×W3D_NAME_LEN chars)
+    std::string name(reinterpret_cast<const char*>(ptr + offset), 2 * 16);
+    // trim trailing nulls or spaces
+    while (!name.empty() && (name.back() == '\0' || std::isspace((unsigned char)name.back()))) {
+        name.pop_back();
+    }
+    fields.push_back({ "RenderObjName", "string", name });
+    offset += 2 * 16;
+
+    // 2) LODMin (float32)
+    float lodMin = *reinterpret_cast<const float*>(ptr + offset);
+    fields.push_back({ "LODMin", "float", std::to_string(lodMin) });
+    offset += sizeof(float);
+
+    // 3) LODMax (float32)
+    float lodMax = *reinterpret_cast<const float*>(ptr + offset);
+    fields.push_back({ "LODMax", "float", std::to_string(lodMax) });
+    // offset += sizeof(float); // not needed beyond here
+
+    return fields;
+}
+
+
+inline std::vector<ChunkField> InterpretCollectionHeader(
+    const std::shared_ptr<ChunkItem>& chunk
+) {
+    std::vector<ChunkField> fields;
+    // Must have at least: 4 bytes version + 16 bytes name + 4 bytes count + 8 bytes pad = 32 bytes
+    if (!chunk || chunk->data.size() < 32) {
+        fields.push_back({ "error", "string", "Invalid COLLECTION_HEADER chunk" });
+        return fields;
+    }
+
+    const uint8_t* ptr = chunk->data.data();
+
+    // 1) Version (packed Major in high 16 bits, Minor in low 16 bits)
+    uint32_t rawVer = *reinterpret_cast<const uint32_t*>(ptr);
+    uint16_t major = static_cast<uint16_t>((rawVer >> 16) & 0xFFFF);
+    uint16_t minor = static_cast<uint16_t>(rawVer & 0xFFFF);
+    fields.push_back({
+        "Version", "uint32_t",
+        std::to_string(major) + "." + std::to_string(minor)
+        });
+
+    // 2) Name[W3D_NAME_LEN]
+    std::string name(reinterpret_cast<const char*>(ptr + 4), 16);
+    while (!name.empty() && (name.back() == '\0' || std::isspace((unsigned char)name.back()))) {
+        name.pop_back();
+    }
+    fields.push_back({ "Name", "string", name });
+
+    // 3) RenderObjectCount (uint32)
+    uint32_t count = *reinterpret_cast<const uint32_t*>(ptr + 4 + 16);
+    fields.push_back({ "RenderObjectCount", "uint32_t", std::to_string(count) });
+
+    // (We can ignore the two uint32 pad words that follow.)
+
+    return fields;
+}
+
+inline std::vector<ChunkField> InterpretCollectionObjName(
+    const std::shared_ptr<ChunkItem>& chunk
+) {
+    std::vector<ChunkField> fields;
+    if (!chunk) {
+        fields.emplace_back("error", "string", "Empty COLLECTION_OBJ_NAME chunk");
+        return fields;
+    }
+
+    // Read entire buffer as string, then trim trailing NUL/whitespace
+    std::string name(
+        reinterpret_cast<const char*>(chunk->data.data()),
+        chunk->data.size()
+    );
+    while (!name.empty() && (name.back() == '\0'
+        || std::isspace((unsigned char)name.back()))) {
+        name.pop_back();
+    }
+
+    fields.emplace_back("ObjectName", "string", name);
+    return fields;
+}
 
 
 
 
+inline std::vector<ChunkField> InterpretPlaceHolder(
+    const std::shared_ptr<ChunkItem>& chunk
+) {
+    std::vector<ChunkField> fields;
+    if (!chunk) {
+        fields.push_back({ "error", "string", "Empty COLLECTION_PLACEHOLDER chunk" });
+        return fields;
+    }
+
+    const auto& data = chunk->data;
+    size_t len = data.size();
+
+    // We need at least:
+    //  • 4 bytes version
+    //  • 4*3*4 = 48 bytes for the 4×3 float matrix
+    //  • 4 bytes name_len
+    if (len < 4 + 48 + 4) {
+        fields.push_back({ "error", "string",
+            "Unexpected COLLECTION_PLACEHOLDER size: " + std::to_string(len) });
+        return fields;
+    }
+
+    const uint8_t* ptr = data.data();
+    size_t offset = 0;
+
+    // 1) Version
+    uint32_t version = *reinterpret_cast<const uint32_t*>(ptr + offset);
+    fields.push_back({ "Version", "uint32_t", std::to_string(version) });
+    offset += 4;
+
+    // 2) Transform matrix [4][3]
+    auto fptr = reinterpret_cast<const float*>(ptr + offset);
+    for (int row = 0; row < 4; ++row) {
+        std::string val = "("
+            + std::to_string(fptr[row * 3 + 0]) + " "
+            + std::to_string(fptr[row * 3 + 1]) + " "
+            + std::to_string(fptr[row * 3 + 2]) + ")";
+        fields.push_back({ "Transform[" + std::to_string(row) + "]",
+                           "Vector3", val });
+    }
+    offset += 4 * 3 * sizeof(float);
+
+    // 3) Name length
+    uint32_t nameLen = *reinterpret_cast<const uint32_t*>(ptr + offset);
+    fields.push_back({ "NameLength", "uint32_t", std::to_string(nameLen) });
+    offset += 4;
+
+    // 4) Name string
+    if (offset + nameLen > len) nameLen = static_cast<uint32_t>(len - offset);
+    std::string name(reinterpret_cast<const char*>(ptr + offset), nameLen);
+    // trim trailing NUL/whitespace
+    while (!name.empty() && (name.back() == '\0' || std::isspace((unsigned char)name.back())))
+        name.pop_back();
+    fields.push_back({ "Name", "string", name });
+
+    return fields;
+}
 
 
+inline std::vector<ChunkField> InterpretTransformNode(
+    const std::shared_ptr<ChunkItem>& chunk
+) {
+    std::vector<ChunkField> fields;
+    if (!chunk || chunk->data.size() < (4 + 4 * 3 * 4 + 4)) {
+        fields.push_back({ "error", "string", "Invalid TRANSFORM_NODE chunk" });
+        return fields;
+    }
+
+    const uint8_t* ptr = chunk->data.data();
+    size_t offset = 0;
+
+    // 1) Version (packed Major.High / Minor.Low)
+    uint32_t rawVer = *reinterpret_cast<const uint32_t*>(ptr + offset);
+    uint16_t major = static_cast<uint16_t>((rawVer >> 16) & 0xFFFF);
+    uint16_t minor = static_cast<uint16_t>(rawVer & 0xFFFF);
+    fields.push_back({
+        "Version", "uint32_t",
+        std::to_string(major) + "." + std::to_string(minor)
+        });
+    offset += 4;
+
+    // 2) Transform[4][3]
+    auto fptr = reinterpret_cast<const float*>(ptr + offset);
+    for (int row = 0; row < 4; ++row) {
+        std::string val = "("
+            + std::to_string(fptr[row * 3 + 0]) + " "
+            + std::to_string(fptr[row * 3 + 1]) + " "
+            + std::to_string(fptr[row * 3 + 2]) + ")";
+        fields.push_back({ "Transform[" + std::to_string(row) + "]", "Vector3", val });
+    }
+    offset += 4 * 3 * sizeof(float);
+
+    // 3) Name length
+    uint32_t nameLen = *reinterpret_cast<const uint32_t*>(ptr + offset);
+    fields.push_back({ "NameLength", "uint32_t", std::to_string(nameLen) });
+    offset += 4;
+
+    // 4) Name (nameLen bytes, then trim)
+    if (offset + nameLen > chunk->data.size()) {
+        nameLen = static_cast<uint32_t>(chunk->data.size() - offset);
+    }
+    std::string name(reinterpret_cast<const char*>(ptr + offset), nameLen);
+    while (!name.empty() && (name.back() == '\0' || std::isspace((unsigned char)name.back()))) {
+        name.pop_back();
+    }
+    fields.push_back({ "NodeName", "string", name });
+
+    return fields;
+}
 
 
+inline std::vector<ChunkField> InterpretPoints(
+    const std::shared_ptr<ChunkItem>& chunk
+) {
+    std::vector<ChunkField> fields;
+    if (!chunk) {
+        fields.push_back({ "error", "string", "Empty POINTS chunk" });
+        return fields;
+    }
+
+    const auto& data = chunk->data;
+    size_t len = data.size();
+
+    // Each point is 3 floats = 12 bytes
+    if (len % (3 * sizeof(float)) != 0) {
+        fields.push_back({
+            "error", "string",
+            "Unexpected POINTS chunk size: " + std::to_string(len)
+            });
+        return fields;
+    }
+
+    size_t count = len / (3 * sizeof(float));
+    auto ptr = reinterpret_cast<const float*>(data.data());
+
+    for (size_t i = 0; i < count; ++i) {
+        float x = ptr[i * 3 + 0];
+        float y = ptr[i * 3 + 1];
+        float z = ptr[i * 3 + 2];
+        std::string label = "Point[" + std::to_string(i) + "]";
+        std::string value = "("
+            + std::to_string(x) + " "
+            + std::to_string(y) + " "
+            + std::to_string(z) + ")";
+        fields.push_back({ label, "Vector3", value });
+    }
+
+    return fields;
+}
 
 
+inline std::vector<ChunkField> InterpretEmitterColorKeyframe(
+    const std::shared_ptr<ChunkItem>& chunk
+) {
+    std::vector<ChunkField> fields;
+    if (!chunk) {
+        fields.push_back({ "error", "string", "Empty EMITTER_COLOR_KEYFRAME chunk" });
+        return fields;
+    }
+
+    const auto& data = chunk->data;
+    size_t len = data.size();
+
+    // Each keyframe is 4 bytes (float) + 4 bytes (RGBA) = 8 bytes
+    constexpr size_t RECORD_SIZE = sizeof(float) + 4;
+    if (len % RECORD_SIZE != 0) {
+        fields.push_back({
+            "error", "string",
+            "Unexpected EMITTER_COLOR_KEYFRAME size: " + std::to_string(len)
+            });
+        return fields;
+    }
+
+    size_t count = len / RECORD_SIZE;
+    const uint8_t* ptr = data.data();
+
+    for (size_t i = 0; i < count; ++i) {
+        size_t base = i * RECORD_SIZE;
+        // 1) Time
+        float time = *reinterpret_cast<const float*>(ptr + base);
+        // 2) Color RGBA
+        uint8_t r = ptr[base + 4];
+        uint8_t g = ptr[base + 5];
+        uint8_t b = ptr[base + 6];
+        uint8_t a = ptr[base + 7];
+
+        std::string prefix = "Keyframe[" + std::to_string(i) + "]";
+        fields.push_back({ prefix + ".Time",  "float",   std::to_string(time) });
+        fields.push_back({ prefix + ".Color.R", "uint8_t", std::to_string(r) });
+        fields.push_back({ prefix + ".Color.G", "uint8_t", std::to_string(g) });
+        fields.push_back({ prefix + ".Color.B", "uint8_t", std::to_string(b) });
+        fields.push_back({ prefix + ".Color.A", "uint8_t", std::to_string(a) });
+    }
+
+    return fields;
+}
+
+inline std::vector<ChunkField> InterpretEmitterOpacityKeyframe(
+    const std::shared_ptr<ChunkItem>& chunk
+) {
+    std::vector<ChunkField> fields;
+    if (!chunk) {
+        fields.push_back({ "error", "string", "Empty EMITTER_OPACITY_KEYFRAME chunk" });
+        return fields;
+    }
+
+    const auto& data = chunk->data;
+    size_t len = data.size();
+
+    // Each keyframe is two floats = 8 bytes
+    constexpr size_t RECORD_SIZE = sizeof(float) * 2;
+    if (len % RECORD_SIZE != 0) {
+        fields.push_back({
+            "error", "string",
+            "Unexpected EMITTER_OPACITY_KEYFRAME size: " + std::to_string(len)
+            });
+        return fields;
+    }
+
+    size_t count = len / RECORD_SIZE;
+    const uint8_t* ptr = data.data();
+
+    for (size_t i = 0; i < count; ++i) {
+        size_t base = i * RECORD_SIZE;
+        float time = *reinterpret_cast<const float*>(ptr + base);
+        float opacity = *reinterpret_cast<const float*>(ptr + base + sizeof(float));
+
+        std::string prefix = "Keyframe[" + std::to_string(i) + "]";
+        fields.push_back({ prefix + ".Time",    "float", std::to_string(time) });
+        fields.push_back({ prefix + ".Opacity", "float", std::to_string(opacity) });
+    }
+
+    return fields;
+}
 
 
+inline std::vector<ChunkField> InterpretEmitterSizeKeyframe(
+    const std::shared_ptr<ChunkItem>& chunk
+) {
+    std::vector<ChunkField> fields;
+    if (!chunk) {
+        fields.push_back({ "error", "string", "Empty EMITTER_SIZE_KEYFRAME chunk" });
+        return fields;
+    }
 
+    const auto& data = chunk->data;
+    size_t len = data.size();
 
+    // Each record is two floats = 8 bytes
+    constexpr size_t RECORD_SIZE = sizeof(float) * 2;
+    if (len % RECORD_SIZE != 0) {
+        fields.push_back({
+            "error", "string",
+            "Unexpected EMITTER_SIZE_KEYFRAME size: " + std::to_string(len)
+            });
+        return fields;
+    }
 
+    size_t count = len / RECORD_SIZE;
+    const uint8_t* ptr = data.data();
 
+    for (size_t i = 0; i < count; ++i) {
+        size_t base = i * RECORD_SIZE;
+        float time = *reinterpret_cast<const float*>(ptr + base);
+        float sizeVal = *reinterpret_cast<const float*>(ptr + base + sizeof(float));
 
+        std::string prefix = "Keyframe[" + std::to_string(i) + "]";
+        fields.push_back({ prefix + ".Time", "float", std::to_string(time) });
+        fields.push_back({ prefix + ".Size", "float", std::to_string(sizeVal) });
+    }
 
+    return fields;
+}
+inline std::vector<ChunkField> InterpretEmitterLineProperties(
+    const std::shared_ptr<ChunkItem>& chunk
+) {
+    std::vector<ChunkField> fields;
+    if (!chunk || chunk->data.size() < 64) {
+        fields.push_back({ "error", "string", "Invalid EMITTER_LINE_PROPERTIES chunk" });
+        return fields;
+    }
+
+    const uint8_t* ptr = chunk->data.data();
+    size_t offset = 0;
+
+    // 1) Flags
+    uint32_t flags = *reinterpret_cast<const uint32_t*>(ptr + offset);
+    offset += 4;
+
+    // Decode individual bits
+    std::vector<std::string> names;
+    if (flags & 0x00000001) names.push_back("MergeIntersections");
+    if (flags & 0x00000002) names.push_back("FreezeRandom");
+    if (flags & 0x00000004) names.push_back("DisableSorting");
+    if (flags & 0x00000008) names.push_back("EndCaps");
+    // texture map mode is bits 24–31
+    uint32_t mode = (flags & 0xFF000000) >> 24;
+    switch (mode) {
+    case 0: names.push_back("UniformWidthTextureMap"); break;
+    case 1: names.push_back("UniformLengthTextureMap"); break;
+    case 2: names.push_back("TiledTextureMap"); break;
+    default: names.push_back("UnknownTextureMapMode(" + std::to_string(mode) + ")"); break;
+    }
+    // join names
+    std::string decoded;
+    for (size_t i = 0; i < names.size(); ++i) {
+        if (i) decoded += " | ";
+        decoded += names[i];
+    }
+
+    fields.push_back({ "Flags (raw)",       "uint32", std::to_string(flags) });
+    fields.push_back({ "Flags (decoded)",   "flags",  decoded });
+
+    // 2) SubdivisionLevel
+    uint32_t subDiv = *reinterpret_cast<const uint32_t*>(ptr + offset);
+    fields.push_back({ "SubdivisionLevel", "uint32", std::to_string(subDiv) });
+    offset += 4;
+
+    // 3) NoiseAmplitude
+    float noise = *reinterpret_cast<const float*>(ptr + offset);
+    fields.push_back({ "NoiseAmplitude", "float", std::to_string(noise) });
+    offset += 4;
+
+    // 4) MergeAbortFactor
+    float maf = *reinterpret_cast<const float*>(ptr + offset);
+    fields.push_back({ "MergeAbortFactor", "float", std::to_string(maf) });
+    offset += 4;
+
+    // 5) TextureTileFactor
+    float ttf = *reinterpret_cast<const float*>(ptr + offset);
+    fields.push_back({ "TextureTileFactor", "float", std::to_string(ttf) });
+    offset += 4;
+
+    // 6) UPerSec
+    float up = *reinterpret_cast<const float*>(ptr + offset);
+    fields.push_back({ "UPerSec", "float", std::to_string(up) });
+    offset += 4;
+
+    // 7) VPerSec
+    float vp = *reinterpret_cast<const float*>(ptr + offset);
+    fields.push_back({ "VPerSec", "float", std::to_string(vp) });
+    offset += 4;
+
+    // 8) Reserved[9] (we can skip or note their presence)
+    // offset now at 4 + 4 + 5*4 = 28; Reserved is 9*4 =36 more = total 64
+
+    return fields;
+}
+
+inline std::vector<ChunkField> InterpretEmitterBlurTimeKeyframes(
+    const std::shared_ptr<ChunkItem>& chunk
+) {
+    std::vector<ChunkField> fields;
+    if (!chunk || chunk->data.size() < 12) {
+        fields.push_back({ "error", "string", "Invalid EMITTER_BLUR_TIME_KEYFRAMES chunk" });
+        return fields;
+    }
+
+    const auto& data = chunk->data;
+    const uint8_t* ptr = data.data();
+    size_t total = data.size();
+    size_t offset = 0;
+
+    // 1) Header (12 bytes)
+    uint32_t keyCount = *reinterpret_cast<const uint32_t*>(ptr + offset);
+    offset += 4;
+    float randomVal = *reinterpret_cast<const float*>(ptr + offset);
+    offset += 4;
+    // skip Reserved[1]
+    offset += 4;
+
+    fields.push_back({ "KeyframeCount", "uint32", std::to_string(keyCount) });
+    fields.push_back({ "Random",         "float",  std::to_string(randomVal) });
+
+    // 2) Keyframe times (float32 each) Don't seem to be working here check "xe_COMROCKET" in wdump
+    size_t expectedBytes = keyCount * sizeof(float);
+    if (offset + expectedBytes > total) {
+        fields.push_back({
+            "error", "string",
+            "Data shorter than expected: have " +
+            std::to_string(total - offset) +
+            " bytes but need " + std::to_string(expectedBytes)
+            });
+        return fields;
+    }
+
+    auto fptr = reinterpret_cast<const float*>(ptr + offset);
+    for (uint32_t i = 0; i < keyCount; ++i) {
+        fields.push_back({
+            "BlurTime[" + std::to_string(i) + "]",
+            "float",
+            std::to_string(fptr[i])
+            });
+    }
+
+    return fields;
+}
+inline std::vector<ChunkField> InterpretNullObject(
+    const std::shared_ptr<ChunkItem>& chunk
+) {
+    std::vector<ChunkField> fields;
+    if (!chunk || chunk->data.size() < 48) {
+        fields.push_back({ "error", "string", "Invalid NULL_OBJECT chunk" });
+        return fields;
+    }
+
+    const uint8_t* ptr = chunk->data.data();
+    size_t offset = 0;
+
+    // 1) Version (Major.Minor packed in high/low 16 bits)
+    uint32_t rawVer = *reinterpret_cast<const uint32_t*>(ptr + offset);
+    uint16_t major = static_cast<uint16_t>((rawVer >> 16) & 0xFFFF);
+    uint16_t minor = static_cast<uint16_t>(rawVer & 0xFFFF);
+    fields.push_back({
+        "Version", "uint32_t",
+        std::to_string(major) + "." + std::to_string(minor)
+        });
+    offset += 4;
+
+    // 2) Attributes (just print as hex and decimal)
+    uint32_t attrs = *reinterpret_cast<const uint32_t*>(ptr + offset);
+    {
+        std::ostringstream ss;
+        ss << "0x" << std::hex << attrs << std::dec << " (" << attrs << ")";
+        fields.push_back({ "Attributes", "uint32_t", ss.str() });
+    }
+    offset += 4;
+
+    // 3) pad[2] (skip 8 bytes)
+    offset += 8;
+
+    // 4) Name (32 bytes)
+    std::string name(reinterpret_cast<const char*>(ptr + offset), 2 * 16);
+    while (!name.empty() && (name.back() == '\0' || std::isspace((unsigned char)name.back()))) {
+        name.pop_back();
+    }
+    fields.push_back({ "Name", "string", name });
+
+    return fields;
+}
+inline std::vector<ChunkField> InterpretHModelNode(
+    const std::shared_ptr<ChunkItem>& chunk
+) {
+    // Generic helper for any of the three node types
+    std::vector<ChunkField> fields;
+    if (!chunk || chunk->data.size() < 16 + sizeof(uint16_t)) {
+        fields.push_back({ "error", "string", "Invalid HModelNode chunk" });
+        return fields;
+    }
+
+    const uint8_t* ptr = chunk->data.data();
+    // 1) name
+    std::string name(reinterpret_cast<const char*>(ptr), 16);
+    while (!name.empty() && (name.back() == '\0' || std::isspace((unsigned char)name.back())))
+        name.pop_back();
+    // 2) pivot index (uint16)
+    uint16_t pivot = *reinterpret_cast<const uint16_t*>(ptr + 16);
+
+    fields.push_back({ "MeshName", "string", name });
+    fields.push_back({ "PivotIdx",  "uint16", std::to_string(pivot) });
+    return fields;
+}
+
+// Specific wrappers to give the right label:
+inline std::vector<ChunkField> InterpretNode(
+    const std::shared_ptr<ChunkItem>& chunk
+) {
+    auto f = InterpretHModelNode(chunk);
+    // rename "MeshName"  "RenderObjName"
+    if (!f.empty()) f[0].field = "RenderObjName";
+    return f;
+}
+
+inline std::vector<ChunkField> InterpretCollisionNode(
+    const std::shared_ptr<ChunkItem>& chunk
+) {
+    auto f = InterpretHModelNode(chunk);
+    if (!f.empty()) f[0].field = "CollisionMeshName";
+    return f;
+}
+
+inline std::vector<ChunkField> InterpretSkinNode(
+    const std::shared_ptr<ChunkItem>& chunk
+) {
+    auto f = InterpretHModelNode(chunk);
+    if (!f.empty()) f[0].field = "SkinMeshName";
+    return f;
+}
+
+inline std::vector<ChunkField> InterpretPS2Shaders(
+    const std::shared_ptr<ChunkItem>& chunk
+) {
+    std::vector<ChunkField> fields;
+    if (!chunk) {
+        fields.push_back({ "error", "string", "Empty PS2_SHADERS chunk" });
+        return fields;
+    }
+
+    const auto& data = chunk->data;
+    size_t len = data.size();
+    constexpr size_t REC_SIZE = 12;  // sizeof(W3dPS2ShaderStruct)
+
+    if (len % REC_SIZE != 0) {
+        fields.push_back({
+            "error", "string",
+            "Unexpected PS2_SHADERS size: " + std::to_string(len)
+            });
+        return fields;
+    }
+
+    size_t count = len / REC_SIZE;
+    const uint8_t* ptr = data.data();
+
+    for (size_t i = 0; i < count; ++i) {
+        size_t base = i * REC_SIZE;
+        std::string pfx = "shader[" + std::to_string(i) + "]";
+
+        uint8_t DepthCompare = ptr[base + 0];
+        uint8_t DepthMask = ptr[base + 1];
+        uint8_t PriGradient = ptr[base + 2];
+        uint8_t Texturing = ptr[base + 3];
+        uint8_t AlphaTest = ptr[base + 4];
+        uint8_t AParam = ptr[base + 5];
+        uint8_t BParam = ptr[base + 6];
+        uint8_t CParam = ptr[base + 7];
+        uint8_t DParam = ptr[base + 8];
+        // ptr[base+9..11] are padding
+
+        fields.push_back({ pfx + ".DepthCompare", "uint8_t", std::to_string(DepthCompare) });
+        fields.push_back({ pfx + ".DepthMask",    "uint8_t", std::to_string(DepthMask) });
+        fields.push_back({ pfx + ".PriGradient",  "uint8_t", std::to_string(PriGradient) });
+        fields.push_back({ pfx + ".Texturing",    "uint8_t", std::to_string(Texturing) });
+        fields.push_back({ pfx + ".AlphaTest",    "uint8_t", std::to_string(AlphaTest) });
+        fields.push_back({ pfx + ".AParam",       "uint8_t", std::to_string(AParam) });
+        fields.push_back({ pfx + ".BParam",       "uint8_t", std::to_string(BParam) });
+        fields.push_back({ pfx + ".CParam",       "uint8_t", std::to_string(CParam) });
+        fields.push_back({ pfx + ".DParam",       "uint8_t", std::to_string(DParam) });
+    }
+
+    return fields;
+}
 
 
 

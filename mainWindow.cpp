@@ -304,8 +304,11 @@ void MainWindow::handleTreeSelection() {
         case 0x0000002C: fields = InterpretVertexMaterialName(target); break;
         case 0x0000002D: fields = InterpretVertexMaterialInfo(target); break;
         case 0x0301: fields = InterpretHModelHeader(target); break;
-        case 0x0310: fields = InterpretShaderName(target); break;
-        case 0x0311: fields = InterpretShaderDetail(target); break;
+       // case 0x0310: fields = InterpretShaderName(target); break;
+       // case 0x0311: fields = InterpretShaderDetail(target); break;
+		case 0x0302: fields = InterpretNode(target); break;
+		case 0x0303: fields = InterpretCollisionNode(target); break;
+		case 0x0304: fields = InterpretSkinNode(target); break;
         case 0x0283: fields = InterpretCompressedBitChannel(target); break;
         case 0x0029: fields = InterpretShaders(target); break;
         case 0x0032: fields = InterpretTextureName(target); break;
@@ -382,8 +385,34 @@ void MainWindow::handleTreeSelection() {
 		case 0x902: fields = InterpretDazzleTypeName(target); break;
 		case 0xa01: fields = InterpretSoundRObjHeader(target); break;
         case 0x100: fields = InterpretSoundRObjDefinition(target); break;
-    
+        case 0x02E: fields = InterpretARGS(target); break;
+        case 0x02F: fields = InterpretARGS(target); break;
+		case 0x03C: fields = InterpretDIG(target); break;
+        case 0x03E: fields = InterpretSCG(target); break;
+        case 0x04B: fields = InterpretPerFaceTexcoordIds(target); break;
 //		case 0x200: fields = InterpretSoundRObjExt(target); break;
+        case 0x2C1: fields = InterpretMorphAnimHeader(target); break;
+		case 0x2C3: fields = InterpretMorphAnimPoseName(target); break;
+		case 0x2C4: fields = InterpretMorphAnimKeyData(target); break;
+		case 0x2C5: fields = InterpretMorphAnimPivotChannelData(target); break;
+		case 0x306: fields = InterpretShadowNode(target); break;
+		case 0x401: fields = InterpretLODModelHeader(target); break;
+		case 0x402: fields = InterpretLOD(target); break;
+		case 0x421: fields = InterpretCollectionHeader(target); break;
+		case 0x422: fields = InterpretCollectionObjName(target); break;
+		case 0x423: fields = InterpretPlaceHolder(target); break;
+		case 0x424: fields = InterpretTransformNode(target); break;
+		case 0x440: fields = InterpretPoints(target); break;
+		case 0x506: fields = InterpretEmitterColorKeyframe(target); break;
+		case 0x507: fields = InterpretEmitterOpacityKeyframe(target); break;
+		case 0x508: fields = InterpretEmitterSizeKeyframe(target); break;
+		case 0x509: fields = InterpretEmitterLineProperties(target); break;
+		case 0x50C: fields = InterpretEmitterBlurTimeKeyframes(target); break;
+		case 0x750: fields = InterpretNullObject(target); break;
+		case 0x080: fields = InterpretPS2Shaders(target); break;
+        {
+
+        };
         default: break;
         }
     }

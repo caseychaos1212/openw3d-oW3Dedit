@@ -16,6 +16,7 @@ static bool isWrapperChunk(uint32_t id) {
     switch (id) {
     case 0x0000: // W3D_CHUNK_MESH
     case 0x0002: // W3D_CHUNK_VERTICES
+    case 0x0023: // W3D_CHUNK_PRELIT_UNLIT
 	case 0x0024: // W3D_CHUNK_PRELIT_VERTEX
     case 0x0025: // W3D_CHUNK_LIGHTMAP_MULTI_PASS
     case 0x0026: // W3D_CHUNK_LIGHTMAP_MULTI_TEXTURE
@@ -46,6 +47,7 @@ static bool isWrapperChunk(uint32_t id) {
     case 0x0700: // W3D_CHUNK_HLOD
     case 0x0702: // W3D_CHUNK_HLOD_LOD_ARRAY
     case 0x0705: // W3D_CHUNK_HLOD_AGGREGATE_ARRAY
+	case 0x0706: // W3D_CHUNK_HLOD_PROXY_ARRAY
 	case 0x0741: // W3D_CHUNK_SPHERE
     case 0x0742: // W3D_CHUNK_RING
     case 0x0800: // W3D_CHUNK_LIGHTSCAPE
