@@ -3,10 +3,31 @@
 #include <vector>
 #include <string>
 #include <sstream>
-#include <iomanip> // for std::setw
+#include <iomanip> 
 #include <iostream>
+#include "W3DMesh.h"
+#include "W3DAggregate.h"
+#include "W3DAnimation.h"
+#include "W3DBox.h"
+#include "W3DCollection.h"
+#include "W3DCompressedAnimation.h"
+#include "W3DDazzle.h"
+#include "W3DEmitter.h"
+#include "W3DHierarchy.h"
+#include "W3DHlod.h"
+#include "W3DHmodel.h"
+#include "W3DLight.h"
+#include "W3DLightScape.h"
+#include "W3DLodModel.h"
+#include "W3DMorphAnimation.h"
+#include "W3DNullObject.h"
+#include "W3DPoints.h"
+#include "W3DPrimatives.h"
+#include "W3DSoundRenderObj.h"
 
 
+
+/*
 static const std::unordered_map<uint32_t, std::string> vertexMatFlags = {
     {0x00000001, "W3DVERTMAT_USE_DEPTH_CUE"},
     {0x00000002, "W3DVERTMAT_ARGB_EMISSIVE_ONLY"},
@@ -62,7 +83,7 @@ static const std::unordered_map<uint32_t, std::string> vertexMatFlags = {
     {0x40000000, "W3DVERTMAT_PSX_TRANS_MINUS_100"}
 };
 
-
+*/
 
 //void DumpHex(const uint8_t* data, size_t length) {
  //   std::ostringstream oss;
@@ -85,13 +106,14 @@ static const std::unordered_map<uint32_t, std::string> vertexMatFlags = {
  //   }
  //   std::cout << "[DEBUG] Raw W3D_CHUNK_MESH_HEADER3:\n" << oss.str() << std::endl;
 //}
-
+/*
 struct ChunkField {
     std::string field;
     std::string type;
     std::string value;
 };
-
+*/
+/*
 inline std::vector<ChunkField> InterpretHierarchyHeader(const std::shared_ptr<ChunkItem>& chunk) {
     std::vector<ChunkField> fields;
 
@@ -133,7 +155,8 @@ inline std::vector<ChunkField> InterpretHierarchyHeader(const std::shared_ptr<Ch
 
     return fields;
 }
-
+*/
+/*
 inline std::vector<ChunkField> InterpretPivots(const std::shared_ptr<ChunkItem>& chunk) {
     std::vector<ChunkField> fields;
 
@@ -169,6 +192,7 @@ inline std::vector<ChunkField> InterpretPivots(const std::shared_ptr<ChunkItem>&
 
     return fields;
 }
+*/
 
 
 
@@ -177,7 +201,7 @@ inline std::vector<ChunkField> InterpretPivots(const std::shared_ptr<ChunkItem>&
 
 
 
-
+/*
 inline std::vector<ChunkField> InterpretPivotFixups(const std::shared_ptr<ChunkItem>& chunk) {
     std::vector<ChunkField> fields;
     size_t floatCount = chunk->data.size() / sizeof(float);
@@ -201,7 +225,8 @@ inline std::vector<ChunkField> InterpretPivotFixups(const std::shared_ptr<ChunkI
 
     return fields;
 }
-
+*/
+/*
 inline std::vector<ChunkField> InterpretVertices(const std::shared_ptr<ChunkItem>& chunk) {
     std::vector<ChunkField> fields;
 
@@ -221,12 +246,12 @@ inline std::vector<ChunkField> InterpretVertices(const std::shared_ptr<ChunkItem
 
     return fields;
 }
+*/
 
 
-
-#include <unordered_map>
-#include <iostream>
-
+//#include <unordered_map>
+//#include <iostream>
+/*
 inline std::vector<ChunkField> InterpretMeshHeader3(const std::shared_ptr<ChunkItem>& chunk) {
     std::vector<ChunkField> fields;
     const uint8_t* data = reinterpret_cast<const uint8_t*>(chunk->data.data());
@@ -328,6 +353,10 @@ inline std::vector<ChunkField> InterpretMeshHeader3(const std::shared_ptr<ChunkI
 
     return fields;
 }
+
+*/
+
+/*
 inline std::vector<ChunkField> InterpretVertexNormals(const std::shared_ptr<ChunkItem>& chunk) {
     std::vector<ChunkField> fields;
     const float* raw = reinterpret_cast<const float*>(chunk->data.data());
@@ -348,7 +377,8 @@ inline std::vector<ChunkField> InterpretVertexNormals(const std::shared_ptr<Chun
 
     return fields;
 }
-
+*/
+/*
 inline std::vector<ChunkField> InterpretTriangles(const std::shared_ptr<ChunkItem>& chunk) {
     std::vector<ChunkField> fields;
     const uint8_t* data = reinterpret_cast<const uint8_t*>(chunk->data.data());
@@ -381,7 +411,8 @@ inline std::vector<ChunkField> InterpretTriangles(const std::shared_ptr<ChunkIte
 
     return fields;
 }
-
+*/
+/*
 inline std::vector<ChunkField> InterpretVertexShadeIndices(const std::shared_ptr<ChunkItem>& chunk) {
     std::vector<ChunkField> fields;
 
@@ -396,7 +427,8 @@ inline std::vector<ChunkField> InterpretVertexShadeIndices(const std::shared_ptr
 
     return fields;
 }
-
+*/
+/*
 inline std::vector<ChunkField> InterpretMaterialInfo(const std::shared_ptr<ChunkItem>& chunk) {
     std::vector<ChunkField> fields;
 
@@ -414,7 +446,9 @@ inline std::vector<ChunkField> InterpretMaterialInfo(const std::shared_ptr<Chunk
 
     return fields;
 }
+*/
 
+/*
 inline std::vector<ChunkField> InterpretVertexMaterialName(const std::shared_ptr<ChunkItem>& chunk) {
     std::string name(reinterpret_cast<const char*>(chunk->data.data()));
     std::cout << "[DEBUG] Material Name chunk size: " << chunk->data.size() << "\n";
@@ -426,7 +460,8 @@ inline std::vector<ChunkField> InterpretVertexMaterialName(const std::shared_ptr
     std::cout << std::dec << "\n";
     return { { "Material Name", "string", name } };
 }
-
+*/
+/*
 struct Vector3 {
     float x, y, z;
 };
@@ -441,6 +476,8 @@ struct W3dVertexMaterialInfo {
     float Opacity;
     float Translucency;
 };
+*/
+/*
 std::vector<ChunkField> InterpretVertexMaterialInfo(const std::shared_ptr<ChunkItem>& chunk) {
     std::vector<ChunkField> fields;
     const uint8_t* data = reinterpret_cast<const uint8_t*>(chunk->data.data());
@@ -567,18 +604,11 @@ std::vector<ChunkField> InterpretVertexMaterialInfo(const std::shared_ptr<ChunkI
 
     return fields;
 }
+*/
 
-inline std::vector<ChunkField> InterpretShaderName(const std::shared_ptr<ChunkItem>& chunk) {
-    std::string name(reinterpret_cast<const char*>(chunk->data.data()));
-    return { { "Shader.Name", "string", name } };
-}
-inline std::vector<ChunkField> InterpretShaderDetail(const std::shared_ptr<ChunkItem>& chunk) {
-    std::ostringstream hexDump;
-    for (size_t i = 0; i < std::min<size_t>(chunk->data.size(), 16); ++i) {
-        hexDump << std::hex << (int)chunk->data[i] << " ";
-    }
-    return { { "Shader.Detail", "hex", hexDump.str() } };
-}
+
+
+/*
 std::vector<ChunkField> InterpretShaders(const std::shared_ptr<ChunkItem>& chunk) {
     std::vector<ChunkField> fields;
     const uint8_t* data = reinterpret_cast<const uint8_t*>(chunk->data.data());
@@ -628,13 +658,15 @@ std::vector<ChunkField> InterpretShaders(const std::shared_ptr<ChunkItem>& chunk
 
     return fields;
 }
-
-
+*/
+/*
 std::vector<ChunkField> InterpretTextureName(const std::shared_ptr<ChunkItem>& chunk) {
     std::string name(reinterpret_cast<const char*>(chunk->data.data()));
     return { { "Texture Name", "string", name } };
 }
+*/
 
+/*
 std::vector<ChunkField> InterpretTextureInfo(const std::shared_ptr<ChunkItem>& chunk) {
     std::vector<ChunkField> fields;
     const uint8_t* data = reinterpret_cast<const uint8_t*>(chunk->data.data());
@@ -660,7 +692,8 @@ std::vector<ChunkField> InterpretTextureInfo(const std::shared_ptr<ChunkItem>& c
 
     return fields;
 }
-
+*/
+/*
 inline std::vector<ChunkField> InterpretVertexMaterialIDs(const std::shared_ptr<ChunkItem>& chunk) {
     std::vector<ChunkField> fields;
     const uint32_t* data = reinterpret_cast<const uint32_t*>(chunk->data.data());
@@ -674,7 +707,8 @@ inline std::vector<ChunkField> InterpretVertexMaterialIDs(const std::shared_ptr<
 
     return fields;
 }
-
+*/
+/*
 inline std::vector<ChunkField> InterpretShaderIDs(const std::shared_ptr<ChunkItem>& chunk) {
     std::vector<ChunkField> fields;
     const uint8_t* data = reinterpret_cast<const uint8_t*>(chunk->data.data());
@@ -688,7 +722,8 @@ inline std::vector<ChunkField> InterpretShaderIDs(const std::shared_ptr<ChunkIte
 
     return fields;
 }
-
+*/
+/*
 inline std::vector<ChunkField> InterpretTextureStage(const std::shared_ptr<ChunkItem>& chunk) {
     std::vector<ChunkField> fields;
     const uint8_t* data = reinterpret_cast<const uint8_t*>(chunk->data.data());
@@ -702,7 +737,8 @@ inline std::vector<ChunkField> InterpretTextureStage(const std::shared_ptr<Chunk
 
     return fields;
 }
-
+*/
+/*
 inline std::vector<ChunkField> InterpretStageTexCoords(const std::shared_ptr<ChunkItem>& chunk) {
     std::vector<ChunkField> fields;
     const uint8_t* data = reinterpret_cast<const uint8_t*>(chunk->data.data());
@@ -719,7 +755,9 @@ inline std::vector<ChunkField> InterpretStageTexCoords(const std::shared_ptr<Chu
 
     return fields;
 }
+*/
 
+/*
 inline std::vector<ChunkField> InterpretTextureIDs(const std::shared_ptr<ChunkItem>& chunk) {
     std::vector<ChunkField> fields;
     const uint32_t* data = reinterpret_cast<const uint32_t*>(chunk->data.data());
@@ -731,7 +769,8 @@ inline std::vector<ChunkField> InterpretTextureIDs(const std::shared_ptr<ChunkIt
 
     return fields;
 }
-
+*/
+/*
 inline std::vector<ChunkField> InterpretAABTreeHeader(const std::shared_ptr<ChunkItem>& chunk) {
     std::vector<ChunkField> fields;
     const uint32_t* data = reinterpret_cast<const uint32_t*>(chunk->data.data());
@@ -746,8 +785,8 @@ inline std::vector<ChunkField> InterpretAABTreeHeader(const std::shared_ptr<Chun
 
     return fields;
 }
-
-
+*/
+/*
 inline std::vector<ChunkField> InterpretAABTreePolyIndices(const std::shared_ptr<ChunkItem>& chunk) {
     std::vector<ChunkField> fields;
     const uint16_t* data = reinterpret_cast<const uint16_t*>(chunk->data.data());
@@ -764,9 +803,9 @@ inline std::vector<ChunkField> InterpretAABTreePolyIndices(const std::shared_ptr
 
     return fields;
 }
+*/
 
-
-
+/*
 inline std::vector<ChunkField> InterpretAABTreeNodes(const std::shared_ptr<ChunkItem>& chunk) {
     std::vector<ChunkField> fields;
     const uint8_t* raw = reinterpret_cast<const uint8_t*>(chunk->data.data());
@@ -820,13 +859,15 @@ inline std::vector<ChunkField> InterpretAABTreeNodes(const std::shared_ptr<Chunk
 
     return fields;
 }
-
+*/
+/*
 inline std::vector<ChunkField> InterpretHLOD(const std::shared_ptr<ChunkItem>& chunk) {
     std::vector<ChunkField> fields;
     fields.push_back({ "Info", "string", "W3D_CHUNK_HLOD (wrapper)" });
     return fields;
 }
-
+*/
+/*
 inline std::vector<ChunkField> InterpretHLODHeader(const std::shared_ptr<ChunkItem>& chunk) {
     std::vector<ChunkField> fields;
 
@@ -851,10 +892,12 @@ inline std::vector<ChunkField> InterpretHLODHeader(const std::shared_ptr<ChunkIt
 
     return fields;
 }
+
 inline std::vector<ChunkField> InterpretHLODLODArray(const std::shared_ptr<ChunkItem>& chunk) {
     return {}; // no fields, wrapper only
 }
-
+ */
+/*
 inline std::vector<ChunkField> InterpretHLODSubObjectArrayHeader(const std::shared_ptr<ChunkItem>& chunk) {
     std::vector<ChunkField> fields;
     const uint8_t* data = reinterpret_cast<const uint8_t*>(chunk->data.data());
@@ -875,7 +918,9 @@ inline std::vector<ChunkField> InterpretHLODSubObjectArrayHeader(const std::shar
 
     return fields;
 }
+*/
 
+/*
 inline std::vector<ChunkField> InterpretHLODSubObject_LodArray(const std::shared_ptr<ChunkItem>& chunk) {
     std::vector<ChunkField> fields;
     const uint8_t* data = reinterpret_cast<const uint8_t*>(chunk->data.data());
@@ -899,6 +944,8 @@ inline std::vector<ChunkField> InterpretHLODSubObject_LodArray(const std::shared
 
     return fields;
 }
+*/
+/*
 inline std::vector<ChunkField> InterpretAnimationHeader(const std::shared_ptr<ChunkItem>& chunk) {
     std::vector<ChunkField> fields;
     const uint8_t* data = reinterpret_cast<const uint8_t*>(chunk->data.data());
@@ -932,9 +979,9 @@ inline std::vector<ChunkField> InterpretAnimationHeader(const std::shared_ptr<Ch
 
     return fields;
 }
+*/
 
-
-
+/*
 inline std::vector<ChunkField> InterpretAnimationChannel(const std::shared_ptr<ChunkItem>& chunk) {
     std::vector<ChunkField> fields;
 
@@ -986,7 +1033,8 @@ inline std::vector<ChunkField> InterpretAnimationChannel(const std::shared_ptr<C
 
     return fields;
 }
-
+*/
+/*
 inline std::vector<ChunkField> InterpretBitChannel(const std::shared_ptr<ChunkItem>& chunk) {
     std::vector<ChunkField> fields;
     const uint8_t* data = reinterpret_cast<const uint8_t*>(chunk->data.data());
@@ -1030,7 +1078,8 @@ inline std::vector<ChunkField> InterpretBitChannel(const std::shared_ptr<ChunkIt
 
     return fields;
 }
-
+*/
+/*
 inline std::vector<ChunkField> InterpretCompressedAnimationHeader(const std::shared_ptr<ChunkItem>& chunk) {
     std::vector<ChunkField> fields;
     const uint8_t* data = reinterpret_cast<const uint8_t*>(chunk->data.data());
@@ -1062,7 +1111,8 @@ inline std::vector<ChunkField> InterpretCompressedAnimationHeader(const std::sha
 
     return fields;
 }
-
+*/
+/*
 inline std::vector<ChunkField> InterpretVertexInfluences(const std::shared_ptr<ChunkItem>& chunk) {
     std::vector<ChunkField> fields;
     const uint8_t* data = reinterpret_cast<const uint8_t*>(chunk->data.data());
@@ -1089,13 +1139,16 @@ inline std::vector<ChunkField> InterpretVertexInfluences(const std::shared_ptr<C
 
     return fields;
 }
+*/
 
+/*
 inline std::string ToHex(uint32_t value, int width = 8) {
     std::stringstream stream;
     stream << std::uppercase << std::setfill('0') << std::setw(width) << std::hex << value;
     return stream.str();
 }
-
+*/
+/*
 inline std::vector<ChunkField> InterpretBox(const std::shared_ptr<ChunkItem>& chunk) {
     std::vector<ChunkField> fields;
 
@@ -1152,8 +1205,8 @@ inline std::vector<ChunkField> InterpretBox(const std::shared_ptr<ChunkItem>& ch
 
     return fields;
 }
-
-
+*/
+/*
 inline std::vector<ChunkField> InterpretMeshUserText(const std::shared_ptr<ChunkItem>& chunk) {
     std::vector<ChunkField> fields;
 
@@ -1191,8 +1244,8 @@ inline std::vector<ChunkField> InterpretMeshUserText(const std::shared_ptr<Chunk
 
     return fields;
 }
-
-
+*/
+/*
 inline std::vector<ChunkField> InterpretPrelitVertexWrapper(const std::shared_ptr<ChunkItem>& chunk) {
     std::vector<ChunkField> fields;
     fields.push_back({ "Info", "string", "W3D_CHUNK_PRELIT_VERTEX (wrapper)" });
@@ -1215,7 +1268,8 @@ inline std::vector<ChunkField> InterpretLightmapMultiTexture(const std::shared_p
     fields.push_back({ "ChildCount", "int", std::to_string(chunk->children.size()) });
     return fields;
 }
-
+*/
+/*
 inline std::vector<ChunkField> InterpretDiffuseColorChunk(const std::shared_ptr<ChunkItem>& chunk) {
     std::vector<ChunkField> fields;
     const uint8_t* data = reinterpret_cast<const uint8_t*>(chunk->data.data());
@@ -1235,14 +1289,17 @@ inline std::vector<ChunkField> InterpretDiffuseColorChunk(const std::shared_ptr<
 
     return fields;
 }
+*/
 
+/*
 inline std::vector<ChunkField> InterpretDeform(const std::shared_ptr<ChunkItem>& chunk) {
     std::vector<ChunkField> fields;
     fields.push_back({ "Info", "string", "W3D_CHUNK_DEFORM (wrapper for damage/deform data)" });
     fields.push_back({ "ChildCount", "int", std::to_string(chunk->children.size()) });
     return fields;
 }
-
+*/
+/*
 inline std::vector<ChunkField> InterpretDeformSet(const std::shared_ptr<ChunkItem>& chunk) {
     std::vector<ChunkField> fields;
 
@@ -1261,7 +1318,9 @@ inline std::vector<ChunkField> InterpretDeformSet(const std::shared_ptr<ChunkIte
 
     return fields;
 }
+*/
 
+/*
 inline std::vector<ChunkField> InterpretDeformKeyframe(const std::shared_ptr<ChunkItem>& chunk) {
     std::vector<ChunkField> fields;
 
@@ -1277,8 +1336,8 @@ inline std::vector<ChunkField> InterpretDeformKeyframe(const std::shared_ptr<Chu
 
     return fields;
 }
-
-
+*/
+/*
 inline std::vector<ChunkField> InterpretDeformData(const std::shared_ptr<ChunkItem>& chunk) {
     std::vector<ChunkField> fields;
     size_t entrySize = sizeof(uint32_t) + sizeof(float) * 3;
@@ -1305,7 +1364,8 @@ inline std::vector<ChunkField> InterpretDeformData(const std::shared_ptr<ChunkIt
 
     return fields;
 }
-
+*/
+/*
 inline std::vector<ChunkField> InterpretCompressedAnimationChannel(const std::shared_ptr<ChunkItem>& chunk, uint16_t flavor = 0) {
     std::vector<ChunkField> fields;
     const uint8_t* data = reinterpret_cast<const uint8_t*>(chunk->data.data());
@@ -1367,7 +1427,8 @@ inline std::vector<ChunkField> InterpretCompressedAnimationChannel(const std::sh
 
     return fields;
 }
-
+*/
+/*
 inline std::vector<ChunkField> InterpretCompressedBitChannel(const std::shared_ptr<ChunkItem>& chunk) {
     std::vector<ChunkField> fields;
 
@@ -1413,7 +1474,9 @@ inline std::vector<ChunkField> InterpretCompressedBitChannel(const std::shared_p
 
     return fields;
 }
+*/
 
+/*
 inline std::vector<ChunkField> InterpretHModelHeader(const std::shared_ptr<ChunkItem>& chunk) {
     std::vector<ChunkField> fields;
     const uint8_t* data = reinterpret_cast<const uint8_t*>(chunk->data.data());
@@ -1441,7 +1504,8 @@ inline std::vector<ChunkField> InterpretHModelHeader(const std::shared_ptr<Chunk
 
     return fields;
 }
-
+*/
+/*
 inline std::vector<ChunkField> InterpretHModelAuxData(const std::shared_ptr<ChunkItem>& chunk) {
     std::vector<ChunkField> fields;
 
@@ -1479,8 +1543,8 @@ inline std::vector<ChunkField> InterpretHModelAuxData(const std::shared_ptr<Chun
 
     return fields;
 }
-
-
+*/
+/*
 inline std::vector<ChunkField> InterpretEmitter(const std::shared_ptr<ChunkItem>& chunk) {
     std::vector<ChunkField> fields;
     fields.push_back({ "Info", "string", "W3D_CHUNK_EMITTER (wrapper for particle emitter data)" });
@@ -1511,8 +1575,8 @@ inline std::vector<ChunkField> InterpretEmitterHeader(const std::shared_ptr<Chun
 
     return fields;
 }
-
-
+*/
+/*
 inline std::vector<ChunkField> InterpretEmitterUserData(const std::shared_ptr<ChunkItem>& chunk) {
     std::vector<ChunkField> fields;
 
@@ -1528,9 +1592,9 @@ inline std::vector<ChunkField> InterpretEmitterUserData(const std::shared_ptr<Ch
     fields.push_back({ "User Data", "string", result });
     return fields;
 }
+*/
 
-
-
+/*
 inline std::vector<ChunkField> InterpretEmitterInfo(const std::shared_ptr<ChunkItem>& chunk) {
     std::vector<ChunkField> fields;
     const uint8_t* data = reinterpret_cast<const uint8_t*>(chunk->data.data());
@@ -1585,8 +1649,8 @@ inline std::vector<ChunkField> InterpretEmitterInfo(const std::shared_ptr<ChunkI
 
     return fields;
 }
-
-
+*/
+/*
 inline void InterpretShaderStruct(std::vector<ChunkField>& fields, const uint8_t* data, size_t baseOffset) {
     const char* DepthCompareValues[] = { "Pass Never", "Pass Less", "Pass Equal", "Pass Less or Equal", "Pass Greater", "Pass Not Equal", "Pass Greater or Equal", "Pass Always" };
     const char* DepthMaskValues[] = { "Write Disable", "Write Enable" };
@@ -1622,11 +1686,11 @@ inline void InterpretShaderStruct(std::vector<ChunkField>& fields, const uint8_t
     // skip 14 = PostDetailAlphaFunc
     // skip 15 = pad
 }
+*/
 
 
 
-
-
+/*
 
 inline std::vector<ChunkField> InterpretEmitterInfoV2(const std::shared_ptr<ChunkItem>& chunk) {
     std::vector<ChunkField> fields;
@@ -1672,14 +1736,14 @@ inline std::vector<ChunkField> InterpretEmitterInfoV2(const std::shared_ptr<Chun
 
     return fields;
 }
+*/
 
 
 
 
 
 
-
-
+/*
 inline std::vector<ChunkField> InterpretEmitterProps(const std::shared_ptr<ChunkItem>& chunk) {
     std::vector<ChunkField> fields;
     const uint8_t* data = reinterpret_cast<const uint8_t*>(chunk->data.data());
@@ -1758,8 +1822,8 @@ inline std::vector<ChunkField> InterpretEmitterProps(const std::shared_ptr<Chunk
 
     return fields;
 }
-
-
+*/
+/*
 inline std::vector<ChunkField> InterpretEmitterRotationKeys(const std::shared_ptr<ChunkItem>& chunk) {
     std::vector<ChunkField> fields;
     const uint8_t* data = reinterpret_cast<const uint8_t*>(chunk->data.data());
@@ -1799,7 +1863,9 @@ inline std::vector<ChunkField> InterpretEmitterRotationKeys(const std::shared_pt
 
     return fields;
 }
+*/
 
+/*
 inline std::vector<ChunkField> InterpretEmitterFrameKeys(const std::shared_ptr<ChunkItem>& chunk) {
     std::vector<ChunkField> fields;
     const uint8_t* data = reinterpret_cast<const uint8_t*>(chunk->data.data());
@@ -1839,7 +1905,9 @@ inline std::vector<ChunkField> InterpretEmitterFrameKeys(const std::shared_ptr<C
 
     return fields;
 }
+*/
 
+/*
 inline std::vector<ChunkField> InterpretAggregateHeader(const std::shared_ptr<ChunkItem>& chunk) {
     std::vector<ChunkField> fields;
     const uint8_t* data = reinterpret_cast<const uint8_t*>(chunk->data.data());
@@ -1861,8 +1929,8 @@ inline std::vector<ChunkField> InterpretAggregateHeader(const std::shared_ptr<Ch
 
     return fields;
 }
-
-
+*/
+/*
 inline std::vector<ChunkField> InterpretAggregateInfo(const std::shared_ptr<ChunkItem>& chunk) {
     std::vector<ChunkField> fields;
     const uint8_t* data = reinterpret_cast<const uint8_t*>(chunk->data.data());
@@ -1896,8 +1964,8 @@ inline std::vector<ChunkField> InterpretAggregateInfo(const std::shared_ptr<Chun
 
     return fields;
 }
-
-
+*/
+/*
 inline std::vector<ChunkField> InterpretAggregateClassInfo(const std::shared_ptr<ChunkItem>& chunk) {
     std::vector<ChunkField> fields;
     const uint8_t* data = reinterpret_cast<const uint8_t*>(chunk->data.data());
@@ -1914,7 +1982,8 @@ inline std::vector<ChunkField> InterpretAggregateClassInfo(const std::shared_ptr
 
     return fields;
 }
-
+*/
+/*
 inline std::vector<ChunkField> InterpretTextureReplacerInfo(const std::shared_ptr<ChunkItem>& chunk) {
     std::vector<ChunkField> fields;
     const uint8_t* data = reinterpret_cast<const uint8_t*>(chunk->data.data());
@@ -1979,7 +2048,8 @@ inline std::vector<ChunkField> InterpretTextureReplacerInfo(const std::shared_pt
 
     return fields;
 }
-
+*/
+/*
 inline void InterpretSphereShaderStruct(std::vector<ChunkField>& fields, const uint8_t* data, size_t baseOffset) {
     const char* DepthCompareValues[] = {
         "Pass Never", "Pass Less", "Pass Equal", "Pass Less or Equal",
@@ -2021,8 +2091,9 @@ inline void InterpretSphereShaderStruct(std::vector<ChunkField>& fields, const u
     readEnum("DetailAlpha", data[baseOffset + 10], DetailAlphaValues, std::size(DetailAlphaValues));
     readEnum("AlphaTest", data[baseOffset + 12], AlphaTestValues, std::size(AlphaTestValues)); // skip ShaderPreset
 }
+*/
 
-
+/*
 inline std::vector<ChunkField> InterpretSphereHeader(const std::shared_ptr<ChunkItem>& chunk) {
     std::vector<ChunkField> fields;
     const uint8_t* data = reinterpret_cast<const uint8_t*>(chunk->data.data());
@@ -2075,11 +2146,12 @@ inline std::vector<ChunkField> InterpretSphereHeader(const std::shared_ptr<Chunk
     std::string tex(reinterpret_cast<const char*>(&data[0x74]), strnlen(reinterpret_cast<const char*>(&data[0x74]), 64));
     fields.push_back({ "TextureName", "string", tex });
     
-    InterpretSphereShaderStruct(fields, data, /* shaderOffset */ 0x94);
-   
-    return fields;
-}
+    InterpretSphereShaderStruct(fields, data, /* shaderOffset */// 0x94);
+  // 
+ //   return fields;
+//}
 
+/*
 inline std::vector<ChunkField> InterpretRingHeader(const std::shared_ptr<ChunkItem>& chunk) {
     std::vector<ChunkField> fields;
     const uint8_t* data = reinterpret_cast<const uint8_t*>(chunk->data.data());
@@ -2134,16 +2206,17 @@ inline std::vector<ChunkField> InterpretRingHeader(const std::shared_ptr<ChunkIt
     std::string tex(reinterpret_cast<const char*>(&data[0x74]), strnlen(reinterpret_cast<const char*>(&data[0x74]), 64));
     fields.push_back({ "TextureName", "string", tex });
 
-    InterpretSphereShaderStruct(fields, data, /* shaderOffset */ 0x94);
+    InterpretSphereShaderStruct(fields, data, /* shaderOffset */// 0x94);
 
     // TextureTileCount
-    fields.push_back({ "TextureTileCount", "uint8_t", std::to_string(*reinterpret_cast<const uint8_t*>(&data[0xA4])) });
+ //   fields.push_back({ "TextureTileCount", "uint8_t", std::to_string(*reinterpret_cast<const uint8_t*>(&data[0xA4])) });
     
 
 
-    return fields;
-}
+//    return fields;
+//}
 
+/*
 inline void InterpretMicroChunkKeyframes(
     std::vector<ChunkField>& fields,
     const std::vector<uint8_t>& data,
@@ -2198,7 +2271,8 @@ inline void InterpretMicroChunkKeyframes(
         index++;
     }
 }
-
+*/
+/*
 inline std::vector<ChunkField> InterpretSphereColorChannel(const std::shared_ptr<ChunkItem>& chunk) {
     std::vector<ChunkField> fields;
     InterpretMicroChunkKeyframes(fields, chunk->data, "ColorKey", 16,
@@ -2342,7 +2416,9 @@ inline std::vector<ChunkField> InterpretSphereMicrochunk(const std::shared_ptr<C
 
     return fields;
 }
+*/
 
+/*
 inline std::vector<ChunkField> InterpretRingMicrochunk(const std::shared_ptr<ChunkItem>& chunk, uint32_t parentChunkId) {
     std::vector<ChunkField> fields;
 
@@ -2413,14 +2489,14 @@ inline std::vector<ChunkField> InterpretRingMicrochunk(const std::shared_ptr<Chu
 
     return fields;
 }
-
+*/
 
 
 
 
 
     
-
+/*
 
 inline std::vector<ChunkField> InterpretSphereChannelChunk(const std::shared_ptr<ChunkItem>& chunk) {
     std::vector<ChunkField> result;
@@ -2461,8 +2537,9 @@ inline std::vector<ChunkField> InterpretSphereChannelChunk(const std::shared_ptr
 
     return result;
 }
+*/
 
-
+/*
 inline std::vector<ChunkField> InterpretRingChannelChunk(const std::shared_ptr<ChunkItem>& chunk) {
     std::vector<ChunkField> result;
 
@@ -2502,7 +2579,8 @@ inline std::vector<ChunkField> InterpretRingChannelChunk(const std::shared_ptr<C
 
     return result;
 }
-
+*/
+/*
 struct PackedW3dLight
 {
     uint32_t Attributes;
@@ -2512,7 +2590,8 @@ struct PackedW3dLight
     uint8_t  SpecularR, SpecularG, SpecularB, SpecularPad;
     float    Intensity;
 };
-
+*/
+/*
 inline std::vector<ChunkField> InterpretLightInfo(
     const std::shared_ptr<ChunkItem>& chunk
 ) {
@@ -2562,7 +2641,8 @@ inline std::vector<ChunkField> InterpretLightInfo(
 
     return fields;
 }
-
+*/
+/*
 struct PackedW3dSpotLight
 {
     float SpotDirX;      // W3dVectorStruct
@@ -2571,7 +2651,8 @@ struct PackedW3dSpotLight
     float SpotAngle;     // in radians
     float SpotExponent;  // falloff exponent
 };
-
+*/
+/*
 inline std::vector<ChunkField> InterpretSpotLightInfo(
     const std::shared_ptr<ChunkItem>& chunk
 ) {
@@ -2600,14 +2681,15 @@ inline std::vector<ChunkField> InterpretSpotLightInfo(
 
     return fields;
 }
-
-
+*/
+/*
 struct PackedW3dLightAttenuation
 {
     float Start;
     float End;
 };
-
+*/
+/*
 inline std::vector<ChunkField> InterpretNearAtten(
     const std::shared_ptr<ChunkItem>& chunk
 ) {
@@ -2643,12 +2725,15 @@ inline std::vector<ChunkField> InterpretFarAtten(
 
     return fields;
 }
+*/
 
+/*
 struct PackedW3dLightTransform
 {
     float Transform[3][4];
 };
-
+*/
+/*
 inline std::vector<ChunkField> InterpretLightTransform(
     const std::shared_ptr<ChunkItem>& chunk
 ) {
@@ -2674,7 +2759,9 @@ inline std::vector<ChunkField> InterpretLightTransform(
 
     return fields;
 }
+*/
 
+/*
 inline std::vector<ChunkField> InterpretDazzleName(
     const std::shared_ptr<ChunkItem>& chunk
 ) {
@@ -2705,7 +2792,8 @@ inline std::vector<ChunkField> InterpretDazzleTypeName(
     fields.push_back({ "Dazzle Type Name", "string", s });
     return fields;
 }
-
+*/
+/*
 struct PackedW3dSoundRObjHeader
 {
     uint32_t Version;
@@ -2713,7 +2801,8 @@ struct PackedW3dSoundRObjHeader
     uint32_t Flags;
     uint32_t Padding[8];     // skip
 };
-
+*/
+/*
 inline std::vector<ChunkField> InterpretSoundRObjHeader(
     const std::shared_ptr<ChunkItem>& chunk
 ) {
@@ -2753,8 +2842,8 @@ inline std::vector<ChunkField> InterpretSoundRObjHeader(
 
     return fields;
 }
-
-
+*/
+/*
 inline std::vector<ChunkField> InterpretSoundRObjDefinition(
     const std::shared_ptr<ChunkItem>& chunk
 ) {
@@ -2918,10 +3007,10 @@ inline std::vector<ChunkField> InterpretSoundRObjDefinition(
 
     return fields;
 }
+*/
 
 
-
-
+/*
 std::vector<ChunkField> InterpretARGS(const std::shared_ptr<ChunkItem>& chunk) {
     
     std::string name(
@@ -2943,7 +3032,8 @@ std::vector<ChunkField> InterpretARGS(const std::shared_ptr<ChunkItem>& chunk) {
     }
 }
 
-
+*/
+/*
 inline std::vector<ChunkField> InterpretDIG(const std::shared_ptr<ChunkItem>& chunk) {
     std::vector<ChunkField> fields;
     if (!chunk) {
@@ -2976,7 +3066,8 @@ inline std::vector<ChunkField> InterpretDIG(const std::shared_ptr<ChunkItem>& ch
 
     return fields;
 }
-
+*/
+/*
 inline std::vector<ChunkField> InterpretSCG(const std::shared_ptr<ChunkItem>& chunk) {
     std::vector<ChunkField> fields;
     if (!chunk) {
@@ -3009,8 +3100,8 @@ inline std::vector<ChunkField> InterpretSCG(const std::shared_ptr<ChunkItem>& ch
 
     return fields;
 }
-
-
+*/
+/*
 inline std::vector<ChunkField> InterpretPerFaceTexcoordIds(
     const std::shared_ptr<ChunkItem>& chunk
 ) {
@@ -3050,7 +3141,8 @@ inline std::vector<ChunkField> InterpretPerFaceTexcoordIds(
 
     return fields;
 }
-
+*/
+/*
 inline std::vector<ChunkField> InterpretMorphAnimHeader(
     const std::shared_ptr<ChunkItem>& chunk
 ) {
@@ -3098,7 +3190,8 @@ inline std::vector<ChunkField> InterpretMorphAnimHeader(
 
     return fields;
 }
-
+*/
+/*
 inline std::vector<ChunkField> InterpretMorphAnimPoseName(
     const std::shared_ptr<ChunkItem>& chunk
 ) {
@@ -3123,6 +3216,8 @@ inline std::vector<ChunkField> InterpretMorphAnimPoseName(
     fields.push_back({ "PoseName", "string", name });
     return fields;
 }
+*/
+/*
 inline std::vector<ChunkField> InterpretMorphAnimKeyData(
     const std::shared_ptr<ChunkItem>& chunk
 ) {
@@ -3158,7 +3253,8 @@ inline std::vector<ChunkField> InterpretMorphAnimKeyData(
 
     return fields;
 }
-
+*/
+/*
 inline std::vector<ChunkField> InterpretMorphAnimPivotChannelData(
     const std::shared_ptr<ChunkItem>& chunk
 ) {
@@ -3194,7 +3290,8 @@ inline std::vector<ChunkField> InterpretMorphAnimPivotChannelData(
 
     return fields;
 }
-
+*/
+/*
 inline std::vector<ChunkField> InterpretShadowNode(
     const std::shared_ptr<ChunkItem>& chunk
 ) {
@@ -3220,7 +3317,8 @@ inline std::vector<ChunkField> InterpretShadowNode(
 
     return fields;
 }
-
+*/
+/*
 inline std::vector<ChunkField> InterpretLODModelHeader(
     const std::shared_ptr<ChunkItem>& chunk
 ) {
@@ -3255,7 +3353,8 @@ inline std::vector<ChunkField> InterpretLODModelHeader(
 
     return fields;
 }
-
+*/
+/*
 inline std::vector<ChunkField> InterpretLOD(
     const std::shared_ptr<ChunkItem>& chunk
 ) {
@@ -3289,8 +3388,8 @@ inline std::vector<ChunkField> InterpretLOD(
 
     return fields;
 }
-
-
+*/
+/*
 inline std::vector<ChunkField> InterpretCollectionHeader(
     const std::shared_ptr<ChunkItem>& chunk
 ) {
@@ -3327,7 +3426,8 @@ inline std::vector<ChunkField> InterpretCollectionHeader(
 
     return fields;
 }
-
+*/
+/*
 inline std::vector<ChunkField> InterpretCollectionObjName(
     const std::shared_ptr<ChunkItem>& chunk
 ) {
@@ -3350,10 +3450,10 @@ inline std::vector<ChunkField> InterpretCollectionObjName(
     fields.emplace_back("ObjectName", "string", name);
     return fields;
 }
+*/
 
 
-
-
+/*
 inline std::vector<ChunkField> InterpretPlaceHolder(
     const std::shared_ptr<ChunkItem>& chunk
 ) {
@@ -3411,8 +3511,8 @@ inline std::vector<ChunkField> InterpretPlaceHolder(
 
     return fields;
 }
-
-
+*/
+/*
 inline std::vector<ChunkField> InterpretTransformNode(
     const std::shared_ptr<ChunkItem>& chunk
 ) {
@@ -3463,8 +3563,8 @@ inline std::vector<ChunkField> InterpretTransformNode(
 
     return fields;
 }
-
-
+*/
+/*
 inline std::vector<ChunkField> InterpretPoints(
     const std::shared_ptr<ChunkItem>& chunk
 ) {
@@ -3503,8 +3603,8 @@ inline std::vector<ChunkField> InterpretPoints(
 
     return fields;
 }
-
-
+*/
+/*
 inline std::vector<ChunkField> InterpretEmitterColorKeyframe(
     const std::shared_ptr<ChunkItem>& chunk
 ) {
@@ -3627,6 +3727,9 @@ inline std::vector<ChunkField> InterpretEmitterSizeKeyframe(
 
     return fields;
 }
+*/
+
+/*
 inline std::vector<ChunkField> InterpretEmitterLineProperties(
     const std::shared_ptr<ChunkItem>& chunk
 ) {
@@ -3702,6 +3805,9 @@ inline std::vector<ChunkField> InterpretEmitterLineProperties(
 
     return fields;
 }
+*/
+
+/*
 
 inline std::vector<ChunkField> InterpretEmitterBlurTimeKeyframes(
     const std::shared_ptr<ChunkItem>& chunk
@@ -3751,6 +3857,8 @@ inline std::vector<ChunkField> InterpretEmitterBlurTimeKeyframes(
 
     return fields;
 }
+*/
+/*
 inline std::vector<ChunkField> InterpretNullObject(
     const std::shared_ptr<ChunkItem>& chunk
 ) {
@@ -3794,6 +3902,8 @@ inline std::vector<ChunkField> InterpretNullObject(
 
     return fields;
 }
+*/
+/*
 inline std::vector<ChunkField> InterpretHModelNode(
     const std::shared_ptr<ChunkItem>& chunk
 ) {
@@ -3816,6 +3926,7 @@ inline std::vector<ChunkField> InterpretHModelNode(
     fields.push_back({ "PivotIdx",  "uint16", std::to_string(pivot) });
     return fields;
 }
+
 
 // Specific wrappers to give the right label:
 inline std::vector<ChunkField> InterpretNode(
@@ -3842,7 +3953,8 @@ inline std::vector<ChunkField> InterpretSkinNode(
     if (!f.empty()) f[0].field = "SkinMeshName";
     return f;
 }
-
+*/
+/*
 inline std::vector<ChunkField> InterpretPS2Shaders(
     const std::shared_ptr<ChunkItem>& chunk
 ) {
@@ -3895,7 +4007,7 @@ inline std::vector<ChunkField> InterpretPS2Shaders(
 
     return fields;
 }
-
+*/
 
 
 

@@ -19,18 +19,10 @@
 #include <QDir>
 #include <QFileInfo>
 #include <QAction>
+#include "backend/W3DMesh.h"
 
 Q_DECLARE_METATYPE(void*)
 
-//static std::string LabelForChunk(uint32_t id) {
-//    std::string name = GetChunkName(id);
-//    if (name == "UNKNOWN") {
-//        std::ostringstream fallback;
-//        fallback << "0x" << std::hex << id;
-//        return fallback.str();
-//    }
-//    return name;
-//}
 
 MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     // Menu bar
@@ -227,12 +219,12 @@ void MainWindow::handleTreeSelection() {
             << std::hex << wrapperId
             << " header=0x" << headerId << std::dec << "\n";
 
-        if (headerId == SPHERE_ID) {
-            fields = InterpretSphereMicrochunk(target, wrapperId);
-        }
-        else if (headerId == RING_ID) {
-            fields = InterpretRingMicrochunk(target, wrapperId);
-        }
+     //   if (headerId == SPHERE_ID) {
+     //       fields = InterpretSphereMicrochunk(target, wrapperId);
+     //   }
+     //   else if (headerId == RING_ID) {
+      //      fields = InterpretRingMicrochunk(target, wrapperId);
+      //  }
     }
     // Skip remaining chunk-wrapper child summary if we've interpreted real data
     if (!fields.empty()) goto show_table;
@@ -268,44 +260,42 @@ void MainWindow::handleTreeSelection() {
         case 0x0102: fields = InterpretPivots(target); break;
         case 0x0103: fields = InterpretPivotFixups(target); break;
         case 0x001F: fields = InterpretMeshHeader3(target); break;
-        case 0x0002: {
-            uint32_t pid = target->parent ? target->parent->id : 0;
-            if (pid == 0x0741) {
-                fields = InterpretSphereMicrochunk(target, target->id);
-            }
-            if (pid == 0x0742) {
-                fields = InterpretRingMicrochunk(target, target->id);
-            }
-            else {
-                fields = InterpretVertices(target);
-            }
-            break;
-        }
-        case 0x0003: {
-            uint32_t pid = target->parent ? target->parent->id : 0;
-            if (pid == 0x0741) {
-                fields = InterpretSphereMicrochunk(target, target->id);
-            }
-            if (pid == 0x0742) {
-                fields = InterpretRingMicrochunk(target, target->id);
-            }
-            else {
-                fields = InterpretVertexNormals(target);
-            }
-            break;
-        }
-        case 0x003B: fields = InterpretDiffuseColorChunk(target); break;
+        case 0x0002: fields = InterpretVertices(target); break;
+        case 0x0003: fields = InterpretVertexNormals(target); break;
+            // case 0x0002: {
+       //     uint32_t pid = target->parent ? target->parent->id : 0;
+       //     if (pid == 0x0741) {
+       //         fields = InterpretSphereChannel(target, target->id);
+       //     }
+       //     if (pid == 0x0742) {
+       //         fields = InterpretRingChannel(target, target->id);
+       //     }
+       //     else {
+       //         fields = InterpretVertices(target);
+       //     }
+       //     break;
+       // }
+       // case 0x0003: {
+      //      uint32_t pid = target->parent ? target->parent->id : 0;
+       //     if (pid == 0x0741) {
+       //         fields = InterpretSphereChannel(target, target->id);
+        //    }
+        //    if (pid == 0x0742) {
+        //        fields = InterpretRingChannel(target, target->id);
+         //   }
+        //    else {
+        //        fields = InterpretVertexNormals(target);
+        //    }
+        //    break;
+       // }
+        case 0x003B: fields = InterpretDCG(target); break;
         case 0x00000020: fields = InterpretTriangles(target); break;
         case 0x00000022: fields = InterpretVertexShadeIndices(target); break;
-        case 0x0024: fields = InterpretPrelitVertexWrapper(target); break;
-        case 0x0026: fields = InterpretLightmapMultiTexture(target); break;
         case 0x00000028: fields = InterpretMaterialInfo(target); break;
         case 0x0282: fields = InterpretCompressedAnimationChannel(target, (flavor != 0xFFFF ? flavor : 0)); break;
         case 0x0000002C: fields = InterpretVertexMaterialName(target); break;
         case 0x0000002D: fields = InterpretVertexMaterialInfo(target); break;
         case 0x0301: fields = InterpretHModelHeader(target); break;
-       // case 0x0310: fields = InterpretShaderName(target); break;
-       // case 0x0311: fields = InterpretShaderDetail(target); break;
 		case 0x0302: fields = InterpretNode(target); break;
 		case 0x0303: fields = InterpretCollisionNode(target); break;
 		case 0x0304: fields = InterpretSkinNode(target); break;
@@ -315,12 +305,11 @@ void MainWindow::handleTreeSelection() {
         case 0x0033: fields = InterpretTextureInfo(target); break;
         case 0x0039: fields = InterpretVertexMaterialIDs(target); break;
         case 0x003A: fields = InterpretShaderIDs(target); break;
-        case 0x0048: fields = InterpretTextureStage(target); break;
         case 0x0049: fields = InterpretTextureIDs(target); break;
         case 0x004a: fields = InterpretStageTexCoords(target); break;
         case 0x0058: fields = InterpretDeform(target); break;
         case 0x0059: fields = InterpretDeformSet(target); break;
-        case 0x005A: fields = InterpretDeformKeyframe(target); break;
+        case 0x005A: fields = InterpretDeformKeyframes(target); break;
         case 0x005B: fields = InterpretDeformData(target); break;
         case 0x0091: fields = InterpretAABTreeHeader(target); break;
         case 0x0092: fields = InterpretAABTreePolyIndices(target); break;
@@ -332,13 +321,11 @@ void MainWindow::handleTreeSelection() {
         case 0x0505: fields = InterpretEmitterProps(target); break;
         case 0x050A: fields = InterpretEmitterRotationKeys(target); break;
         case 0x050B: fields = InterpretEmitterFrameKeys(target); break;
-        case 0x0500: fields = InterpretEmitter(target); break;
         case 0x0601: fields = InterpretAggregateHeader(target); break;
         case 0x0602: fields = InterpretAggregateInfo(target); break;
         case 0x0603: fields = InterpretTextureReplacerInfo(target); break;
         case 0x0604: fields = InterpretAggregateClassInfo(target); break;
         case 0x0701: fields = InterpretHLODHeader(target); break;
-        case 0x0702: fields = InterpretHLODLODArray(target); break;
         case 0x0703: fields = InterpretHLODSubObjectArrayHeader(target); break;
         case 0x0704: fields = InterpretHLODSubObject_LodArray(target); break;
         case 0x0001: {
@@ -363,15 +350,15 @@ void MainWindow::handleTreeSelection() {
         case 0x000E: fields = InterpretVertexInfluences(target); break;
         case 0x0740: fields = InterpretBox(target); break;
         case 0x000C: fields = InterpretMeshUserText(target); break;
-        case 0x00000004: fields = InterpretRingChannelChunk(target); break;
-        case 0x00000005: fields = InterpretSphereChannelChunk(target); break;
+       // case 0x00000004: fields = InterpretRingChannel(target); break;
+        case 0x00000005: fields = InterpretSphereChannel(target); break;
         {
             uint32_t pid = target->parent ? target->parent->id : 0;
             if (pid == 0x0741) {
-                fields = InterpretSphereChannelChunk(target);
+                fields = InterpretSphereChannel(target);
             }
             else if (pid == 0x0742) {
-                fields = InterpretRingChannelChunk(target);
+                fields = InterpretRingChannel(target);
 
             }
             break;
@@ -385,8 +372,8 @@ void MainWindow::handleTreeSelection() {
 		case 0x902: fields = InterpretDazzleTypeName(target); break;
 		case 0xa01: fields = InterpretSoundRObjHeader(target); break;
         case 0x100: fields = InterpretSoundRObjDefinition(target); break;
-        case 0x02E: fields = InterpretARGS(target); break;
-        case 0x02F: fields = InterpretARGS(target); break;
+        case 0x02E: fields = InterpretARG0(target); break;
+        case 0x02F: fields = InterpretARG1(target); break;
 		case 0x03C: fields = InterpretDIG(target); break;
         case 0x03E: fields = InterpretSCG(target); break;
         case 0x04B: fields = InterpretPerFaceTexcoordIds(target); break;
@@ -395,7 +382,7 @@ void MainWindow::handleTreeSelection() {
 		case 0x2C3: fields = InterpretMorphAnimPoseName(target); break;
 		case 0x2C4: fields = InterpretMorphAnimKeyData(target); break;
 		case 0x2C5: fields = InterpretMorphAnimPivotChannelData(target); break;
-		case 0x306: fields = InterpretShadowNode(target); break;
+		case 0x306: fields = InterpretHModelNode(target); break;
 		case 0x401: fields = InterpretLODModelHeader(target); break;
 		case 0x402: fields = InterpretLOD(target); break;
 		case 0x421: fields = InterpretCollectionHeader(target); break;
@@ -495,7 +482,7 @@ void MainWindow::OpenRecentFile() {
 
 
 
-extern void recursePrint(const std::shared_ptr<ChunkItem>& c, int depth, std::ostream& out);
+//extern void recursePrint(const std::shared_ptr<ChunkItem>& c, int depth, std::ostream& out);
 
 
 
