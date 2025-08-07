@@ -24,7 +24,228 @@ inline std::string FormatVersion(uint32_t ver) {
 	return std::to_string(major) + "." + std::to_string(minor);
 }
 
+// a tiny fluent helper to build up a vector<ChunkField>
+struct ChunkFieldBuilder {
+	std::vector<ChunkField>& F;
 
+	explicit ChunkFieldBuilder(std::vector<ChunkField>& out) : F(out) {}
+
+	// push any field
+	void Push(std::string name, std::string type, std::string val) {
+		F.emplace_back(std::move(name), std::move(type), std::move(val));
+	}
+
+	// push a Version field, formatted a.b
+	void Version(std::string name, uint32_t raw) {
+		Push(std::move(name), "string", FormatVersion(raw));
+	}
+
+	// push fixed-length W3D_NAME_LEN names
+	void Name(const char* fieldName, const char* rawName, size_t maxLen = W3D_NAME_LEN) {
+		F.emplace_back(
+			fieldName,
+			"string",
+			FormatName(rawName, maxLen)
+	}
+	//push null-terminated string
+	void NullTerm(std::string fieldName,
+		const char* dataPtr,
+		size_t chunkBytes,
+		size_t maxLen = 256)
+	{
+		// Only scan at most chunkBytes, and also cap at maxLen
+		size_t scanLen = std::min(chunkBytes, maxLen);
+		size_t realLen = std::strnlen(dataPtr, scanLen);
+		Push(std::move(fieldName), "string", std::string(dataPtr, realLen));
+	}
+
+	// Push RGB
+	void RGB(std::string name, const W3dRGBStruct& c) {
+		std::ostringstream o;
+		o << int(c.R) << " " << int(c.G) << " " << int(c.B);
+		Push(std::move(name), "RGB", o.str());
+	}
+
+	void RGBA(std::string name, const W3dRGBAStruct& c) {
+		Push(std::move(name), "RGBA",
+			std::to_string(c.R) + " " + std::to_string(c.G) + " " + std::to_string(c.B) + " " + std::to_string(c.A));
+	}
+	
+	// push a uint16 in decimal
+	void UInt16(std::string name, uint16_t v) {
+		Push(std::move(name), "uint16", std::to_string(v));
+	}
+
+	// push a uint32 in decimal
+	void UInt32(std::string name, uint32_t v) {
+		Push(std::move(name), "uint32", std::to_string(v));
+	}
+
+	// push a singed int32 in decimal
+	void Int32(std::string name, int32_t v) {
+		Push(std::move(name), "int32", std::to_string(v));
+	}
+
+	// push an array of int32: name, concatenated values, type "int32[n]"
+	void UInt32Array(const std::string& name, const int32_t* arr, size_t count) {
+		std::ostringstream oss;
+		for (size_t i = 0; i < count; ++i) {
+			if (i) oss << ' ';
+			oss << arr[i];
+		}
+		Push(name, "int32[" + std::to_string(count) + "]", oss.str());
+	}
+
+	// push a flag if bit is set
+	void Flag(uint32_t bits, uint32_t mask, const char* flagName) {
+		if (bits & mask) Push("Attributes", "flag", flagName);
+
+		// New helper for PrelitVersion style 
+		// if the mask bit is not set             => "N/A"
+		// else if version==0                     => "UNKNOWN"
+		// else                                     => FormatVersion(version)
+	void Versioned(std::string name,
+		uint32_t bits,
+		uint32_t mask,
+		uint32_t version) {
+		if ((bits & mask) == 0) {
+			Push(std::move(name), "string", "N/A");
+		}
+		else if (version == 0) {
+			Push(std::move(name), "string", "UNKNOWN");
+		}
+		else {
+			Push(std::move(name), "string", FormatVersion(version));
+		}
+
+	// push a 3-component vector
+	void Vec3(std::string name, const W3dVectorStruct & v) {
+	Push(std::move(name), "vector3", FormatVec3(v));
+		}
+
+	void Vec3i(std::string name, const Vector3i& v) {
+		Push(std::move(name), "vector3i", FormatVec3(v));
+	}
+
+	void Float(std::string name, float v) {
+		Push(std::move(name), "float", FormatFloat(v));
+	}
+
+	// Shaders
+
+	void DepthCompare(const char* name, uint8_t raw) {
+		Push(name, "DepthCompare",
+			ToString(static_cast<::DepthCompare>(raw)));
+	}
+	void DepthMask(const char* name, uint8_t raw) {
+		Push(name, "DepthMask",
+			ToString(static_cast<DepthMask>(raw)));
+	}
+	void DestBlend(const char* name, uint8_t raw) {
+		Push(name, "DestBlend",
+			ToString(static_cast<DestBlend>(raw)));
+	}
+	void PriGradient(const char* name, uint8_t raw) {
+		Push(name, "PriGradient",
+			ToString(static_cast<PriGradient>(raw)));
+	}
+	void SecGradient(const char* name, uint8_t raw) {
+		Push(name, "SecGradient",
+			ToString(static_cast<SecGradient>(raw)));
+	}
+	void SrcBlend(const char* name, uint8_t raw) {
+		Push(name, "SrcBlend",
+			ToString(static_cast<SrcBlend>(raw)));
+	}
+	void Texturing(const char* name, uint8_t raw) {
+		Push(name, "Texturing",
+			ToString(static_cast<Texturing>(raw)));
+	}
+	void DetailColorFunc(const char* name, uint8_t raw) {
+		Push(name, "DetailColorFunc",
+			ToString(static_cast<DetailColorFunc>(raw)));
+	}
+	void DetailAlphaFunc(const char* name, uint8_t raw) {
+		Push(name, "DetailAlphaFunc",
+			ToString(static_cast<DetailAlphaFunc>(raw)));
+	}
+	void AlphaTest(const char* name, uint8_t raw) {
+		Push(name, "AlphaTest",
+			ToString(static_cast<AlphaTest>(raw)));
+	}
+	//ps2 shaders
+	void Ps2DepthCompare(const char* name, uint8_t raw) {
+		Push(name, "DepthCompare",
+			ToString(static_cast<DepthCompare>(raw)));
+	}
+	void Ps2DepthMask(const char* name, uint8_t raw) {
+		Push(name, "DepthMask",
+			ToString(static_cast<DepthMask>(raw)));
+	}
+	void Ps2PriGradient(const char* name, uint8_t raw) {
+		Push(name, "PriGradient",
+			ToString(static_cast<DepthCompare>(raw)));
+	}
+	void Ps2Texturing(const char* name, uint8_t raw) {
+		Push(name, "Texturing",
+			ToString(static_cast<Texturing>(raw)));
+	}
+	void Ps2AlphaTest(const char* name, uint8_t raw) {
+		Push(name, "AlphaTest",
+			ToString(static_cast<AlphaTest>(raw)));
+	}
+	void AParam(const char* name, uint8_t raw) {
+		Push(name, "AParam",
+			ToString(static_cast<AParam>(raw)));
+	}
+	void BParamCompare(const char* name, uint8_t raw) {
+		Push(name, "BParam",
+			ToString(static_cast<BParam>(raw)));
+	}
+	void CParam(const char* name, uint8_t raw) {
+		Push(name, "CParam",
+			ToString(static_cast<CParam>(raw)));
+	}
+	void DParam(const char* name, uint8_t raw) {
+		Push(name, "DParam",
+			ToString(static_cast<DParam>(raw)));
+	}
+
+
+	// Single UV (as vector2)
+	void TexCoord(std::string name, const W3dTexCoordStruct& tc) {
+		Push(std::move(name), "vector2", FormatTexCoord(tc));
+	}
+
+	// UV as separate components (optional, if you ever want it)
+	void TexCoordUV(std::string base, const W3dTexCoordStruct& tc) {
+		Push(base + ".U", "float", std::to_string(tc.U));
+		Push(base + ".V", "float", std::to_string(tc.V));
+	}
+
+	// Array of UVs from a pointer + count
+	void TexCoordArray(const char* base,
+		const W3dTexCoordStruct* ptr,
+		size_t count) {
+		for (size_t i = 0; i < count; ++i) {
+			TexCoord(std::string(base) + "[" + std::to_string(i) + "]", ptr[i]);
+		}
+	}
+	};
+
+
+
+inline std::string FormatTexCoord(const W3dTexCoordStruct& t) {
+	std::ostringstream oss;
+	oss << std::fixed << std::setprecision(6) << t.U << ' ' << t.V;
+	return oss.str();
+}
+
+inline std::string FormatFloat(float f) {
+	std::ostringstream oss;
+	oss << std::fixed << std::setprecision(6) << f;
+	return oss.str();
+}
 
 inline std::string FormatName(const char* name, size_t len) {
 
@@ -39,6 +260,15 @@ inline std::string FormatUInt32(uint32_t data) {
 inline std::string FormatUInt16(uint16_t data) {
 
 	return std::to_string(data);
+}
+
+
+inline std::string FormatRGBA(const W3dRGBAStruct& c) {
+	return "("
+		+ std::to_string(c.R) + " "
+		+ std::to_string(c.G) + " "
+		+ std::to_string(c.B) + " "
+		+ std::to_string(c.A) + ")";
 }
 
 struct ChunkField {

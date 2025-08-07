@@ -11,112 +11,120 @@ inline std::vector<ChunkField> InterpretMeshHeader3(const std::shared_ptr<ChunkI
         return fields;
     }
 
-    auto hdr = reinterpret_cast<const W3dMeshHeader3Struct*>(buf.data());
+    const auto* hdr = reinterpret_cast<const W3dMeshHeader3Struct*>(chunk->data.data());
     uint32_t attr = hdr->Attributes;
 
-
-    //--- Helpers --------------------------------------------------------
-    auto Push = [&](const char* k, const char* t, std::string v) {
-        fields.emplace_back(k, t, std::move(v));
-        };
-    auto Flag = [&](uint32_t m, const char* name) {
-        if (attr & m) Push("Attributes", "flag", name);
-        };
-
+    ChunkFieldBuilder B(fields);
 
     // --- Version -----------------------------------------------------------
-    Push("Version", "string", FormatVersion(hdr->Version));
+    B.Version("Version", hdr->Version);
 
     //--- Names ----------------------------------------------------------
-    Push("MeshName", "string", FormatName(hdr->MeshName, W3D_NAME_LEN));
-    Push("ContainerName", "string", FormatName(hdr->ContainerName, W3D_NAME_LEN));
+    B.Name("MeshName", hdr->MeshName);
+    B.Name("ContainerName", hdr->ContainerName);
 
     //--- Raw Attributes -----------------------------------------------
-    Push("Attributes", "uint32", FormatUInt32(attr));
+	B.UInt32("Attributes", hdr->Attributes);
 
 
     //--- Geometry type -----------------------------------------------
-    switch (attr & static_cast<uint32_t>(MeshAttr::W3D_MESH_FLAG_GEOMETRY_TYPE_MASK)) {
-    case static_cast<uint32_t>(MeshAttr::W3D_MESH_FLAG_GEOMETRY_TYPE_NORMAL):
-        Push("Attributes", "flag", "W3D_MESH_FLAG_GEOMETRY_TYPE_NORMAL"); break;
-    case static_cast<uint32_t>(MeshAttr::W3D_MESH_FLAG_GEOMETRY_TYPE_CAMERA_ALIGNED):
-        Push("Attributes", "flag", "W3D_MESH_FLAG_GEOMETRY_TYPE_CAMERA_ALIGNED"); break;
-    case static_cast<uint32_t>(MeshAttr::W3D_MESH_FLAG_GEOMETRY_TYPE_SKIN):
-        Push("Attributes", "flag", "W3D_MESH_FLAG_GEOMETRY_TYPE_SKIN"); break;
-    case static_cast<uint32_t>(MeshAttr::W3D_MESH_FLAG_GEOMETRY_TYPE_AABOX):
-        Push("Attributes", "flag", "W3D_MESH_FLAG_GEOMETRY_TYPE_AABOX"); break;
-    case static_cast<uint32_t>(MeshAttr::W3D_MESH_FLAG_GEOMETRY_TYPE_OBBOX):
-        Push("Attributes", "flag", "W3D_MESH_FLAG_GEOMETRY_TYPE_OBBOX"); break;
-    default:
-        break;
-    }
+    static constexpr std::pair<MeshAttr, const char*> geomTypes[] = {
+        { MeshAttr::W3D_MESH_FLAG_GEOMETRY_TYPE_NORMAL,        "W3D_MESH_FLAG_GEOMETRY_TYPE_NORMAL" },
+        { MeshAttr::W3D_MESH_FLAG_GEOMETRY_TYPE_CAMERA_ALIGNED,"W3D_MESH_FLAG_GEOMETRY_TYPE_CAMERA_ALIGNED" },
+        { MeshAttr::W3D_MESH_FLAG_GEOMETRY_TYPE_SKIN,          "W3D_MESH_FLAG_GEOMETRY_TYPE_SKIN" },
+        { MeshAttr::W3D_MESH_FLAG_GEOMETRY_TYPE_AABOX,         "W3D_MESH_FLAG_GEOMETRY_TYPE_AABOX" },
+        { MeshAttr::W3D_MESH_FLAG_GEOMETRY_TYPE_OBBOX,         "W3D_MESH_FLAG_GEOMETRY_TYPE_OBBOX" },
+    };
 
     //--- Collision types ---------------------------------------------
-    Flag(static_cast<uint32_t>(MeshAttr::W3D_MESH_FLAG_COLLISION_TYPE_PHYSICAL), "W3D_MESH_FLAG_COLLISION_TYPE_PHYSICAL");
-    Flag(static_cast<uint32_t>(MeshAttr::W3D_MESH_FLAG_COLLISION_TYPE_PROJECTILE), "W3D_MESH_FLAG_COLLISION_TYPE_PROJECTILE");
-    Flag(static_cast<uint32_t>(MeshAttr::W3D_MESH_FLAG_COLLISION_TYPE_VIS), "W3D_MESH_FLAG_COLLISION_TYPE_VIS");
-    Flag(static_cast<uint32_t>(MeshAttr::W3D_MESH_FLAG_COLLISION_TYPE_CAMERA), "W3D_MESH_FLAG_COLLISION_TYPE_CAMERA");
-    Flag(static_cast<uint32_t>(MeshAttr::W3D_MESH_FLAG_COLLISION_TYPE_VEHICLE), "W3D_MESH_FLAG_COLLISION_TYPE_VEHICLE");
+    static constexpr std::pair<MeshAttr, const char*> collTypes[] = {
+        { MeshAttr::W3D_MESH_FLAG_COLLISION_TYPE_PHYSICAL,   "W3D_MESH_FLAG_COLLISION_TYPE_PHYSICAL" },
+        { MeshAttr::W3D_MESH_FLAG_COLLISION_TYPE_PROJECTILE, "W3D_MESH_FLAG_COLLISION_TYPE_PROJECTILE" },
+        { MeshAttr::W3D_MESH_FLAG_COLLISION_TYPE_VIS,        "W3D_MESH_FLAG_COLLISION_TYPE_VIS" },
+        { MeshAttr::W3D_MESH_FLAG_COLLISION_TYPE_CAMERA,     "W3D_MESH_FLAG_COLLISION_TYPE_CAMERA" },
+        { MeshAttr::W3D_MESH_FLAG_COLLISION_TYPE_VEHICLE,    "W3D_MESH_FLAG_COLLISION_TYPE_VEHICLE" },
+    };
 
     //--- Other flags -------------------------------------------------
-    Flag(static_cast<uint32_t>(MeshAttr::W3D_MESH_FLAG_HIDDEN), "W3D_MESH_FLAG_HIDDEN");
-    Flag(static_cast<uint32_t>(MeshAttr::W3D_MESH_FLAG_TWO_SIDED), "W3D_MESH_FLAG_TWO_SIDED");
-    Flag(static_cast<uint32_t>(MeshAttr::W3D_MESH_FLAG_CAST_SHADOW), "W3D_MESH_FLAG_CAST_SHADOW");
-    Flag(static_cast<uint32_t>(MeshAttr::W3D_MESH_FLAG_SHATTERABLE), "W3D_MESH_FLAG_SHATTERABLE");
-    Flag(static_cast<uint32_t>(MeshAttr::W3D_MESH_FLAG_NPATCHABLE), "W3D_MESH_FLAG_NPATCHABLE");
-    Flag(static_cast<uint32_t>(MeshAttr::W3D_MESH_FLAG_PRELIT_UNLIT), "W3D_MESH_FLAG_PRELIT_UNLIT");
-    Flag(static_cast<uint32_t>(MeshAttr::W3D_MESH_FLAG_PRELIT_VERTEX), "W3D_MESH_FLAG_PRELIT_VERTEX");
-    Flag(static_cast<uint32_t>(MeshAttr::W3D_MESH_FLAG_PRELIT_LIGHTMAP_MULTI_PASS), "W3D_MESH_FLAG_PRELIT_LIGHTMAP_MULTI_PASS");
-    Flag(static_cast<uint32_t>(MeshAttr::W3D_MESH_FLAG_PRELIT_LIGHTMAP_MULTI_TEXTURE), "W3D_MESH_FLAG_PRELIT_LIGHTMAP_MULTI_TEXTURE");
+    static constexpr std::pair<MeshAttr, const char*> otherTypes[] = {
+        { MeshAttr::W3D_MESH_FLAG_HIDDEN,                         "W3D_MESH_FLAG_HIDDEN" },
+        { MeshAttr::W3D_MESH_FLAG_TWO_SIDED,                      "W3D_MESH_FLAG_TWO_SIDED" },
+        { MeshAttr::W3D_MESH_FLAG_CAST_SHADOW,                    "W3D_MESH_FLAG_CAST_SHADOW" },
+        { MeshAttr::W3D_MESH_FLAG_SHATTERABLE,                    "W3D_MESH_FLAG_SHATTERABLE" },
+        { MeshAttr::W3D_MESH_FLAG_NPATCHABLE,                     "W3D_MESH_FLAG_NPATCHABLE" },
+        { MeshAttr::W3D_MESH_FLAG_PRELIT_UNLIT,                   "W3D_MESH_FLAG_PRELIT_UNLIT" },
+        { MeshAttr::W3D_MESH_FLAG_PRELIT_VERTEX,                  "W3D_MESH_FLAG_PRELIT_VERTEX" },
+        { MeshAttr::W3D_MESH_FLAG_PRELIT_LIGHTMAP_MULTI_PASS,     "W3D_MESH_FLAG_PRELIT_LIGHTMAP_MULTI_PASS" },
+        { MeshAttr::W3D_MESH_FLAG_PRELIT_LIGHTMAP_MULTI_TEXTURE,  "W3D_MESH_FLAG_PRELIT_LIGHTMAP_MULTI_TEXTURE" },
+    };
+
+    // Loop each group:
+    for (auto [maskEnum, name] : geomTypes) {
+        B.Flag(attr, uint32_t(maskEnum), name);
+    }
+    for (auto [maskEnum, name] : collTypes) {
+        B.Flag(attr, uint32_t(maskEnum), name);
+    }
+    for (auto [maskEnum, name] : otherTypes) {
+        B.Flag(attr, uint32_t(maskEnum), name);
+    }
+
 
     //--- Counts, Sorting & Bounds ------------------------------------
-    Push("NumTris", "uint32", std::to_string(hdr->NumTris));
-    Push("NumVertices", "uint32", std::to_string(hdr->NumVertices));
-    Push("NumMaterials", "uint32", std::to_string(hdr->NumMaterials));
-    Push("NumDamageStages", "uint32", std::to_string(hdr->NumDamageStages));
+    B.UInt32("NumTris", hdr->NumTris);
+    B.UInt32("NumVertices", hdr->NumVertices);
+    B.UInt32("NumMaterials", hdr->NumMaterials);
+    B.UInt32("NumDamageStages", hdr->NumDamageStages);
 
     // SortLevel
-    if (hdr->SortLevel == static_cast<int32_t>(SortLevel::SORT_LEVEL_NONE))
-        Push("SortLevel", "string", "NONE");
-    else
-        Push("SortLevel", "int32", std::to_string(hdr->SortLevel));
+    if (hdr->SortLevel == static_cast<int32_t>(SortLevel::SORT_LEVEL_NONE)) {
+        B.Push("SortLevel", "string", "NONE");
+    }
+    else {
+        B.Push("SortLevel", "int32", std::to_string(hdr->SortLevel));
+    }
 
     // PrelitVersion
     constexpr auto PRELIT_MASK = static_cast<uint32_t>(MeshAttr::W3D_MESH_FLAG_PRELIT_MASK);
-    std::string prelit = (attr & PRELIT_MASK)
-        ? (hdr->PrelitVersion ? FormatVersion(hdr->PrelitVersion) : "UNKNOWN")
-        : "N/A";
-    Push("PrelitVersion", "string", prelit);
+    B.Versioned("PrelitVersion", attr, PRELIT_MASK, hdr->PrelitVersion);
 
     // FutureCounts
-
-    Push("FutureCounts", "uint32", std::to_string(hdr->FutureCounts[0]));
+	B.UInt32("FutureCounts[0]", hdr->FutureCounts[0]);
 
     //--- VertexChannels ---------------------------------------------
     uint32_t vc = hdr->VertexChannels;
-    Push("VertexChannels", "uint32", std::to_string(vc));
+    B.UInt32("VertexChannels", vc);
 
-    auto FlagVC = [&](uint32_t mask, const char* name) {
-        if (vc & mask) Push("VertexChannels", "flag", name);
-        };
+    // for each bit in the enum, if set push a flag
+    static constexpr std::pair<VertexChannelAttr, const char*> VCFlags[] = {
+        { VertexChannelAttr::W3D_VERTEX_CHANNEL_LOCATION, "W3D_VERTEX_CHANNEL_LOCATION" },
+        { VertexChannelAttr::W3D_VERTEX_CHANNEL_NORMAL,   "W3D_VERTEX_CHANNEL_NORMAL"   },
+        { VertexChannelAttr::W3D_VERTEX_CHANNEL_TEXCOORD, "W3D_VERTEX_CHANNEL_TEXCOORD" },
+        { VertexChannelAttr::W3D_VERTEX_CHANNEL_COLOR,    "W3D_VERTEX_CHANNEL_COLOR"    },
+        { VertexChannelAttr::W3D_VERTEX_CHANNEL_BONEID,   "W3D_VERTEX_CHANNEL_BONEID"   },
+    };
 
-    auto VC = [](VertexChannelAttr e) { return static_cast<uint32_t>(e); };
-    FlagVC(VC(VertexChannelAttr::W3D_VERTEX_CHANNEL_LOCATION), "W3D_VERTEX_CHANNEL_LOCATION");
-    FlagVC(VC(VertexChannelAttr::W3D_VERTEX_CHANNEL_NORMAL), "W3D_VERTEX_CHANNEL_NORMAL");
-    FlagVC(VC(VertexChannelAttr::W3D_VERTEX_CHANNEL_TEXCOORD), "W3D_VERTEX_CHANNEL_TEXCOORD");
-    FlagVC(VC(VertexChannelAttr::W3D_VERTEX_CHANNEL_COLOR), "W3D_VERTEX_CHANNEL_COLOR");
-    FlagVC(VC(VertexChannelAttr::W3D_VERTEX_CHANNEL_BONEID), "W3D_VERTEX_CHANNEL_BONEID");
+    for (auto [e, name] : VCFlags) {
+        B.Flag(vc, static_cast<uint32_t>(e), name);
+    }
 
     //--- FaceChannels -----------------------------------------------
-    Push("FaceChannels", "uint32", std::to_string(hdr->FaceChannels));
-    if (hdr->FaceChannels & W3D_FACE_CHANNEL_FACE)
-        Push("FaceChannels", "flag", "W3D_FACE_CHANNEL_FACE");
+    B.UInt32("FaceChannels", hdr->FaceChannels);
+
+    // We only have one right now, but this pattern is extensible
+    static constexpr std::pair<uint32_t, const char*> FCFlags[] = {
+        { W3D_FACE_CHANNEL_FACE, "W3D_FACE_CHANNEL_FACE" }
+    };
+
+    for (auto [mask, name] : FCFlags) {
+        B.Flag(hdr->FaceChannels, mask, name);
+    }
 
     //--- Bounds --------------------------------------------------------
-    Push("Min", "vector3", FormatVec3(hdr->Min));
-    Push("Max", "vector3", FormatVec3(hdr->Max));
-    Push("SphCenter", "vector3", FormatVec3(hdr->SphCenter));
-    Push("SphRadius", "float", std::to_string(hdr->SphRadius));
+    B.Vec3("Min", hdr->Min);
+    B.Vec3("Max", hdr->Max);
+    B.Vec3("SphCenter", hdr->SphCenter);
+    B.Float("SphRadius", hdr->SphRadius);
 
     return fields;
 }
@@ -127,29 +135,27 @@ inline std::vector<ChunkField> InterpretVertices(const std::shared_ptr<ChunkItem
     std::vector<ChunkField> fields;
     if (!chunk) return fields;
 
-    auto const& buf = chunk->data;
+    const auto& buf = chunk->data;
     constexpr size_t ElemSize = sizeof(W3dVectorStruct);
     if (buf.size() % ElemSize != 0) {
         fields.emplace_back(
             "error", "string",
-            "Malformed chunk: size=" + std::to_string(buf.size())
+            "Malformed VERTICES chunk (size=" + std::to_string(buf.size()) + ")"
         );
         return fields;
     }
 
-    size_t count = buf.size() / ElemSize;
+    // reinterpret as an array of vectors
     auto const* verts = reinterpret_cast<const W3dVectorStruct*>(buf.data());
-
+    size_t count = buf.size() / ElemSize;
     
-    auto Push = [&](auto&&... args) {
-        fields.emplace_back(std::forward<decltype(args)>(args)...);
-        };
+    // --- Builder
+    ChunkFieldBuilder B(fields);
 
     for (size_t i = 0; i < count; ++i) {
-        Push(
+        B.Vec3(
             "Vertex[" + std::to_string(i) + "]",
-            "vector",
-            FormatVec3(verts[i])
+            verts[i]
         );
     }
 
@@ -160,33 +166,32 @@ inline std::vector<ChunkField> InterpretVertexNormals(const std::shared_ptr<Chun
     std::vector<ChunkField> fields;
     if (!chunk) return fields;
 
-    auto const& buf = chunk->data;
+    const auto& buf = chunk->data;
     constexpr size_t ElemSize = sizeof(W3dVectorStruct);
     if (buf.size() % ElemSize != 0) {
         fields.emplace_back(
             "error", "string",
-            "Malformed chunk: size=" + std::to_string(buf.size())
+            "Malformed Normal chunk (size=" + std::to_string(buf.size()) + ")"
         );
         return fields;
     }
 
-    size_t count = buf.size() / ElemSize;
+    // reinterpret as an array of vectors
     auto const* verts = reinterpret_cast<const W3dVectorStruct*>(buf.data());
+    size_t count = buf.size() / ElemSize;
 
-    auto Push = [&](auto&&... args) {
-        fields.emplace_back(std::forward<decltype(args)>(args)...);
-        };
+    ChunkFieldBuilder B(fields);
 
     for (size_t i = 0; i < count; ++i) {
-        Push(
+        B.Vec3(
             "Normal[" + std::to_string(i) + "]",
-            "vector",
-            FormatVec3(verts[i])
+            verts[i]
         );
     }
 
     return fields;
 }
+
 
 inline std::vector<ChunkField> InterpretMeshUserText(
     const std::shared_ptr<ChunkItem>& chunk
@@ -194,109 +199,85 @@ inline std::vector<ChunkField> InterpretMeshUserText(
     std::vector<ChunkField> fields;
     if (!chunk) return fields;
 
-    // build the helper from the raw bytes
-    W3dNullTermString nts(
-        chunk->data.data(),
+    ChunkFieldBuilder B(fields);
+    // read a null-terminated string out of chunk->data (up to chunk size)
+    B.NullTerm(
+        "UserText",
+        reinterpret_cast<const char*>(chunk->data.data()),
         chunk->data.size()
     );
 
-    fields.push_back({
-      "UserText",
-      "string",
-      nts.value
-        });
     return fields;
 }
 
-inline std::vector<ChunkField> InterpretVertexInfluences(const std::shared_ptr<ChunkItem>& chunk) {
-    std::vector<ChunkField> fields;
-    if (!chunk) return fields;
-
-    const auto& data = chunk->data;
-    constexpr size_t ElemSize = sizeof(W3dVertInfStruct);
-    if (data.size() % ElemSize != 0) {
-        fields.emplace_back(
-            "error", "string",
-            "Malformed VERTEX_INFLUENCES chunk; size=" + std::to_string(data.size())
-        );
-        return fields;
-    }
-
-    //--- helper lambdas --------------------------------------------------
-    // Push: emplace a new ChunkField
-    auto Push = [&](std::string fld, std::string type, std::string val) {
-        fields.emplace_back(std::move(fld), std::move(type), std::move(val));
-        };
-    //----------------------------------------------------------------------
-
-    auto const* arr = reinterpret_cast<const W3dVertInfStruct*>(data.data());
-    size_t count = data.size() / ElemSize;
-
-    for (size_t i = 0; i < count; ++i) {
-        const auto& inf = arr[i];
-        std::string pfx = "VertexInfluence[" + std::to_string(i) + "]";
-
-        Push(pfx + ".BoneIdx[0]", "uint16", FormatUInt16(inf.BoneIdx[0]));
-        Push(pfx + ".Weight[0]", "uint16", FormatUInt16(inf.Weight[0]));
-        Push(pfx + ".BoneIdx[1]", "uint16", FormatUInt16(inf.BoneIdx[1]));
-        Push(pfx + ".Weight[1]", "uint16", FormatUInt16(inf.Weight[1]));
-    }
-
-    return fields;
-}
-
-
-inline std::vector<ChunkField> InterpretTriangles(
+inline std::vector<ChunkField> InterpretVertexInfluences(
     const std::shared_ptr<ChunkItem>& chunk
 ) {
     std::vector<ChunkField> fields;
     if (!chunk) return fields;
 
     const auto& buf = chunk->data;
-    constexpr size_t REC = sizeof(W3dTriStruct);
+    constexpr size_t REC = sizeof(W3dVertInfStruct);
     if (buf.size() % REC != 0) {
-        fields.push_back({ "error", "string",
-            "Malformed TRIANGLES chunk; size=" +
-            std::to_string(buf.size()) });
+        fields.emplace_back("error", "string",
+            "Malformed VERTEX_INFLUENCES chunk; size=" + std::to_string(buf.size()));
         return fields;
     }
 
+    const auto* infs = reinterpret_cast<const W3dVertInfStruct*>(buf.data());
+    const size_t count = buf.size() / REC;
+
+    ChunkFieldBuilder B(fields);
+    for (size_t i = 0; i < count; ++i) {
+        const auto& inf = infs[i];
+        const std::string pfx = "VertexInfluence[" + std::to_string(i) + "]";
+        for (int j = 0; j < 2; ++j) {
+            B.UInt16(pfx + ".BoneIdx[" + std::to_string(j) + "]", inf.BoneIdx[j]);
+            B.UInt16(pfx + ".Weight[" + std::to_string(j) + "]", inf.Weight[j]);
+        }
+    }
+
+    return fields;
+}
+
+
+inline std::vector<ChunkField> InterpretTriangles(const std::shared_ptr<ChunkItem>& chunk) {
+    std::vector<ChunkField> fields;
+    if (!chunk) return fields;
+
+    // --- Sanity check: buffer length must be a multiple of our triangle struct size
+    const auto& buf = chunk->data;
+    constexpr size_t REC = sizeof(W3dTriStruct);
+    if (buf.size() % REC != 0) {
+        fields.emplace_back(
+            "error", "string",
+            "Malformed TRIANGLES chunk; size=" + std::to_string(buf.size())
+        );
+        return fields;
+    }
+
+    // --- Reinterpret as an array of tris
+    auto const* tris = reinterpret_cast<const W3dTriStruct*>(buf.data());
     size_t count = buf.size() / REC;
-    auto tris = reinterpret_cast<const W3dTriStruct*>(buf.data());
+
+    // --- Builder
+    ChunkFieldBuilder B(fields);
 
     for (size_t i = 0; i < count; ++i) {
         const auto& T = tris[i];
         std::string pfx = "Triangle[" + std::to_string(i) + "]";
 
-        // Vertex indices
-        {
-            std::ostringstream oss;
-            oss << T.Vindex[0] << " "
-                << T.Vindex[1] << " "
-                << T.Vindex[2];
-            fields.emplace_back(pfx + ".Vindex", "int32[3]", oss.str());
-        }
+        // int32[3] array of indices
+        B.Int32Array(pfx + ".Vindex", T.Vindex, 3);
 
-        // Attributes
-        fields.emplace_back(
-            pfx + ".Attributes",
-            "uint32",
-            std::to_string(T.Attributes)
-        );
+        // attributes
+        B.UInt32(pfx + ".Attributes", T.Attributes);
 
-        // Normal
-        fields.emplace_back(
-            pfx + ".Normal",
-            "vector3",
-            FormatVec3(T.Normal)
-        );
+        // normal
+        B.Vec3(pfx + ".Normal", T.Normal);
 
-        // Dist
-        fields.emplace_back(
-            pfx + ".Dist",
-            "uint32",
-            std::to_string(T.Dist)
-        );
+        // dist
+        B.UInt32(pfx + ".Dist", T.Dist);
     }
 
     return fields;
@@ -304,28 +285,36 @@ inline std::vector<ChunkField> InterpretTriangles(
 
 inline std::vector<ChunkField> InterpretVertexShadeIndices(const std::shared_ptr<ChunkItem>& chunk) {
     std::vector<ChunkField> fields;
+    if (!chunk) return fields;
 
-    const uint32_t* data = reinterpret_cast<const uint32_t*>(chunk->data.data());
-    size_t count = chunk->data.size() / 4;
+    const auto& buf = chunk->data;
+ 
+    if (buf.size() % sizeof(uint32_t) != 0) {
+        fields.emplace_back(
+            "error", "string",
+            "Malformed VERTEX_SHADE_INDICES chunk; size=" + std::to_string(buf.size())
+        );
+        return fields;
+    }
 
+    size_t count = buf.size() / sizeof(uint32_t);
+    auto const* data = reinterpret_cast<const uint32_t*>(buf.data());
+
+    ChunkFieldBuilder B(fields);
     for (size_t i = 0; i < count; ++i) {
-        std::ostringstream label;
-        label << "Index[" << i << "]";
-        fields.push_back({ label.str(), "int32", std::to_string(data[i]) });
+        B.Int32("Index[" + std::to_string(i) + "]", static_cast<int32_t>(data[i]));
     }
 
     return fields;
 }
 
-inline std::vector<ChunkField> InterpretMaterialInfo(
-    const std::shared_ptr<ChunkItem>& chunk
-) {
+inline std::vector<ChunkField> InterpretMaterialInfo(const std::shared_ptr<ChunkItem>& chunk) {
     std::vector<ChunkField> fields;
     if (!chunk) return fields;
 
     const auto& buf = chunk->data;
-    constexpr size_t REC = sizeof(W3dMaterialInfoStruct);
-    if (buf.size() % REC != 0) {
+
+    if (buf.size() < sizeof(W3dMaterialInfoStruct)) {
         fields.emplace_back(
             "error", "string",
             "Malformed MATERIAL_INFO chunk; size=" + std::to_string(buf.size())
@@ -333,56 +322,15 @@ inline std::vector<ChunkField> InterpretMaterialInfo(
         return fields;
     }
 
-    size_t count = buf.size() / REC;
-    auto ptr = reinterpret_cast<const W3dMaterialInfoStruct*>(buf.data());
+    auto const* hdr = reinterpret_cast<const W3dMaterialInfoStruct*>(buf.data());
+    ChunkFieldBuilder B(fields);
 
-    for (size_t i = 0; i < count; ++i) {
-        const auto& m = ptr[i];
-        std::string pfx = "Material[" + std::to_string(i) + "]";
+   
+    B.UInt32("PassCount", hdr->PassCount);
+    B.UInt32("VertexMaterialCount", hdr->VertexMaterialCount);
+    B.UInt32("ShaderCount", hdr->ShaderCount);
+    B.UInt32("TextureCount", hdr->TextureCount);
 
-        fields.emplace_back(pfx + ".PassCount", "uint32", std::to_string(m.PassCount));
-        fields.emplace_back(pfx + ".VertexMaterialCount", "uint32", std::to_string(m.VertexMaterialCount));
-        fields.emplace_back(pfx + ".ShaderCount", "uint32", std::to_string(m.ShaderCount));
-        fields.emplace_back(pfx + ".TextureCount", "uint32", std::to_string(m.TextureCount));
-    }
-
-    return fields;
-}
-
-inline std::vector<ChunkField> InterpretShaders(
-    const std::shared_ptr<ChunkItem>& chunk
-) {
-    std::vector<ChunkField> fields;
-    if (!chunk) return fields;
-
-    const auto& buf = chunk->data;
-    constexpr size_t REC = sizeof(W3dShaderStruct);
-    if (buf.size() % REC != 0) {
-        fields.emplace_back("error", "string",
-            "Malformed SHADERS chunk; size=" + std::to_string(buf.size()));
-        return fields;
-    }
-
-    auto shaders = reinterpret_cast<const W3dShaderStruct*>(buf.data());
-    size_t count = buf.size() / REC;
-    for (size_t i = 0; i < count; ++i) {
-        const auto& s = shaders[i];
-        std::string pfx = "shader[" + std::to_string(i) + "]";
-
-        fields.emplace_back(pfx + ".DepthCompare", "string", ToString(DepthCompare(s.DepthCompare)));
-        fields.emplace_back(pfx + ".DepthMask", "string", ToString(DepthMask(s.DepthMask)));
-        fields.emplace_back(pfx + ".DestBlend", "string", ToString(DestBlend(s.DestBlend)));
-        fields.emplace_back(pfx + ".PriGradient", "string", ToString(PriGradient(s.PriGradient)));
-        fields.emplace_back(pfx + ".SecGradient", "string", ToString(SecGradient(s.SecGradient)));
-        fields.emplace_back(pfx + ".SrcBlend", "string", ToString(SrcBlend(s.SrcBlend)));
-        fields.emplace_back(pfx + ".Texturing", "string", ToString(Texturing(s.Texturing)));
-        fields.emplace_back(pfx + ".DetailColorFunc", "string", ToString(DetailColorFunc(s.DetailColorFunc)));
-        fields.emplace_back(pfx + ".DetailAlphaFunc", "string", ToString(DetailAlphaFunc(s.DetailAlphaFunc)));
-        fields.emplace_back(pfx + ".AlphaTest", "string", ToString(AlphaTest(s.AlphaTest)));
-        fields.emplace_back(pfx + ".PostDetailColor", "string", ToString(DetailColorFunc(s.PostDetailColorFunc)));
-        fields.emplace_back(pfx + ".PostDetailAlpha", "string", ToString(DetailAlphaFunc(s.PostDetailAlphaFunc)));
-        // padding and obsolete fields are simply ignored
-    }
     return fields;
 }
 
@@ -392,24 +340,15 @@ inline std::vector<ChunkField> InterpretVertexMaterialName(
     std::vector<ChunkField> fields;
     if (!chunk) return fields;
 
-    // build the helper from the raw bytes
-    W3dNullTermString nts(
-        chunk->data.data(),
+    ChunkFieldBuilder B(fields);
+    // read a null-terminated string out of chunk->data (up to chunk size)
+    B.NullTerm(
+        "MaterialName",
+        reinterpret_cast<const char*>(chunk->data.data()),
         chunk->data.size()
     );
 
-    fields.push_back({
-      "Material Name",
-      "string",
-      nts.value
-        });
     return fields;
-}
-static std::string FormatColor(const W3dRGBStruct& c) {
-    return "(" +
-        std::to_string(c.R) + " " +
-        std::to_string(c.G) + " " +
-        std::to_string(c.B) + ")";
 }
 
 inline std::vector<ChunkField> InterpretVertexMaterialInfo(
@@ -421,57 +360,97 @@ inline std::vector<ChunkField> InterpretVertexMaterialInfo(
     const auto& buf = chunk->data;
     constexpr size_t REC = sizeof(W3dVertexMaterialStruct);
     if (buf.size() < REC) {
-        fields.push_back({ "error","string","Material info too short" });
+        fields.emplace_back("error", "string", "Material info too short");
         return fields;
     }
-    // cast once
-    auto vm = reinterpret_cast<const W3dVertexMaterialStruct*>(buf.data());
 
-    // raw Attributes
+    auto vm = reinterpret_cast<const W3dVertexMaterialStruct*>(buf.data());
+    ChunkFieldBuilder B(fields);
+
     uint32_t attr = vm->Attributes;
-    fields.emplace_back("Material.Attributes", "uint32", std::to_string(attr));
+    B.UInt32("Material.Attributes", attr);
 
     // basic flags
     for (auto [mask, name] : VERTMAT_BASIC_FLAGS) {
-        if (attr & mask) {
-            fields.emplace_back("Material.Attributes", "flag", std::string(name));
-        }
+        B.Flag(attr, mask, name);
     }
 
-    // stage mappings
-    auto doStage = [&](int stage, uint32_t shift) {
+    // stage mappings (4‐bit indices at shifts 8 and 12)
+    for (int stage = 0; stage < 2; ++stage) {
+        uint32_t shift = 8 + 4 * stage;
         uint8_t idx = (attr >> shift) & 0xF;
         if (idx < VERTMAT_STAGE_MAPPING.size()) {
             auto name = VERTMAT_STAGE_MAPPING[idx].second;
-            // replace '?' with stage number
-            std::string s{ name };
-            s[s.find('?')] = char('0' + stage);
-            fields.emplace_back("Material.Attributes", "flag", s);
-        }
-        };
-    doStage(0, 8);   // bits 0x00000F00
-    doStage(1, 12);  // bits 0x0000F000
-
-    // PSX flags
-    for (auto [mask, name] : VERTMAT_PSX_FLAGS) {
-        if (attr & mask) {
-            fields.emplace_back("Material.Attributes", "flag", std::string(name));
-            // if NO_RT_LIGHTING (0x0010_0000) is set, skip the rest
-            if (mask == 0x0010'0000) break;
+            name[name.find('?')] = char('0' + stage);
+            B.Push("Material.Attributes", "flag", name);
         }
     }
 
-    // now the 4 colors & floats, in struct order
-    fields.emplace_back("Material.Ambient", "RGB", FormatColor(vm->Ambient));
-    fields.emplace_back("Material.Diffuse", "RGB", FormatColor(vm->Diffuse));
-    fields.emplace_back("Material.Specular", "RGB", FormatColor(vm->Specular));
-    fields.emplace_back("Material.Emissive", "RGB", FormatColor(vm->Emissive));
-    fields.emplace_back("Material.Shininess", "float", std::to_string(vm->Shininess));
-    fields.emplace_back("Material.Opacity", "float", std::to_string(vm->Opacity));
-    fields.emplace_back("Material.Translucency", "float", std::to_string(vm->Translucency));
+    // PSX flags
+    for (auto [mask, name] : VERTMAT_PSX_FLAGS) {
+        B.Flag(attr, mask, name);
+        if (mask == 0x0010'0000) break; // NO_RT_LIGHTING early‐out
+    }
+
+    // finally the colors & floats
+    B.RGB("Material.Ambient", vm->Ambient);
+    B.RGB("Material.Diffuse", vm->Diffuse);
+    B.RGB("Material.Specular", vm->Specular);
+    B.RGB("Material.Emissive", vm->Emissive);
+    B.Float("Material.Shininess", vm->Shininess);
+    B.Float("Material.Opacity", vm->Opacity);
+    B.Float("Material.Translucency", vm->Translucency);
 
     return fields;
 }
+
+
+
+
+
+inline std::vector<ChunkField> InterpretShaders(
+    const std::shared_ptr<ChunkItem>& chunk
+) {
+    std::vector<ChunkField> fields;
+    if (!chunk) return fields;
+
+    const auto& buf = chunk->data;
+    constexpr size_t REC = sizeof(W3dShaderStruct);
+    if (buf.size() % REC != 0) {
+        fields.emplace_back(
+            "error", "string",
+            "Malformed SHADERS chunk; size=" + std::to_string(buf.size())
+        );
+        return fields;
+    }
+
+    auto shaders = reinterpret_cast<const W3dShaderStruct*>(buf.data());
+    size_t count = buf.size() / REC;
+
+    ChunkFieldBuilder B(fields);
+    for (size_t i = 0; i < count; ++i) {
+        const auto& s = shaders[i];
+        std::string pfx = "Shader[" + std::to_string(i) + "]";
+
+        B.DepthCompare(pfx + ".DepthCompare", s.DepthCompare);
+        B.DepthMask(pfx + ".DepthMask", s.DepthMask);
+        B.DestBlend(pfx + ".DestBlend", s.DestBlend);
+        B.PriGradient(pfx + ".PriGradient", s.PriGradient);
+        B.SecGradient(pfx + ".SecGradient", s.SecGradient);
+        B.SrcBlend(pfx + ".SrcBlend", s.SrcBlend);
+        B.Texturing(pfx + ".Texturing", s.Texturing);
+        B.DetailColorFunc(pfx + ".DetailColorFunc", s.DetailColorFunc);
+        B.DetailAlphaFunc(pfx + ".DetailAlphaFunc", s.DetailAlphaFunc);
+        B.AlphaTest(pfx + ".AlphaTest", s.AlphaTest);
+        B.DetailColorFunc(pfx + ".PostDetailColorFunc", s.PostDetailColorFunc);
+        B.DetailAlphaFunc(pfx + ".PostDetailAlphaFunc", s.PostDetailAlphaFunc);
+        // we ignore the 1-byte pad and any now-obsolete slots
+    }
+
+    return fields;
+}
+
+
 
 
 
@@ -481,17 +460,14 @@ inline std::vector<ChunkField> InterpretARG0(
     std::vector<ChunkField> fields;
     if (!chunk) return fields;
 
-    // build the helper from the raw bytes
-    W3dNullTermString nts(
-        chunk->data.data(),
+    ChunkFieldBuilder B(fields);
+    // read a null-terminated string out of chunk->data (up to chunk size)
+    B.NullTerm(
+        "Stage0 Mapper Args",
+        reinterpret_cast<const char*>(chunk->data.data()),
         chunk->data.size()
     );
 
-    fields.push_back({
-      "Stage0 Mapper Args",
-      "string",
-      nts.value
-        });
     return fields;
 }
 
@@ -501,17 +477,14 @@ inline std::vector<ChunkField> InterpretARG1(
     std::vector<ChunkField> fields;
     if (!chunk) return fields;
 
-    // build the helper from the raw bytes
-    W3dNullTermString nts(
-        chunk->data.data(),
+    ChunkFieldBuilder B(fields);
+    // read a null-terminated string out of chunk->data (up to chunk size)
+    B.NullTerm(
+        "Stage1 Mapper Args",
+        reinterpret_cast<const char*>(chunk->data.data()),
         chunk->data.size()
     );
 
-    fields.push_back({
-      "Stage1 Mapper Args",
-      "string",
-      nts.value
-        });
     return fields;
 }
 
@@ -521,17 +494,14 @@ inline std::vector<ChunkField> InterpretTextureName(
     std::vector<ChunkField> fields;
     if (!chunk) return fields;
 
-    // build the helper from the raw bytes
-    W3dNullTermString nts(
-        chunk->data.data(),
+    ChunkFieldBuilder B(fields);
+    // read a null-terminated string out of chunk->data (up to chunk size)
+    B.NullTerm(
+        "Texture Name:",
+        reinterpret_cast<const char*>(chunk->data.data()),
         chunk->data.size()
     );
 
-    fields.push_back({
-      "Texture Name:",
-      "string",
-      nts.value
-        });
     return fields;
 }
 
@@ -543,198 +513,172 @@ inline std::vector<ChunkField> InterpretTextureInfo(
 
     const auto& buf = chunk->data;
     if (buf.size() < sizeof(W3dTextureInfoStruct)) {
-        fields.emplace_back("error", "string", "Texture info too short");
+        fields.emplace_back("error", "string", "Malformed TEXTURE_INFO chunk; size=" + std::to_string(buf.size()));
         return fields;
     }
 
-    // Cast once
-    auto info = reinterpret_cast<const W3dTextureInfoStruct*>(buf.data());
+    const auto* info = reinterpret_cast<const W3dTextureInfoStruct*>(buf.data());
+    ChunkFieldBuilder B(fields);
 
-    // Raw attributes
-    uint16_t rawAttr = info->Attributes;
-    fields.emplace_back("Texture.Attributes", "uint16", std::to_string(rawAttr));
+    // Attributes (raw)
+    if constexpr (requires { B.UInt16(std::string{}, uint16_t{}); }) {
+        B.UInt16("Texture.Attributes", info->Attributes);
+    }
+    else {
+        B.Push("Texture.Attributes", "uint16", std::to_string(info->Attributes));
+    }
 
-    // Decode each flag
+    // Attribute flags
     for (auto [flag, name] : TextureAttrNames) {
-        if (rawAttr & static_cast<uint16_t>(flag)) {
-            fields.emplace_back("Texture.Flag", "flag", std::string(name));
+        auto mask = static_cast<uint16_t>(flag);
+        if (info->Attributes & mask) {
+            B.Push("Texture.Attributes", "flag", std::string(name));
         }
     }
 
-    // Animation type
-    TextureAnim anim = static_cast<TextureAnim>(info->AnimType);
-    fields.emplace_back(
-        "Texture.AnimType",
-        "string",
-        std::string(ToString(anim))
-    );
+    // Anim type
+    B.Push("Texture.AnimType", "string", ToString(static_cast<TextureAnim>(info->AnimType)));
 
-    // Frame count + rate
-    fields.emplace_back(
-        "Texture.FrameCount",
-        "uint32",
-        std::to_string(info->FrameCount)
-    );
-    fields.emplace_back(
-        "Texture.FrameRate",
-        "float",
-        std::to_string(info->FrameRate)
-    );
+    // Frame count / rate
+    B.UInt32("Texture.FrameCount", info->FrameCount);
+    B.Float("Texture.FrameRate", info->FrameRate);
 
     return fields;
 }
 
-inline std::vector<ChunkField> InterpretVertexMaterialIDs(const std::shared_ptr<ChunkItem>& chunk) {
-    std::vector<ChunkField> fields;
 
-    const uint32_t* data = reinterpret_cast<const uint32_t*>(chunk->data.data());
-    size_t count = chunk->data.size() / sizeof(uint32_t);
-
-    for (size_t i = 0; i < count; ++i) {
-        std::string label = "Vertex[" + std::to_string(i) + "] Vertex Material Index";
-        fields.push_back({ label, "int32", std::to_string(data[i]) });
-    }
-
-
-    return fields;
-}
-
-inline std::vector<ChunkField> InterpretShaderIDs(const std::shared_ptr<ChunkItem>& chunk) {
-    std::vector<ChunkField> fields;
-
-    const uint32_t* data = reinterpret_cast<const uint32_t*>(chunk->data.data());
-    size_t count = chunk->data.size() / sizeof(uint32_t);
-
-    for (size_t i = 0; i < count; ++i) {
-        std::string label = "Vertex[" + std::to_string(i) + "] Shader Index";
-        fields.push_back({ label, "int32", std::to_string(data[i]) });
-    }
-
-
-    return fields;
-}
-
-inline std::vector<ChunkField> InterpretDCG(
+inline std::vector<ChunkField> InterpretVertexMaterialIDs(
     const std::shared_ptr<ChunkItem>& chunk
 ) {
     std::vector<ChunkField> fields;
-    if (!chunk) {
-        fields.emplace_back("error", "string", "Empty DCG chunk");
+    if (!chunk) return fields;
+
+    const auto& buf = chunk->data;
+    if (buf.size() % sizeof(int32_t) != 0) {
+        fields.emplace_back("error", "string",
+            "Malformed VERTEX_MATERIAL_IDS chunk; size=" + std::to_string(buf.size()));
         return fields;
     }
+
+    const auto* ids = reinterpret_cast<const int32_t*>(buf.data());
+    const size_t count = buf.size() / sizeof(int32_t);
+
+    ChunkFieldBuilder B(fields);
+    for (size_t i = 0; i < count; ++i) {
+        B.Int32("Vertex[" + std::to_string(i) + "] Vertex Material Index", ids[i]);
+    }
+    return fields;
+}
+
+inline std::vector<ChunkField> InterpretShaderIDs(
+    const std::shared_ptr<ChunkItem>& chunk
+) {
+    std::vector<ChunkField> fields;
+    if (!chunk) return fields;
+
+    const auto& buf = chunk->data;
+    if (buf.size() % sizeof(int32_t) != 0) {
+        fields.emplace_back("error", "string",
+            "Malformed Shader_Index chunk; size=" + std::to_string(buf.size()));
+        return fields;
+    }
+
+    const auto* ids = reinterpret_cast<const int32_t*>(buf.data());
+    const size_t count = buf.size() / sizeof(int32_t);
+
+    ChunkFieldBuilder B(fields);
+    for (size_t i = 0; i < count; ++i) {
+        B.Int32("Face[" + std::to_string(i) + "] Shader Index", ids[i]);
+    }
+    return fields;
+}
+
+inline std::vector<ChunkField> InterpretDCG(const std::shared_ptr<ChunkItem>& chunk) {
+    std::vector<ChunkField> fields;
+    if (!chunk) return fields;
 
     const auto& buf = chunk->data;
     constexpr size_t REC = sizeof(W3dRGBAStruct);
     if (buf.size() % REC != 0) {
-        fields.emplace_back(
-            "error", "string",
-            "Unexpected DCG chunk size: " + std::to_string(buf.size())
-        );
+        fields.emplace_back("error", "string", "Malformed DCG chunk; size=" + std::to_string(buf.size()));
         return fields;
     }
 
-    auto entries = reinterpret_cast<const W3dRGBAStruct*>(buf.data());
-    size_t count = buf.size() / REC;
+    const auto* arr = reinterpret_cast<const W3dRGBAStruct*>(buf.data());
+    const size_t count = buf.size() / REC;
 
+    ChunkFieldBuilder B(fields);
     for (size_t i = 0; i < count; ++i) {
-        const auto& c = entries[i];
-        std::string pfx = "Vertex[" + std::to_string(i) + "].DIG";
-        fields.emplace_back(pfx + ".R", "uint8", std::to_string(c.R));
-        fields.emplace_back(pfx + ".G", "uint8", std::to_string(c.G));
-        fields.emplace_back(pfx + ".B", "uint8", std::to_string(c.B));
-        fields.emplace_back(pfx + ".A", "uint8", std::to_string(c.A));
-        
+        B.RGBA("Vertex[" + std::to_string(i) + "].DCG", arr[i]);
     }
-
     return fields;
 }
 
-
-inline std::vector<ChunkField> InterpretDIG(
-    const std::shared_ptr<ChunkItem>& chunk
-) {
+inline std::vector<ChunkField> InterpretDIG(const std::shared_ptr<ChunkItem>& chunk) {
     std::vector<ChunkField> fields;
-    if (!chunk) {
-        fields.emplace_back("error", "string", "Empty DIG chunk");
-        return fields;
-    }
+    if (!chunk) return fields;
 
     const auto& buf = chunk->data;
     constexpr size_t REC = sizeof(W3dRGBStruct);
     if (buf.size() % REC != 0) {
-        fields.emplace_back(
-            "error", "string",
-            "Unexpected DIG chunk size: " + std::to_string(buf.size())
-        );
+        fields.emplace_back("error", "string", "Malformed DIG chunk; size=" + std::to_string(buf.size()));
         return fields;
     }
 
-    auto colors = reinterpret_cast<const W3dRGBStruct*>(buf.data());
-    size_t count = buf.size() / REC;
+    const auto* arr = reinterpret_cast<const W3dRGBStruct*>(buf.data());
+    const size_t count = buf.size() / REC;
 
+    ChunkFieldBuilder B(fields);
     for (size_t i = 0; i < count; ++i) {
-        const auto& c = colors[i];
-        std::string pfx = "Vertex[" + std::to_string(i) + "].DIG";
-        fields.emplace_back(pfx + ".R", "uint8", std::to_string(c.R));
-        fields.emplace_back(pfx + ".G", "uint8", std::to_string(c.G));
-        fields.emplace_back(pfx + ".B", "uint8", std::to_string(c.B));
+        B.RGB("Vertex[" + std::to_string(i) + "].DIG", arr[i]);
     }
-
     return fields;
 }
 
-
-inline std::vector<ChunkField> InterpretSCG(
-    const std::shared_ptr<ChunkItem>& chunk
-) {
+inline std::vector<ChunkField> InterpretSCG(const std::shared_ptr<ChunkItem>& chunk) {
     std::vector<ChunkField> fields;
-    if (!chunk) {
-        fields.emplace_back("error", "string", "Empty SCG chunk");
-        return fields;
-    }
+    if (!chunk) return fields;
 
     const auto& buf = chunk->data;
     constexpr size_t REC = sizeof(W3dRGBStruct);
     if (buf.size() % REC != 0) {
-        fields.emplace_back(
-            "error", "string",
-            "Unexpected SCG chunk size: " + std::to_string(buf.size())
-        );
+        fields.emplace_back("error", "string", "Malformed SCG chunk; size=" + std::to_string(buf.size()));
         return fields;
     }
 
-    auto colors = reinterpret_cast<const W3dRGBStruct*>(buf.data());
-    size_t count = buf.size() / REC;
+    const auto* arr = reinterpret_cast<const W3dRGBStruct*>(buf.data());
+    const size_t count = buf.size() / REC;
 
+    ChunkFieldBuilder B(fields);
     for (size_t i = 0; i < count; ++i) {
-        const auto& c = colors[i];
-        std::string pfx = "Vertex[" + std::to_string(i) + "].SCG";
-        fields.emplace_back(pfx + ".R", "uint8", std::to_string(c.R));
-        fields.emplace_back(pfx + ".G", "uint8", std::to_string(c.G));
-        fields.emplace_back(pfx + ".B", "uint8", std::to_string(c.B));
+        B.RGB("Vertex[" + std::to_string(i) + "].SCG", arr[i]);
     }
-
     return fields;
 }
 
-inline std::vector<ChunkField> InterpretTextureIDs(const std::shared_ptr<ChunkItem>& chunk) {
+inline std::vector<ChunkField> InterpretTextureIDs(
+    const std::shared_ptr<ChunkItem>& chunk
+) {
     std::vector<ChunkField> fields;
-    const uint32_t* data = reinterpret_cast<const uint32_t*>(chunk->data.data());
-    size_t count = chunk->data.size() / sizeof(uint32_t);
+    if (!chunk) return fields;
 
-    for (size_t i = 0; i < count; ++i) {
-        fields.push_back({ "Face[" + std::to_string(i) + "] Texture Index", "int32", std::to_string(data[i]) });
+    const auto& buf = chunk->data;
+    if (buf.size() % sizeof(int32_t) != 0) {
+        fields.emplace_back("error", "string",
+            "Malformed Texture_Index chunk; size=" + std::to_string(buf.size()));
+        return fields;
     }
 
+    const auto* ids = reinterpret_cast<const int32_t*>(buf.data());
+    const size_t count = buf.size() / sizeof(int32_t);
+
+    ChunkFieldBuilder B(fields);
+    for (size_t i = 0; i < count; ++i) {
+        B.Int32("Face[" + std::to_string(i) + "] Texture Index", ids[i]);
+    }
     return fields;
 }
 
-static std::string FormatUV(const W3dTexCoordStruct& t) {
-    std::ostringstream oss;
-    oss << std::fixed << std::setprecision(6)
-        << t.U << ", " << t.V;
-    return oss.str();
-}
 
 inline std::vector<ChunkField> InterpretStageTexCoords(
     const std::shared_ptr<ChunkItem>& chunk
@@ -745,55 +689,49 @@ inline std::vector<ChunkField> InterpretStageTexCoords(
     const auto& buf = chunk->data;
     constexpr size_t REC = sizeof(W3dTexCoordStruct);
     if (buf.size() % REC != 0) {
-        fields.emplace_back(
-            "error", "string",
-            "Malformed TEXCOORDS chunk; size=" + std::to_string(buf.size())
-        );
+        fields.emplace_back("error", "string",
+            "Malformed TEXCOORDS chunk; size=" + std::to_string(buf.size()));
         return fields;
     }
 
-    auto uvArray = reinterpret_cast<const W3dTexCoordStruct*>(buf.data());
-    size_t count = buf.size() / REC;
+    const auto* uv = reinterpret_cast<const W3dTexCoordStruct*>(buf.data());
+    const size_t count = buf.size() / REC;
 
+    ChunkFieldBuilder B(fields);
     for (size_t i = 0; i < count; ++i) {
-        std::string label = "Vertex[" + std::to_string(i) + "].UV";
-        fields.emplace_back(label, "vec2", FormatUV(uvArray[i]));
+        B.TexCoord("Vertex[" + std::to_string(i) + "].UV", uv[i]); // vector2 via FormatTexCoord
     }
 
     return fields;
 }
 
-static std::string FormatVec3i(const Vector3i& v) {
-    return "("
-        + std::to_string(v.I) + " "
-        + std::to_string(v.J) + " "
-        + std::to_string(v.K) + ")";
-}
 
-inline std::vector<ChunkField> InterpretPerFaceTexcoordIds(
-    const std::shared_ptr<ChunkItem>& chunk
-) {
+inline std::vector<ChunkField> InterpretPerFaceTexcoordIds(const std::shared_ptr<ChunkItem>& chunk) {
     std::vector<ChunkField> fields;
-    if (!chunk) {
-        fields.emplace_back("error", "string", "Empty PER_FACE_TEXCOORD_IDS chunk");
-        return fields;
-    }
+    if (!chunk) return fields;
 
     const auto& buf = chunk->data;
-    constexpr size_t REC = sizeof(Vector3i);
-    if (buf.size() % REC != 0) {
+    constexpr size_t ElemSize = sizeof(Vector3i);
+    if (buf.size() % ElemSize != 0) {
         fields.emplace_back(
             "error", "string",
-            "Unexpected PER_FACE_TEXCOORD_IDS chunk size: " + std::to_string(buf.size())
+            "Malformed PER_FACE_TEX_COORD_IDs chunk (size=" + std::to_string(buf.size()) + ")"
         );
         return fields;
     }
 
-    auto faces = reinterpret_cast<const Vector3i*>(buf.data());
-    size_t count = buf.size() / REC;
+    // reinterpret as an array of vector3is
+    auto const* verts = reinterpret_cast<const Vector3i*>(buf.data());
+    size_t count = buf.size() / ElemSize;
+
+    // --- Builder
+    ChunkFieldBuilder B(fields);
+
     for (size_t i = 0; i < count; ++i) {
-        std::string label = "Face[" + std::to_string(i) + "] UV Indices";
-        fields.emplace_back(label, "vector3i", FormatVec3i(faces[i]));
+        B.Vec3i(
+            "Face[" + std::to_string(i) + "]",
+            UV Indices[i]
+        );
     }
 
     return fields;
@@ -803,47 +741,37 @@ inline std::vector<ChunkField> InterpretDeform(
     const std::shared_ptr<ChunkItem>& chunk
 ) {
     std::vector<ChunkField> fields;
-    if (!chunk) {
-        fields.emplace_back("error", "string", "Empty DEFORM chunk");
-        return fields;
-    }
+    if (!chunk) return fields;
 
     const auto& buf = chunk->data;
-    constexpr size_t MIN_SZ = sizeof(W3dMeshDeform);
-    if (buf.size() < MIN_SZ) {
-        fields.emplace_back(
-            "error", "string",
-            "DEFORM chunk too short (" + std::to_string(buf.size()) + " bytes)"
-        );
+    constexpr size_t REC = sizeof(W3dMeshDeform);
+    if (buf.size() < REC) {
+        fields.emplace_back("error", "string",
+            "Malformed DEFORM chunk; size=" + std::to_string(buf.size()));
         return fields;
     }
 
-    
-    auto hdr = reinterpret_cast<const W3dMeshDeform*>(buf.data());
-    fields.emplace_back("Deform.SetCount", "uint32", std::to_string(hdr->SetCount));
-    fields.emplace_back("Deform.AlphaPasses", "uint32", std::to_string(hdr->AlphaPasses));
+    const auto* d = reinterpret_cast<const W3dMeshDeform*>(buf.data());
+    ChunkFieldBuilder B(fields);
 
-    // If you care about the reserved trailing bytes, you can report how many:
-    size_t extra = buf.size() - MIN_SZ;
+    B.UInt32("SetCount", d->SetCount);
+    B.UInt32("AlphaPasses", d->AlphaPasses);
+
+    // Report trailing reserved bytes (if any)
+    const size_t extra = buf.size() - REC;
     if (extra > 0) {
-        fields.emplace_back(
-            "Deform.ReservedBytes",
-            "bytes",
-            std::to_string(extra)
-        );
+        B.Push("ReservedBytes", "bytes", std::to_string(extra));
     }
 
     return fields;
 }
 
+
 inline std::vector<ChunkField> InterpretDeformSet(
     const std::shared_ptr<ChunkItem>& chunk
 ) {
     std::vector<ChunkField> fields;
-    if (!chunk) {
-        fields.emplace_back("error", "string", "Empty DEFORM_SET chunk");
-        return fields;
-    }
+    if (!chunk) return fields;
 
     const auto& buf = chunk->data;
     constexpr size_t REC = sizeof(W3dDeformSetInfo);
@@ -855,44 +783,37 @@ inline std::vector<ChunkField> InterpretDeformSet(
         return fields;
     }
 
-    auto sets = reinterpret_cast<const W3dDeformSetInfo*>(buf.data());
-    size_t count = buf.size() / REC;
+    const auto* sets = reinterpret_cast<const W3dDeformSetInfo*>(buf.data());
+    const size_t count = buf.size() / REC;
 
     for (size_t i = 0; i < count; ++i) {
         const auto& s = sets[i];
-        std::string pfx = "DeformSet[" + std::to_string(i) + "]";
+        ChunkFieldBuilder B(fields);
+        const std::string pfx = "DeformSet[" + std::to_string(i) + "]";
 
-        fields.emplace_back(
-            pfx + ".KeyframeCount",
-            "uint32",
-            std::to_string(s.KeyframeCount)
-        );
-        fields.emplace_back(
-            pfx + ".Flags",
-            "uint32",
-            std::to_string(s.flags)
-        );
-        // reserved is an array, so index it:
-        if (s.reserved[0] != 0) {
-            fields.emplace_back(
-                pfx + ".Reserved[0]",
-                "uint32",
-                std::to_string(s.reserved[0])
-            );
+        B.UInt32(pfx + ".KeyframeCount", s.KeyframeCount);
+        B.UInt32(pfx + ".Flags", s.flags);
+
+        // Emit non-zero reserved values (works for any reserved array size).
+        constexpr size_t RES_N =
+            sizeof(sets[0].reserved) / sizeof(sets[0].reserved[0]);
+        for (size_t r = 0; r < RES_N; ++r) {
+            if (s.reserved[r] != 0) {
+                B.UInt32(pfx + ".Reserved[" + std::to_string(r) + "]",
+                    s.reserved[r]);
+            }
         }
     }
 
     return fields;
 }
 
+
 inline std::vector<ChunkField> InterpretDeformKeyframes(
     const std::shared_ptr<ChunkItem>& chunk
 ) {
     std::vector<ChunkField> fields;
-    if (!chunk) {
-        fields.emplace_back("error", "string", "Empty DEFORM_KEYFRAME chunk");
-        return fields;
-    }
+    if (!chunk) return fields;
 
     const auto& buf = chunk->data;
     constexpr size_t REC = sizeof(W3dDeformKeyframeInfo);
@@ -904,50 +825,29 @@ inline std::vector<ChunkField> InterpretDeformKeyframes(
         return fields;
     }
 
-    auto kfArray = reinterpret_cast<const W3dDeformKeyframeInfo*>(buf.data());
-    size_t count = buf.size() / REC;
+    const auto* arr = reinterpret_cast<const W3dDeformKeyframeInfo*>(buf.data());
+    const size_t count = buf.size() / REC;
 
     for (size_t i = 0; i < count; ++i) {
-        const auto& kf = kfArray[i];
-        std::string pfx = "Keyframe[" + std::to_string(i) + "]";
+        const auto& kf = arr[i];
+        const std::string pfx = "Keyframe[" + std::to_string(i) + "]";
+        ChunkFieldBuilder B(fields);
 
-        fields.emplace_back(
-            pfx + ".DeformPercent",
-            "float",
-            std::to_string(kf.DeformPercent)
-        );
-        fields.emplace_back(
-            pfx + ".DataCount",
-            "uint32",
-            std::to_string(kf.DataCount)
-        );
-        // if you care about the reserved words:
-        if (kf.reserved[0] || kf.reserved[1]) {
-            fields.emplace_back(
-                pfx + ".Reserved0",
-                "uint32",
-                std::to_string(kf.reserved[0])
-            );
-            fields.emplace_back(
-                pfx + ".Reserved1",
-                "uint32",
-                std::to_string(kf.reserved[1])
-            );
+        B.Float(pfx + ".DeformPercent", kf.DeformPercent);
+        B.UInt32(pfx + ".DataCount", kf.DataCount);
+
+        // emit non-zero reserved words (generic for any array size)
+        constexpr size_t RES_N = sizeof(arr[0].reserved) / sizeof(arr[0].reserved[0]);
+        for (size_t r = 0; r < RES_N; ++r) {
+            if (kf.reserved[r] != 0) {
+                B.UInt32(pfx + ".Reserved[" + std::to_string(r) + "]", kf.reserved[r]);
+            }
         }
     }
 
     return fields;
 }
 
-
-
-inline std::string FormatRGBA(const W3dRGBAStruct& c) {
-    return "("
-        + std::to_string(c.R) + " "
-        + std::to_string(c.G) + " "
-        + std::to_string(c.B) + " "
-        + std::to_string(c.A) + ")";
-}
 
 inline std::vector<ChunkField> InterpretDeformData(
     const std::shared_ptr<ChunkItem>& chunk
@@ -1012,129 +912,139 @@ inline std::vector<ChunkField> InterpretPS2Shaders(
     const std::shared_ptr<ChunkItem>& chunk
 ) {
     std::vector<ChunkField> fields;
-    if (!chunk) {
-        fields.emplace_back("error", "string", "Empty PS2_SHADERS chunk");
-        return fields;
-    }
+    if (!chunk) return fields;
 
     const auto& buf = chunk->data;
     constexpr size_t REC = sizeof(W3dPS2ShaderStruct);
     if (buf.size() % REC != 0) {
         fields.emplace_back(
             "error", "string",
-            "Unexpected PS2_SHADERS size: " + std::to_string(buf.size())
+            "Malformed PS2 SHADERS chunk; size=" + std::to_string(buf.size())
         );
         return fields;
     }
 
-    auto arr = reinterpret_cast<const W3dPS2ShaderStruct*>(buf.data());
+    auto Ps2shaders = reinterpret_cast<const W3dPS2ShaderStruct*>(buf.data());
     size_t count = buf.size() / REC;
-    for (size_t i = 0; i < count; ++i) {
-        const auto& s = arr[i];
-        std::string pfx = "shader[" + std::to_string(i) + "]";
 
-        fields.emplace_back(pfx + ".DepthCompare", "uint8", std::to_string(s.DepthCompare));
-        fields.emplace_back(pfx + ".DepthMask", "uint8", std::to_string(s.DepthMask));
-        fields.emplace_back(pfx + ".PriGradient", "uint8", std::to_string(s.PriGradient));
-        fields.emplace_back(pfx + ".Texturing", "uint8", std::to_string(s.Texturing));
-        fields.emplace_back(pfx + ".AlphaTest", "uint8", std::to_string(s.AlphaTest));
-        fields.emplace_back(pfx + ".AParam", "uint8", std::to_string(s.AParam));
-        fields.emplace_back(pfx + ".BParam", "uint8", std::to_string(s.BParam));
-        fields.emplace_back(pfx + ".CParam", "uint8", std::to_string(s.CParam));
-        fields.emplace_back(pfx + ".DParam", "uint8", std::to_string(s.DParam));
+    ChunkFieldBuilder B(fields);
+    for (size_t i = 0; i < count; ++i) {
+        const auto& s = PS2shaders[i];
+        std::string pfx = "Shader[" + std::to_string(i) + "]";
+
+        B.DepthCompare(pfx + ".DepthCompare", s.Ps2DepthCompare);
+        B.DepthMask(pfx + ".DepthMask", s.Ps2DepthMask);
+        B.DestBlend(pfx + ".DestBlend", s.Ps2DestBlend);
+        B.PriGradient(pfx + ".PriGradient", s.Ps2PriGradient);
+        B.Texturing(pfx + ".Texturing", s.Ps2Texturing);
+        B.AlphaTest(pfx + ".AlphaTest", s.Ps2AlphaTest);
+        B.AParam(pfx + ".AParam", s.AParam);
+        B.BParam(pfx + ".BParam", s.BParam);
+        B.CParam(pfx + ".CParam", s.CParam);
+        B.DParam(pfx + ".DParam", s.DParam);
+        // we ignore the padding (3)
     }
 
     return fields;
 }
 
-inline std::vector<ChunkField> InterpretAABTreeHeader(
-    const std::shared_ptr<ChunkItem>& chunk
-) {
+
+inline std::vector<ChunkField> InterpretAABTreeHeader(const std::shared_ptr<ChunkItem>& chunk) {
     std::vector<ChunkField> fields;
-    if (!chunk) {
-        fields.emplace_back("Error", "string", "Empty AABTreeHeader chunk");
-        return fields;
-    }
+    if (!chunk) return fields;
 
     const auto& buf = chunk->data;
-    constexpr size_t MIN_SZ = sizeof(uint32_t) * 2;  // NodeCount + PolyCount
-    if (buf.size() < MIN_SZ) {
+
+    if (buf.size() < sizeof(W3dMeshAABTreeHeader)) {
         fields.emplace_back(
-            "Error", "string",
-            "AABTreeHeader too short: " + std::to_string(buf.size()) + " bytes"
+            "error", "string",
+            "Malformed AAB_Tree_Header chunk; size=" + std::to_string(buf.size())
         );
         return fields;
     }
 
-    // Cast to our struct (we only need the first two fields)
-    auto hdr = reinterpret_cast<const W3dMeshAABTreeHeader*>(buf.data());
+    auto const* hdr = reinterpret_cast<const W3dMeshAABTreeHeader*>(buf.data());
+    ChunkFieldBuilder B(fields);
 
-    fields.emplace_back("NodeCount", "uint32", std::to_string(hdr->NodeCount));
-    fields.emplace_back("PolyCount", "uint32", std::to_string(hdr->PolyCount));
+
+    B.UInt32("NodeCount", hdr->NodeCount);
+    B.UInt32("PolyCount", hdr->PolyCount);
+   
+
     return fields;
 }
+
 
 inline std::vector<ChunkField> InterpretAABTreePolyIndices(const std::shared_ptr<ChunkItem>& chunk) {
     std::vector<ChunkField> fields;
-    const uint32_t* data = reinterpret_cast<const uint32_t*>(chunk->data.data());
-    size_t count = chunk->data.size() / sizeof(uint32_t);
+    if (!chunk) return fields;
 
+    const auto& buf = chunk->data;
+
+    if (buf.size() % sizeof(uint32_t) != 0) {
+        fields.emplace_back(
+            "error", "string",
+            "Malformed AAB_TREE_POLY_INDICES chunk; size=" + std::to_string(buf.size())
+        );
+        return fields;
+    }
+
+    size_t count = buf.size() / sizeof(uint32_t);
+    auto const* data = reinterpret_cast<const uint32_t*>(buf.data());
+
+    ChunkFieldBuilder B(fields);
     for (size_t i = 0; i < count; ++i) {
-        fields.push_back({ "Polygon Index[" + std::to_string(i) + "]", "int32", std::to_string(data[i]) });
+        B.Int32("Polygon Index[" + std::to_string(i) + "]", static_cast<int32_t>(data[i]));
     }
 
     return fields;
 }
 
 
-inline std::vector<ChunkField> InterpretAABTreeNodes(
-    const std::shared_ptr<ChunkItem>& chunk
-) {
+inline std::vector<ChunkField> InterpretAABTreeNodes(const std::shared_ptr<ChunkItem>& chunk) {
     std::vector<ChunkField> fields;
-    if (!chunk) {
-        fields.emplace_back("error", "string", "Empty AABTreeNodes chunk");
-        return fields;
-    }
+    if (!chunk) return fields;
 
+    // --- Sanity check: buffer length must be a multiple of our AAB struct size
     const auto& buf = chunk->data;
     constexpr size_t REC = sizeof(W3dMeshAABTreeNode);
     if (buf.size() % REC != 0) {
         fields.emplace_back(
             "error", "string",
-            "Malformed AABTreeNodes chunk; size=" + std::to_string(buf.size())
+            "Malformed AAB_TREE_NODE chunk; size=" + std::to_string(buf.size())
         );
         return fields;
     }
 
-    auto nodes = reinterpret_cast<const W3dMeshAABTreeNode*>(buf.data());
+	// --- Reinterpret as an array of AAB nodes
+    auto const* aab = reinterpret_cast<const W3dMeshAABTreeNode*>(buf.data());
     size_t count = buf.size() / REC;
+
+    // --- Builder
+    ChunkFieldBuilder B(fields);
+
     for (size_t i = 0; i < count; ++i) {
-        const auto& n = nodes[i];
+        const auto& T = aab[i];
         std::string pfx = "Node[" + std::to_string(i) + "]";
 
-        // Box corners
-        fields.emplace_back(pfx + ".Min", "vector", FormatVec3(n.Min));
-        fields.emplace_back(pfx + ".Max", "vector", FormatVec3(n.Max));
+        // min
+        B.Vec3(pfx + ".Min", T.Min);
+        
+        // min
+        B.Vec3(pfx + ".Max", T.Max);
+        
+        // front
+        B.UInt32(pfx + ".Front", T.Front);
 
-        // Leaf vs interior
-        bool isLeaf = (n.FrontOrPoly0 & 0x80000000u) != 0;
-        if (isLeaf) {
-            uint32_t poly0 = n.FrontOrPoly0 & 0x7FFFFFFFu;
-            fields.emplace_back(pfx + ".Poly0", "uint32", std::to_string(poly0));
-            fields.emplace_back(pfx + ".PolyCount", "uint32", std::to_string(n.BackOrPolyCount));
-        }
-        else {
-            fields.emplace_back(
-                pfx + ".Front", "int32",
-                std::to_string(static_cast<int32_t>(n.FrontOrPoly0))
-            );
-            fields.emplace_back(
-                pfx + ".Back", "int32",
-                std::to_string(static_cast<int32_t>(n.BackOrPolyCount))
-            );
-        }
+        // back
+        B.UInt32(pfx + ".Back", T.Back);
+
+
+
     }
 
     return fields;
 }
+
+
 
