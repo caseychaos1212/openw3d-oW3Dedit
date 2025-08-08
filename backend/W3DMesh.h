@@ -27,13 +27,17 @@ inline std::vector<ChunkField> InterpretMeshHeader3(const std::shared_ptr<ChunkI
 	B.UInt32("Attributes", hdr->Attributes);
 
 
-    //--- Geometry type -----------------------------------------------
-    static constexpr std::pair<MeshAttr, const char*> geomTypes[] = {
-        { MeshAttr::W3D_MESH_FLAG_GEOMETRY_TYPE_NORMAL,        "W3D_MESH_FLAG_GEOMETRY_TYPE_NORMAL" },
-        { MeshAttr::W3D_MESH_FLAG_GEOMETRY_TYPE_CAMERA_ALIGNED,"W3D_MESH_FLAG_GEOMETRY_TYPE_CAMERA_ALIGNED" },
-        { MeshAttr::W3D_MESH_FLAG_GEOMETRY_TYPE_SKIN,          "W3D_MESH_FLAG_GEOMETRY_TYPE_SKIN" },
-        { MeshAttr::W3D_MESH_FLAG_GEOMETRY_TYPE_AABOX,         "W3D_MESH_FLAG_GEOMETRY_TYPE_AABOX" },
-        { MeshAttr::W3D_MESH_FLAG_GEOMETRY_TYPE_OBBOX,         "W3D_MESH_FLAG_GEOMETRY_TYPE_OBBOX" },
+    //--- Geometry type (masked equality) ---------------------------------
+    constexpr uint32_t GEOM_MASK = static_cast<uint32_t>(MeshAttr::W3D_MESH_FLAG_GEOMETRY_TYPE_MASK);
+
+    // table of concrete values inside the masked field
+    static constexpr std::pair<uint32_t, const char*> geomVals[] = {
+        { static_cast<uint32_t>(MeshAttr::W3D_MESH_FLAG_GEOMETRY_TYPE_NORMAL),         "W3D_MESH_FLAG_GEOMETRY_TYPE_NORMAL" },
+        { static_cast<uint32_t>(MeshAttr::W3D_MESH_FLAG_GEOMETRY_TYPE_CAMERA_ALIGNED), "W3D_MESH_FLAG_GEOMETRY_TYPE_CAMERA_ALIGNED" },
+        { static_cast<uint32_t>(MeshAttr::W3D_MESH_FLAG_GEOMETRY_TYPE_SKIN),           "W3D_MESH_FLAG_GEOMETRY_TYPE_SKIN" },
+        { static_cast<uint32_t>(MeshAttr::W3D_MESH_FLAG_GEOMETRY_TYPE_AABOX),          "W3D_MESH_FLAG_GEOMETRY_TYPE_AABOX" },
+        { static_cast<uint32_t>(MeshAttr::W3D_MESH_FLAG_GEOMETRY_TYPE_OBBOX),          "W3D_MESH_FLAG_GEOMETRY_TYPE_OBBOX" },
+        { static_cast<uint32_t>(MeshAttr::W3D_MESH_FLAG_GEOMETRY_TYPE_CAMERA_ORIENTED), "W3D_MESH_FLAG_GEOMETRY_TYPE_CAMERA_ORIENTED" },
     };
 
     //--- Collision types ---------------------------------------------
@@ -59,8 +63,12 @@ inline std::vector<ChunkField> InterpretMeshHeader3(const std::shared_ptr<ChunkI
     };
 
     // Loop each group:
-    for (auto [maskEnum, name] : geomTypes) {
-        B.Flag(attr, uint32_t(maskEnum), name);
+    uint32_t gsel = attr & GEOM_MASK;
+    for (auto [val, name] : geomVals) {
+        if (gsel == val) {
+            B.Push("Attributes", "flag", name);
+            break;
+        }
     }
     for (auto [maskEnum, name] : collTypes) {
         B.Flag(attr, uint32_t(maskEnum), name);
@@ -192,7 +200,9 @@ inline std::vector<ChunkField> InterpretVertexNormals(const std::shared_ptr<Chun
     return fields;
 }
 
+//TODO: TEST
 
+//leaving trailing ...
 inline std::vector<ChunkField> InterpretMeshUserText(
     const std::shared_ptr<ChunkItem>& chunk
 ) {
@@ -268,7 +278,7 @@ inline std::vector<ChunkField> InterpretTriangles(const std::shared_ptr<ChunkIte
         std::string pfx = "Triangle[" + std::to_string(i) + "]";
 
         // int32[3] array of indices
-        B.Int32Array(pfx + ".Vindex", T.Vindex, 3);
+        B.UInt32Array(pfx + ".Vertexindices", T.Vindex, 3);
 
         // attributes
         B.UInt32(pfx + ".Attributes", T.Attributes);
@@ -277,7 +287,8 @@ inline std::vector<ChunkField> InterpretTriangles(const std::shared_ptr<ChunkIte
         B.Vec3(pfx + ".Normal", T.Normal);
 
         // dist
-        B.UInt32(pfx + ".Dist", T.Dist);
+        // BUG: Something is off here example: 0.441293 reads as 1054994752.000000
+        B.Float(pfx + ".Dist", T.Dist);
     }
 
     return fields;
@@ -302,7 +313,7 @@ inline std::vector<ChunkField> InterpretVertexShadeIndices(const std::shared_ptr
 
     ChunkFieldBuilder B(fields);
     for (size_t i = 0; i < count; ++i) {
-        B.Int32("Index[" + std::to_string(i) + "]", static_cast<int32_t>(data[i]));
+        B.UInt32("Index[" + std::to_string(i) + "]", static_cast<uint32_t>(data[i]));
     }
 
     return fields;
@@ -368,24 +379,25 @@ inline std::vector<ChunkField> InterpretVertexMaterialInfo(
     ChunkFieldBuilder B(fields);
 
     uint32_t attr = vm->Attributes;
-    B.UInt32("Material.Attributes", attr);
+    
 
     // basic flags
     for (auto [mask, name] : VERTMAT_BASIC_FLAGS) {
         B.Flag(attr, mask, name);
     }
 
-    // stage mappings (4‐bit indices at shifts 8 and 12)
+    // stage mappings (4-bit indices at shifts 8 and 12)
     for (int stage = 0; stage < 2; ++stage) {
         uint32_t shift = 8 + 4 * stage;
         uint8_t idx = (attr >> shift) & 0xF;
         if (idx < VERTMAT_STAGE_MAPPING.size()) {
-            auto name = VERTMAT_STAGE_MAPPING[idx].second;
-            name[name.find('?')] = char('0' + stage);
-            B.Push("Material.Attributes", "flag", name);
+            std::string s(VERTMAT_STAGE_MAPPING[idx].second);     // make a string
+            if (auto pos = s.find('?'); pos != std::string::npos)  // swap '?' for stage index
+                s[pos] = char('0' + stage);
+            B.Push("Material.Attributes", "flag", std::move(s));
         }
     }
-
+    B.UInt32("Material.Attributes", attr);
     // PSX flags
     for (auto [mask, name] : VERTMAT_PSX_FLAGS) {
         B.Flag(attr, mask, name);
@@ -393,10 +405,10 @@ inline std::vector<ChunkField> InterpretVertexMaterialInfo(
     }
 
     // finally the colors & floats
-    B.RGB("Material.Ambient", vm->Ambient);
-    B.RGB("Material.Diffuse", vm->Diffuse);
-    B.RGB("Material.Specular", vm->Specular);
-    B.RGB("Material.Emissive", vm->Emissive);
+    B.RGB("Material.Ambient", vm->Ambient.R, vm->Ambient.G, vm->Ambient.B);
+    B.RGB("Material.Diffuse", vm->Diffuse.R, vm->Diffuse.G, vm->Diffuse.B);
+    B.RGB("Material.Specular", vm->Specular.R, vm->Specular.G, vm->Specular.B);
+    B.RGB("Material.Emissive", vm->Emissive.R, vm->Emissive.G, vm->Emissive.B);
     B.Float("Material.Shininess", vm->Shininess);
     B.Float("Material.Opacity", vm->Opacity);
     B.Float("Material.Translucency", vm->Translucency);
@@ -432,18 +444,18 @@ inline std::vector<ChunkField> InterpretShaders(
         const auto& s = shaders[i];
         std::string pfx = "Shader[" + std::to_string(i) + "]";
 
-        B.DepthCompare(pfx + ".DepthCompare", s.DepthCompare);
-        B.DepthMask(pfx + ".DepthMask", s.DepthMask);
-        B.DestBlend(pfx + ".DestBlend", s.DestBlend);
-        B.PriGradient(pfx + ".PriGradient", s.PriGradient);
-        B.SecGradient(pfx + ".SecGradient", s.SecGradient);
-        B.SrcBlend(pfx + ".SrcBlend", s.SrcBlend);
-        B.Texturing(pfx + ".Texturing", s.Texturing);
-        B.DetailColorFunc(pfx + ".DetailColorFunc", s.DetailColorFunc);
-        B.DetailAlphaFunc(pfx + ".DetailAlphaFunc", s.DetailAlphaFunc);
-        B.AlphaTest(pfx + ".AlphaTest", s.AlphaTest);
-        B.DetailColorFunc(pfx + ".PostDetailColorFunc", s.PostDetailColorFunc);
-        B.DetailAlphaFunc(pfx + ".PostDetailAlphaFunc", s.PostDetailAlphaFunc);
+        B.DepthCompareField(pfx + ".DepthCompare", s.DepthCompare);
+        B.DepthMaskField(pfx + ".DepthMask", s.DepthMask);
+        B.DestBlendField(pfx + ".DestBlend", s.DestBlend);
+        B.PriGradientField(pfx + ".PriGradient", s.PriGradient);
+        B.SecGradientField(pfx + ".SecGradient", s.SecGradient);
+        B.SrcBlendField(pfx + ".SrcBlend", s.SrcBlend);
+        B.TexturingField(pfx + ".Texturing", s.Texturing);
+        B.DetailColorFuncField(pfx + ".DetailColorFunc", s.DetailColorFunc);
+        B.DetailAlphaFuncField(pfx + ".DetailAlphaFunc", s.DetailAlphaFunc);
+        B.AlphaTestField(pfx + ".AlphaTest", s.AlphaTest);
+        B.DetailColorFuncField(pfx + ".PostDetailColorFunc", s.PostDetailColorFunc);
+        B.DetailAlphaFuncField(pfx + ".PostDetailAlphaFunc", s.PostDetailAlphaFunc);
         // we ignore the 1-byte pad and any now-obsolete slots
     }
 
@@ -453,7 +465,7 @@ inline std::vector<ChunkField> InterpretShaders(
 
 
 
-
+//TODO: TEST
 inline std::vector<ChunkField> InterpretARG0(
     const std::shared_ptr<ChunkItem>& chunk
 ) {
@@ -471,6 +483,7 @@ inline std::vector<ChunkField> InterpretARG0(
     return fields;
 }
 
+//TODO: TEST
 inline std::vector<ChunkField> InterpretARG1(
     const std::shared_ptr<ChunkItem>& chunk
 ) {
@@ -537,7 +550,8 @@ inline std::vector<ChunkField> InterpretTextureInfo(
     }
 
     // Anim type
-    B.Push("Texture.AnimType", "string", ToString(static_cast<TextureAnim>(info->AnimType)));
+    B.Push("Texture.AnimType", "string", std::to_string(info->AnimType));
+
 
     // Frame count / rate
     B.UInt32("Texture.FrameCount", info->FrameCount);
@@ -565,7 +579,7 @@ inline std::vector<ChunkField> InterpretVertexMaterialIDs(
 
     ChunkFieldBuilder B(fields);
     for (size_t i = 0; i < count; ++i) {
-        B.Int32("Vertex[" + std::to_string(i) + "] Vertex Material Index", ids[i]);
+        B.UInt32("Vertex[" + std::to_string(i) + "] Vertex Material Index", ids[i]);
     }
     return fields;
 }
@@ -588,11 +602,11 @@ inline std::vector<ChunkField> InterpretShaderIDs(
 
     ChunkFieldBuilder B(fields);
     for (size_t i = 0; i < count; ++i) {
-        B.Int32("Face[" + std::to_string(i) + "] Shader Index", ids[i]);
+        B.UInt32("Face[" + std::to_string(i) + "] Shader Index", ids[i]);
     }
     return fields;
 }
-
+// TODO: TEST
 inline std::vector<ChunkField> InterpretDCG(const std::shared_ptr<ChunkItem>& chunk) {
     std::vector<ChunkField> fields;
     if (!chunk) return fields;
@@ -609,11 +623,12 @@ inline std::vector<ChunkField> InterpretDCG(const std::shared_ptr<ChunkItem>& ch
 
     ChunkFieldBuilder B(fields);
     for (size_t i = 0; i < count; ++i) {
-        B.RGBA("Vertex[" + std::to_string(i) + "].DCG", arr[i]);
+        B.RGBA("Vertex[" + std::to_string(i) + "].DCG",
+            arr[i].R, arr[i].G, arr[i].B, arr[i].A);
     }
     return fields;
 }
-
+// TODO: TEST
 inline std::vector<ChunkField> InterpretDIG(const std::shared_ptr<ChunkItem>& chunk) {
     std::vector<ChunkField> fields;
     if (!chunk) return fields;
@@ -630,11 +645,12 @@ inline std::vector<ChunkField> InterpretDIG(const std::shared_ptr<ChunkItem>& ch
 
     ChunkFieldBuilder B(fields);
     for (size_t i = 0; i < count; ++i) {
-        B.RGB("Vertex[" + std::to_string(i) + "].DIG", arr[i]);
+        B.RGB("Vertex[" + std::to_string(i) + "].DIG",
+            arr[i].R, arr[i].G, arr[i].B);
     }
     return fields;
 }
-
+// TODO: TEST
 inline std::vector<ChunkField> InterpretSCG(const std::shared_ptr<ChunkItem>& chunk) {
     std::vector<ChunkField> fields;
     if (!chunk) return fields;
@@ -651,11 +667,12 @@ inline std::vector<ChunkField> InterpretSCG(const std::shared_ptr<ChunkItem>& ch
 
     ChunkFieldBuilder B(fields);
     for (size_t i = 0; i < count; ++i) {
-        B.RGB("Vertex[" + std::to_string(i) + "].SCG", arr[i]);
+        B.RGB("Vertex[" + std::to_string(i) + "].SCG",
+            arr[i].R, arr[i].G, arr[i].B);
     }
     return fields;
 }
-
+// TODO: TEST
 inline std::vector<ChunkField> InterpretTextureIDs(
     const std::shared_ptr<ChunkItem>& chunk
 ) {
@@ -679,7 +696,7 @@ inline std::vector<ChunkField> InterpretTextureIDs(
     return fields;
 }
 
-
+// TODO: TEST
 inline std::vector<ChunkField> InterpretStageTexCoords(
     const std::shared_ptr<ChunkItem>& chunk
 ) {
@@ -705,14 +722,16 @@ inline std::vector<ChunkField> InterpretStageTexCoords(
     return fields;
 }
 
-
-inline std::vector<ChunkField> InterpretPerFaceTexcoordIds(const std::shared_ptr<ChunkItem>& chunk) {
+// TODO: TEST
+inline std::vector<ChunkField> InterpretPerFaceTexcoordIds(
+    const std::shared_ptr<ChunkItem>& chunk
+) {
     std::vector<ChunkField> fields;
     if (!chunk) return fields;
 
     const auto& buf = chunk->data;
     constexpr size_t ElemSize = sizeof(Vector3i);
-    if (buf.size() % ElemSize != 0) {
+    if (buf.size() < ElemSize || (buf.size() % ElemSize) != 0) {
         fields.emplace_back(
             "error", "string",
             "Malformed PER_FACE_TEX_COORD_IDs chunk (size=" + std::to_string(buf.size()) + ")"
@@ -720,22 +739,17 @@ inline std::vector<ChunkField> InterpretPerFaceTexcoordIds(const std::shared_ptr
         return fields;
     }
 
-    // reinterpret as an array of vector3is
-    auto const* verts = reinterpret_cast<const Vector3i*>(buf.data());
-    size_t count = buf.size() / ElemSize;
+    const auto* verts = reinterpret_cast<const Vector3i*>(buf.data());
+    const size_t count = buf.size() / ElemSize;
 
-    // --- Builder
     ChunkFieldBuilder B(fields);
-
     for (size_t i = 0; i < count; ++i) {
-        B.Vec3i(
-            "Face[" + std::to_string(i) + "]",
-            UV Indices[i]
-        );
+        B.Vec3i("Face[" + std::to_string(i) + "].UVIndices", verts[i]);
     }
 
     return fields;
 }
+
 
 inline std::vector<ChunkField> InterpretDeform(
     const std::shared_ptr<ChunkItem>& chunk
@@ -916,7 +930,7 @@ inline std::vector<ChunkField> InterpretPS2Shaders(
 
     const auto& buf = chunk->data;
     constexpr size_t REC = sizeof(W3dPS2ShaderStruct);
-    if (buf.size() % REC != 0) {
+    if (buf.empty() || buf.size() % REC != 0) {
         fields.emplace_back(
             "error", "string",
             "Malformed PS2 SHADERS chunk; size=" + std::to_string(buf.size())
@@ -924,25 +938,27 @@ inline std::vector<ChunkField> InterpretPS2Shaders(
         return fields;
     }
 
-    auto Ps2shaders = reinterpret_cast<const W3dPS2ShaderStruct*>(buf.data());
-    size_t count = buf.size() / REC;
+    const auto* shaders = reinterpret_cast<const W3dPS2ShaderStruct*>(buf.data());
+    const size_t count = buf.size() / REC;
 
     ChunkFieldBuilder B(fields);
     for (size_t i = 0; i < count; ++i) {
-        const auto& s = PS2shaders[i];
-        std::string pfx = "Shader[" + std::to_string(i) + "]";
+        const auto& s = shaders[i];
+        const std::string pfx = "Shader[" + std::to_string(i) + "]";
 
-        B.DepthCompare(pfx + ".DepthCompare", s.Ps2DepthCompare);
-        B.DepthMask(pfx + ".DepthMask", s.Ps2DepthMask);
-        B.DestBlend(pfx + ".DestBlend", s.Ps2DestBlend);
-        B.PriGradient(pfx + ".PriGradient", s.Ps2PriGradient);
-        B.Texturing(pfx + ".Texturing", s.Ps2Texturing);
-        B.AlphaTest(pfx + ".AlphaTest", s.Ps2AlphaTest);
-        B.AParam(pfx + ".AParam", s.AParam);
-        B.BParam(pfx + ".BParam", s.BParam);
-        B.CParam(pfx + ".CParam", s.CParam);
-        B.DParam(pfx + ".DParam", s.DParam);
-        // we ignore the padding (3)
+        B.Ps2DepthCompareField((pfx + ".DepthCompare").c_str(), s.DepthCompare);
+        B.Ps2DepthMaskField((pfx + ".DepthMask").c_str(), s.DepthMask);
+        B.Ps2PriGradientField((pfx + ".PriGradient").c_str(), s.PriGradient);
+        B.Ps2TexturingField((pfx + ".Texturing").c_str(), s.Texturing);
+        B.Ps2AlphaTestField((pfx + ".AlphaTest").c_str(), s.AlphaTest);
+
+        // No named enums for these; just dump the raw bytes.
+        B.UInt8(pfx + ".AParam", s.AParam);
+        B.UInt8(pfx + ".BParam", s.BParam);
+        B.UInt8(pfx + ".CParam", s.CParam);
+        B.UInt8(pfx + ".DParam", s.DParam);
+
+        // (ignore s.pad[3])
     }
 
     return fields;
@@ -1034,10 +1050,10 @@ inline std::vector<ChunkField> InterpretAABTreeNodes(const std::shared_ptr<Chunk
         B.Vec3(pfx + ".Max", T.Max);
         
         // front
-        B.UInt32(pfx + ".Front", T.Front);
+        B.UInt32(pfx + ".Front", T.FrontOrPoly0);
 
         // back
-        B.UInt32(pfx + ".Back", T.Back);
+        B.UInt32(pfx + ".Back", T.BackOrPolyCount);
 
 
 
