@@ -13,7 +13,22 @@ static uint32_t readUint32(std::istream& stream) {
     return value;
 }
 
+inline bool IsForcedWrapper(uint32_t id, uint32_t parent = 0)
+{
+    switch (id) {
+    case 0x002A: // W3D_CHUNK_VERTEX_MATERIALS
+        return true;
 
+        // You can add more here if needed in the future:
+        // case 0x0030: /* W3D_CHUNK_TEXTURES */ return true;
+        // case 0x0029: /* W3D_CHUNK_SHADERS  */ return true;
+
+    default:
+        (void)parent; // parent available if you later need parent-sensitive overrides
+        return false;
+    }
+}
+}
 
 bool ChunkData::loadFromFile(const std::string& filename) {
     std::ifstream file(filename, std::ios::binary);
@@ -66,13 +81,22 @@ bool ChunkData::loadFromFile(const std::string& filename) {
             << "  wraps=" << chunk->hasSubChunks
             << "\n";
 
-        // 5 if MSB said this has subchunks recurse
-        if (chunk->hasSubChunks) {
-            std::string buf(reinterpret_cast<char*>(chunk->data.data()),
-                chunk->length);
+        // 5 if MSB said this has subchunks OR the ID is in our forced-wrapper list
+        const bool wraps = chunk->hasSubChunks || IsForcedWrapper(chunk->id);
+        if (wraps) {
+            std::string buf(reinterpret_cast<char*>(chunk->data.data()), chunk->length);
             std::istringstream subStream(buf);
             parseChunk(subStream, chunk);
         }
+
+
+        // 5 if MSB said this has subchunks recurse
+        //if (chunk->hasSubChunks) {
+        //    std::string buf(reinterpret_cast<char*>(chunk->data.data()),
+        //        chunk->length);
+        //    std::istringstream subStream(buf);
+        //    parseChunk(subStream, chunk);
+      //  }
 
         // 6 advance to next top level chunk
         file.seekg(dataEnd);

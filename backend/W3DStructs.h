@@ -26,40 +26,7 @@ struct ChunkField {
 	std::string value;
 };
 
-inline std::string FormatVersion(uint32_t ver) {
-	uint16_t major = uint16_t(ver >> 16);
-	uint16_t minor = uint16_t(ver & 0xFFFF);
-	return std::to_string(major) + "." + std::to_string(minor);
-}
 
-inline std::string FormatName(const char* name, size_t len) {
-
-	return std::string(name, strnlen(name, len));
-}
-
-
-
-
-
-
-
-inline std::string FormatFloat(float f) {
-	std::ostringstream oss;
-	oss << std::fixed << std::setprecision(6) << f;
-	return oss.str();
-}
-
-
-
-inline std::string FormatUInt32(uint32_t data) {
-
-	return std::to_string(data);
-}
-
-inline std::string FormatUInt16(uint16_t data) {
-
-	return std::to_string(data);
-}
 
 
 
@@ -73,12 +40,7 @@ struct W3dVectorStruct
 	float		Z;
 };
 
-inline std::string FormatVec3(const W3dVectorStruct& v) {
-	std::ostringstream oss;
-	oss << std::fixed << std::setprecision(6)
-		<< v.X << " " << v.Y << " " << v.Z;
-	return oss.str();
-}
+
 
 
 
@@ -192,10 +154,7 @@ struct W3dMeshHeader3Struct
 
 };
 
-inline std::string FormatString(const char* raw, size_t maxLen) {
-	size_t len = ::strnlen(raw, maxLen);
-	return std::string(raw, len);
-}
+
 
 struct W3dNullTermString {
 	std::string value;
@@ -603,13 +562,7 @@ struct W3dRGBAStruct
 	uint8_t			B;
 	uint8_t			A;
 };
-inline std::string FormatRGBA(const W3dRGBAStruct& c) {
-	return "("
-		+ std::to_string(c.R) + " "
-		+ std::to_string(c.G) + " "
-		+ std::to_string(c.B) + " "
-		+ std::to_string(c.A) + ")";
-}
+
 
 struct W3dTexCoordStruct
 {
@@ -622,22 +575,13 @@ struct W3dTexCoordStruct
 	float		V;
 };
 
-inline std::string FormatTexCoord(const W3dTexCoordStruct& t) {
-	std::ostringstream oss;
-	oss << std::fixed << std::setprecision(6) << t.U << ' ' << t.V;
-	return oss.str();
-}
+
 
 struct Vector3i {
 	int32_t I, J, K;
 };
 
-inline std::string FormatVec3i(const Vector3i& v) {
-	std::ostringstream oss;
-	oss << std::fixed << std::setprecision(6)
-		<< v.I << " " << v.K << " " << v.J;
-	return oss.str();
-}
+
 
 //
 // Deform information.  Each mesh can have sets of keyframes of
