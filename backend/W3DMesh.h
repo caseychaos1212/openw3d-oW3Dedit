@@ -1,5 +1,7 @@
 ﻿#pragma once
 #include "W3DStructs.h"
+#include "FormatUtils.h"
+#include "ParseUtils.h"
 
 inline std::vector<ChunkField> InterpretMeshHeader3(const std::shared_ptr<ChunkItem>& chunk) {
     std::vector<ChunkField> fields;
@@ -143,24 +145,19 @@ inline std::vector<ChunkField> InterpretVertices(const std::shared_ptr<ChunkItem
     std::vector<ChunkField> fields;
     if (!chunk) return fields;
 
-    const auto& buf = chunk->data;
-    constexpr size_t ElemSize = sizeof(W3dVectorStruct);
-    if (buf.size() % ElemSize != 0) {
-        fields.emplace_back(
-            "error", "string",
-            "Malformed VERTICES chunk (size=" + std::to_string(buf.size()) + ")"
-        );
+    auto parsed = ParseChunkArray<W3dVectorStruct>(chunk);
+    if (auto err = std::get_if<std::string>(&parsed)) {
+        fields.emplace_back("error", "string",
+            "Malformed VERTICES chunk: " + *err);
         return fields;
     }
 
-    // reinterpret as an array of vectors
-    auto const* verts = reinterpret_cast<const W3dVectorStruct*>(buf.data());
-    size_t count = buf.size() / ElemSize;
+    auto verts = std::get<std::span<const W3dVectorStruct>>(parsed);
     
     // --- Builder
     ChunkFieldBuilder B(fields);
 
-    for (size_t i = 0; i < count; ++i) {
+    for (size_t i = 0; i < verts.size(); ++i) {
         B.Vec3(
             "Vertex[" + std::to_string(i) + "]",
             verts[i]
@@ -174,15 +171,14 @@ inline std::vector<ChunkField> InterpretVertexNormals(const std::shared_ptr<Chun
     std::vector<ChunkField> fields;
     if (!chunk) return fields;
 
-    const auto& buf = chunk->data;
-    constexpr size_t ElemSize = sizeof(W3dVectorStruct);
-    if (buf.size() % ElemSize != 0) {
-        fields.emplace_back(
-            "error", "string",
-            "Malformed Normal chunk (size=" + std::to_string(buf.size()) + ")"
-        );
+    auto parsed = ParseChunkArray<W3dVectorStruct>(chunk);
+    if (auto err = std::get_if<std::string>(&parsed)) {
+        fields.emplace_back("error", "string",
+            "Malformed Normal chunk: " + *err);
         return fields;
     }
+
+    auto verts = std::get<std::span<const W3dVectorStruct>>(parsed);
 
     // reinterpret as an array of vectors
     auto const* verts = reinterpret_cast<const W3dVectorStruct*>(buf.data());
@@ -190,7 +186,7 @@ inline std::vector<ChunkField> InterpretVertexNormals(const std::shared_ptr<Chun
 
     ChunkFieldBuilder B(fields);
 
-    for (size_t i = 0; i < count; ++i) {
+    for (size_t i = 0; i < verts.size(); ++i) {
         B.Vec3(
             "Normal[" + std::to_string(i) + "]",
             verts[i]
@@ -226,19 +222,17 @@ inline std::vector<ChunkField> InterpretVertexInfluences(
     std::vector<ChunkField> fields;
     if (!chunk) return fields;
 
-    const auto& buf = chunk->data;
-    constexpr size_t REC = sizeof(W3dVertInfStruct);
-    if (buf.size() % REC != 0) {
+    auto parsed = ParseChunkArray<W3dVertInfStruct>(chunk);
+    if (auto err = std::get_if<std::string>(&parsed)) {
         fields.emplace_back("error", "string",
-            "Malformed VERTEX_INFLUENCES chunk; size=" + std::to_string(buf.size()));
+            "Malformed VERTEX_INFLUENCES chunk: " + *err);
         return fields;
     }
 
-    const auto* infs = reinterpret_cast<const W3dVertInfStruct*>(buf.data());
-    const size_t count = buf.size() / REC;
+    auto infs = std::get<std::span<const W3dVertInfStruct>>(parsed);
 
     ChunkFieldBuilder B(fields);
-    for (size_t i = 0; i < count; ++i) {
+    for (size_t i = 0; i < infs.size(); ++i) {
         const auto& inf = infs[i];
         const std::string pfx = "VertexInfluence[" + std::to_string(i) + "]";
         for (int j = 0; j < 2; ++j) {
@@ -255,25 +249,19 @@ inline std::vector<ChunkField> InterpretTriangles(const std::shared_ptr<ChunkIte
     std::vector<ChunkField> fields;
     if (!chunk) return fields;
 
-    // --- Sanity check: buffer length must be a multiple of our triangle struct size
-    const auto& buf = chunk->data;
-    constexpr size_t REC = sizeof(W3dTriStruct);
-    if (buf.size() % REC != 0) {
-        fields.emplace_back(
-            "error", "string",
-            "Malformed TRIANGLES chunk; size=" + std::to_string(buf.size())
-        );
+    auto parsed = ParseChunkArray<W3dTriStruct>(chunk);
+    if (auto err = std::get_if<std::string>(&parsed)) {
+        fields.emplace_back("error", "string",
+            "Malformed TRIANGLES chunk: " + *err);
         return fields;
     }
 
-    // --- Reinterpret as an array of tris
-    auto const* tris = reinterpret_cast<const W3dTriStruct*>(buf.data());
-    size_t count = buf.size() / REC;
+    auto tris = std::get<std::span<const W3dTriStruct>>(parsed);
 
     // --- Builder
     ChunkFieldBuilder B(fields);
 
-    for (size_t i = 0; i < count; ++i) {
+    for (size_t i = 0; i < tris.size(); ++i) {
         const auto& T = tris[i];
         std::string pfx = "Triangle[" + std::to_string(i) + "]";
 
@@ -298,21 +286,17 @@ inline std::vector<ChunkField> InterpretVertexShadeIndices(const std::shared_ptr
     std::vector<ChunkField> fields;
     if (!chunk) return fields;
 
-    const auto& buf = chunk->data;
- 
-    if (buf.size() % sizeof(uint32_t) != 0) {
-        fields.emplace_back(
-            "error", "string",
-            "Malformed VERTEX_SHADE_INDICES chunk; size=" + std::to_string(buf.size())
-        );
+    auto parsed = ParseChunkArray<uint32_t>(chunk);
+    if (auto err = std::get_if<std::string>(&parsed)) {
+        fields.emplace_back("error", "string",
+            "Malformed VERTEX_SHADE_INDICES chunk: " + *err);
         return fields;
     }
 
-    size_t count = buf.size() / sizeof(uint32_t);
-    auto const* data = reinterpret_cast<const uint32_t*>(buf.data());
+    auto data = std::get<std::span<const uint32_t>>(parsed);
 
     ChunkFieldBuilder B(fields);
-    for (size_t i = 0; i < count; ++i) {
+    for (size_t i = 0; i < data.size(); ++i) {
         B.UInt32("Index[" + std::to_string(i) + "]", static_cast<uint32_t>(data[i]));
     }
 
@@ -716,7 +700,7 @@ inline std::vector<ChunkField> InterpretStageTexCoords(
 
     ChunkFieldBuilder B(fields);
     for (size_t i = 0; i < count; ++i) {
-        B.TexCoord("Vertex[" + std::to_string(i) + "].UV", uv[i]); // vector2 via FormatTexCoord
+        B.TexCoord("Vertex[" + std::to_string(i) + "].UV", uv[i]); 
     }
 
     return fields;
@@ -896,12 +880,12 @@ inline std::vector<ChunkField> InterpretDeformData(
         fields.emplace_back(
             pfx + ".Position",
             "vector3",
-            FormatVec3(d.Position)
+            FormatUtils::FormatVector(d.Position.X, d.Position.Y, d.Position.Z)
         );
         fields.emplace_back(
             pfx + ".Color",
             "RGBA",
-            FormatRGBA(d.Color)
+            "(" + FormatUtils::FormatVector(int(d.Color.R), int(d.Color.G), int(d.Color.B), int(d.Color.A)) + ")"
         );
 
         // if those reserved words ever matter:

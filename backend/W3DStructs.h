@@ -7,6 +7,8 @@
 #include <algorithm>
 #include <sstream>
 #include <iomanip>
+#include "FormatUtills.h"
+#include "EnumToString.h"
 
 
 constexpr std::size_t W3D_NAME_LEN = 16;
@@ -215,111 +217,74 @@ enum class DepthCompare : uint8_t {
 	PASS_GREATER, PASS_NOTEQUAL, PASS_GEQUAL, PASS_ALWAYS,
 	MAX
 };
+ENUM_TO_STRING(DepthCompare,
+	"Pass Never", "Pass Less", "Pass Equal", "Pass Less or Equal",
+	"Pass Greater", "Pass Not Equal", "Pass Greater or Equal", "Pass Always")
 
-inline const char* ToString(DepthCompare v) {
-	static constexpr const char* names[] = {
-		"Pass Never","Pass Less","Pass Equal","Pass Less or Equal",
-		"Pass Greater","Pass Not Equal","Pass Greater or Equal","Pass Always"
-	};
-	return names[std::min<int>(int(v), int(DepthCompare::MAX) - 1)];
-}
 
 enum class DepthMask : uint8_t { WRITE_DISABLE, WRITE_ENABLE, MAX 
 };
 
-inline const char* ToString(DepthMask v) {
-	static constexpr const char* names[] = { "Write Disable", "Write Enable" };
-	return names[std::min<int>(int(v), int(DepthMask::MAX) - 1)];
-}
+ENUM_TO_STRING(DepthMask,
+	"Write Disable", "Write Enable")
 
 enum class DestBlend : uint8_t {
 	ZERO, ONE, SRC_COLOR, ONE_MINUS_SRC_COLOR,
 	SRC_ALPHA, ONE_MINUS_SRC_ALPHA, SRC_COLOR_PREFOG, MAX
 };
 
-inline const char* ToString(DestBlend v) {
-	static constexpr const char* names[] = {
-	  "Zero","One","Src Color","One Minus Src Color",
-	  "Src Alpha","One Minus Src Alpha","Src Color Prefog"
-	};
-	return names[std::min<int>(int(v), int(DestBlend::MAX) - 1)];
-}
+ENUM_TO_STRING(DestBlend,
+	"Zero", "One", "Src Color", "One Minus Src Color",
+	"Src Alpha", "One Minus Src Alpha", "Src Color Prefog")
+
 enum class PriGradient : uint8_t {
 	DISABLE, MODULATE, ADD, BUMPENVMAP, MAX
 };
 
-inline const char* ToString(PriGradient v) {
-	static constexpr const char* names[] = {
-	  "Disable","Modulate","Add","Bump-Environment"
-	};
-	return names[std::min<int>(int(v), int(PriGradient::MAX) - 1)];
-}
+ENUM_TO_STRING(PriGradient,
+	"Disable", "Modulate", "Add", "Bump-Environment")
 
 enum class SecGradient : uint8_t {
 	DISABLE, ENABLE, MAX
 };
 
-inline const char* ToString(SecGradient v) {
-	static constexpr const char* names[] = {
-	  "Disable","Enable"
-	};
-	return names[std::min<int>(int(v), int(SecGradient::MAX) - 1)];
-}
+ENUM_TO_STRING(SecGradient,
+	"Disable", "Enable")
 
 enum class SrcBlend : uint8_t {
 	ZERO, ONE, SRC_ALPHA, ONE_MINUS_SRC_ALPHA, MAX
 };
 
-inline const char* ToString(SrcBlend v) {
-	static constexpr const char* names[] = {
-	  "Zero","One","Src Alpha","One Minus Src Alpha"
-	};
-	return names[std::min<int>(int(v), int(SrcBlend::MAX) - 1)];
-}
+ENUM_TO_STRING(SrcBlend,
+	"Zero", "One", "Src Alpha", "One Minus Src Alpha")
 
 enum class Texturing : uint8_t {
 	DISABLE, ENABLE, MAX
 };
 
-inline const char* ToString(Texturing v) {
-	static constexpr const char* names[] = {
-	  "Disable","Enable"
-	};
-	return names[std::min<int>(int(v), int(Texturing::MAX) - 1)];
-}
+ENUM_TO_STRING(Texturing,
+	"Disable", "Enable")
 
 enum class DetailColorFunc : uint8_t {
 	DISABLE, DETAIL, SCALE, INVSCALE, ADD, SUB, SUBR, BLEND, DETAILBLEND, MAX
 };
 
-inline const char* ToString(DetailColorFunc v) {
-	static constexpr const char* names[] = {
-	  "Disable","Detail","Scale","InvScale","Add","Sub","SubR","Blend","DetailBlend"
-	};
-	return names[std::min<int>(int(v), int(DetailColorFunc::MAX) - 1)];
-}
+ENUM_TO_STRING(DetailColorFunc,
+	"Disable", "Detail", "Scale", "InvScale", "Add", "Sub", "SubR", "Blend", "DetailBlend")
 
 enum class DetailAlphaFunc : uint8_t {
 	DISABLE, DETAIL, SCALE, INVSCALE, MAX
 };
 
-inline const char* ToString(DetailAlphaFunc v) {
-	static constexpr const char* names[] = {
-	  "Disable","Detail","Scale","InvScale"
-	};
-	return names[std::min<int>(int(v), int(DetailAlphaFunc::MAX) - 1)];
-}
+ENUM_TO_STRING(DetailAlphaFunc,
+	"Disable", "Detail", "Scale", "InvScale")
 
 enum class AlphaTest : uint8_t {
 	DISABLE, ENABLE, MAX
 };
 
-inline const char* ToString(AlphaTest v) {
-	static constexpr const char* names[] = {
-	  "Disable","Enable"
-	};
-	return names[std::min<int>(int(v), int(AlphaTest::MAX) - 1)];
-}
+ENUM_TO_STRING(AlphaTest,
+	"Disable", "Enable")
 
 
 
@@ -534,16 +499,11 @@ enum class TextureAnim : uint16_t {
 	ONCE = 2,
 	MANUAL = 3,
 };
-
-inline std::string_view ToString(TextureAnim a) {
-	switch (a) {
-	case TextureAnim::LOOP:     return "W3DTEXTURE_ANIM_LOOP";
-	case TextureAnim::PINGPONG: return "W3DTEXTURE_ANIM_PINGPONG";
-	case TextureAnim::ONCE:     return "W3DTEXTURE_ANIM_ONCE";
-	case TextureAnim::MANUAL:   return "W3DTEXTURE_ANIM_MANUAL";
-	default:                    return "UNKNOWN_ANIM";
-	}
-}
+ENUM_TO_STRING(TextureAnim,
+	"W3DTEXTURE_ANIM_LOOP",
+	"W3DTEXTURE_ANIM_PINGPONG",
+	"W3DTEXTURE_ANIM_ONCE",
+	"W3DTEXTURE_ANIM_MANUAL")
 
 
 struct W3dTextureInfoStruct
@@ -1303,7 +1263,7 @@ struct ChunkFieldBuilder {
 		F.emplace_back(
 			fieldName,
 			"string",
-			FormatName(rawName, maxLen)
+			FormatUtils::FormatString(rawName, maxLen)
 		);
 	}
 
@@ -1330,15 +1290,11 @@ struct ChunkFieldBuilder {
 	}
 
 	void RGB(std::string name, uint8_t r, uint8_t g, uint8_t b) {
-		std::ostringstream o;
-		o << int(r) << " " << int(g) << " " << int(b);
-		Push(std::move(name), "RGB", o.str());
+		Push(std::move(name), "RGB", FormatUtils::FormatVector(int(r), int(g), int(b)));
 	}
 
 	void RGBA(std::string name, uint8_t r, uint8_t g, uint8_t b, uint8_t a) {
-		std::ostringstream o;
-		o << int(r) << " " << int(g) << " " << int(b) << " " << int(a);
-		Push(std::move(name), "RGBA", o.str());
+		Push(std::move(name), "RGBA", FormatUtils::FormatVector(int(r), int(g), int(b), int(a)));
 	}
 
 	void UInt32Array(const std::string& name, const uint32_t* arr, size_t count) {
@@ -1367,15 +1323,15 @@ struct ChunkFieldBuilder {
 	}
 
 	void Vec3(std::string name, const W3dVectorStruct& v) {
-		Push(std::move(name), "vector3", FormatVec3(v));
+		Push(std::move(name), "vector3", FormatUtils::FormatVector(v.X, v.Y, v.Z));
 	}
 
 	void Vec3i(std::string name, const Vector3i& v) {
-		Push(std::move(name), "vector3i", FormatVec3i(v));
+		Push(std::move(name), "vector3i", FormatUtils::FormatVector(v.I, v.K, v.J));
 	}
 
 	void Float(std::string name, float v) {
-		Push(std::move(name), "float", FormatFloat(v));
+		Push(std::move(name), "float", FormatUtils::FormatValue(v));
 	}
 
 	// Shader enum display helpers
@@ -1439,7 +1395,7 @@ struct ChunkFieldBuilder {
 
 	// TexCoord helpers
 	void TexCoord(std::string name, const W3dTexCoordStruct& tc) {
-		Push(std::move(name), "vector2", FormatTexCoord(tc));
+		Push(std::move(name), "vector2", FormatUtils::FormatVector(tc.U, tc.V));
 	}
 	void TexCoordUV(std::string base, const W3dTexCoordStruct& tc) {
 		Push(base + ".U", "float", std::to_string(tc.U));
