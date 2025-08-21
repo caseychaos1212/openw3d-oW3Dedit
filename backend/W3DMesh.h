@@ -180,10 +180,7 @@ inline std::vector<ChunkField> InterpretVertexNormals(const std::shared_ptr<Chun
 
     auto verts = std::get<std::span<const W3dVectorStruct>>(parsed);
 
-    // reinterpret as an array of vectors
-    auto const* verts = reinterpret_cast<const W3dVectorStruct*>(buf.data());
-    size_t count = buf.size() / ElemSize;
-
+    // --- Builder
     ChunkFieldBuilder B(fields);
 
     for (size_t i = 0; i < verts.size(); ++i) {
@@ -206,7 +203,7 @@ inline std::vector<ChunkField> InterpretMeshUserText(
     if (!chunk) return fields;
 
     ChunkFieldBuilder B(fields);
-    // read a null-terminated string out of chunk->data (up to chunk size)
+    
     B.NullTerm(
         "UserText",
         reinterpret_cast<const char*>(chunk->data.data()),
@@ -216,9 +213,7 @@ inline std::vector<ChunkField> InterpretMeshUserText(
     return fields;
 }
 
-inline std::vector<ChunkField> InterpretVertexInfluences(
-    const std::shared_ptr<ChunkItem>& chunk
-) {
+inline std::vector<ChunkField> InterpretVertexInfluences(const std::shared_ptr<ChunkItem>& chunk) {
     std::vector<ChunkField> fields;
     if (!chunk) return fields;
 
@@ -232,6 +227,7 @@ inline std::vector<ChunkField> InterpretVertexInfluences(
     auto infs = std::get<std::span<const W3dVertInfStruct>>(parsed);
 
     ChunkFieldBuilder B(fields);
+
     for (size_t i = 0; i < infs.size(); ++i) {
         const auto& inf = infs[i];
         const std::string pfx = "VertexInfluence[" + std::to_string(i) + "]";
