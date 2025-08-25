@@ -7,26 +7,27 @@ inline std::vector<ChunkField> InterpretMeshHeader3(const std::shared_ptr<ChunkI
     std::vector<ChunkField> fields;
     if (!chunk) return fields;
 
-    const auto& buf = chunk->data;
-    if (buf.size() < sizeof(W3dMeshHeader3Struct)) {
-        fields.emplace_back("error", "string", "Header too small");
+    auto buff = ParseChunkStruct<W3dMeshHeader3Struct>(chunk);
+    if (auto err = std::get_if<std::string>(&buff)) {
+        fields.emplace_back("error", "string", *err);
         return fields;
     }
 
-    const auto* hdr = reinterpret_cast<const W3dMeshHeader3Struct*>(chunk->data.data());
-    uint32_t attr = hdr->Attributes;
+    const auto& data = std::get<W3dMeshHeader3Struct>(buff);
+
+    uint32_t attr = data.Attributes;
 
     ChunkFieldBuilder B(fields);
 
     // --- Version -----------------------------------------------------------
-    B.Version("Version", hdr->Version);
+    B.Version("Version", data.Version);
 
     //--- Names ----------------------------------------------------------
-    B.Name("MeshName", hdr->MeshName);
-    B.Name("ContainerName", hdr->ContainerName);
+    B.Name("MeshName", data.MeshName);
+    B.Name("ContainerName", data.ContainerName);
 
     //--- Raw Attributes -----------------------------------------------
-	B.UInt32("Attributes", hdr->Attributes);
+	B.UInt32("Attributes", data.Attributes);
 
 
     //--- Geometry type (masked equality) ---------------------------------
@@ -81,28 +82,28 @@ inline std::vector<ChunkField> InterpretMeshHeader3(const std::shared_ptr<ChunkI
 
 
     //--- Counts, Sorting & Bounds ------------------------------------
-    B.UInt32("NumTris", hdr->NumTris);
-    B.UInt32("NumVertices", hdr->NumVertices);
-    B.UInt32("NumMaterials", hdr->NumMaterials);
-    B.UInt32("NumDamageStages", hdr->NumDamageStages);
+    B.UInt32("NumTris", data.NumTris);
+    B.UInt32("NumVertices", data.NumVertices);
+    B.UInt32("NumMaterials", data.NumMaterials);
+    B.UInt32("NumDamageStages", data.NumDamageStages);
 
     // SortLevel
-    if (hdr->SortLevel == static_cast<int32_t>(SortLevel::SORT_LEVEL_NONE)) {
+    if (data.SortLevel == static_cast<int32_t>(SortLevel::SORT_LEVEL_NONE)) {
         B.Push("SortLevel", "string", "NONE");
     }
     else {
-        B.Push("SortLevel", "int32", std::to_string(hdr->SortLevel));
+        B.Push("SortLevel", "int32", std::to_string(data.SortLevel));
     }
 
     // PrelitVersion
     constexpr auto PRELIT_MASK = static_cast<uint32_t>(MeshAttr::W3D_MESH_FLAG_PRELIT_MASK);
-    B.Versioned("PrelitVersion", attr, PRELIT_MASK, hdr->PrelitVersion);
+    B.Versioned("PrelitVersion", attr, PRELIT_MASK, data.PrelitVersion);
 
     // FutureCounts
-	B.UInt32("FutureCounts[0]", hdr->FutureCounts[0]);
+	B.UInt32("FutureCounts[0]", data.FutureCounts[0]);
 
     //--- VertexChannels ---------------------------------------------
-    uint32_t vc = hdr->VertexChannels;
+    uint32_t vc = data.VertexChannels;
     B.UInt32("VertexChannels", vc);
 
     // for each bit in the enum, if set push a flag
@@ -119,7 +120,7 @@ inline std::vector<ChunkField> InterpretMeshHeader3(const std::shared_ptr<ChunkI
     }
 
     //--- FaceChannels -----------------------------------------------
-    B.UInt32("FaceChannels", hdr->FaceChannels);
+    B.UInt32("FaceChannels", data.FaceChannels);
 
     // We only have one right now, but this pattern is extensible
     static constexpr std::pair<uint32_t, const char*> FCFlags[] = {
@@ -127,14 +128,14 @@ inline std::vector<ChunkField> InterpretMeshHeader3(const std::shared_ptr<ChunkI
     };
 
     for (auto [mask, name] : FCFlags) {
-        B.Flag(hdr->FaceChannels, mask, name);
+        B.Flag(data.FaceChannels, mask, name);
     }
 
     //--- Bounds --------------------------------------------------------
-    B.Vec3("Min", hdr->Min);
-    B.Vec3("Max", hdr->Max);
-    B.Vec3("SphCenter", hdr->SphCenter);
-    B.Float("SphRadius", hdr->SphRadius);
+    B.Vec3("Min", data.Min);
+    B.Vec3("Max", data.Max);
+    B.Vec3("SphCenter", data.SphCenter);
+    B.Float("SphRadius", data.SphRadius);
 
     return fields;
 }
@@ -147,20 +148,19 @@ inline std::vector<ChunkField> InterpretVertices(const std::shared_ptr<ChunkItem
 
     auto parsed = ParseChunkArray<W3dVectorStruct>(chunk);
     if (auto err = std::get_if<std::string>(&parsed)) {
-        fields.emplace_back("error", "string",
-            "Malformed VERTICES chunk: " + *err);
+        fields.emplace_back("error", "string", "Malformed VERTICES chunk: " + *err);
         return fields;
     }
+    const auto& data = std::get<std::vector<W3dVectorStruct>>(parsed);
 
-    auto verts = std::get<std::span<const W3dVectorStruct>>(parsed);
     
     // --- Builder
     ChunkFieldBuilder B(fields);
 
-    for (size_t i = 0; i < verts.size(); ++i) {
+    for (size_t i = 0; i < data.size(); ++i) {
         B.Vec3(
             "Vertex[" + std::to_string(i) + "]",
-            verts[i]
+            data[i]
         );
     }
 
@@ -173,20 +173,19 @@ inline std::vector<ChunkField> InterpretVertexNormals(const std::shared_ptr<Chun
 
     auto parsed = ParseChunkArray<W3dVectorStruct>(chunk);
     if (auto err = std::get_if<std::string>(&parsed)) {
-        fields.emplace_back("error", "string",
-            "Malformed Normal chunk: " + *err);
+        fields.emplace_back("error", "string", "Malformed Normal chunk: " + *err);
         return fields;
     }
 
-    auto verts = std::get<std::span<const W3dVectorStruct>>(parsed);
+    const auto& data = std::get<std::vector<W3dVectorStruct>>(parsed);
 
     // --- Builder
     ChunkFieldBuilder B(fields);
 
-    for (size_t i = 0; i < verts.size(); ++i) {
+    for (size_t i = 0; i < data.size(); ++i) {
         B.Vec3(
             "Normal[" + std::to_string(i) + "]",
-            verts[i]
+            data[i]
         );
     }
 
@@ -219,17 +218,16 @@ inline std::vector<ChunkField> InterpretVertexInfluences(const std::shared_ptr<C
 
     auto parsed = ParseChunkArray<W3dVertInfStruct>(chunk);
     if (auto err = std::get_if<std::string>(&parsed)) {
-        fields.emplace_back("error", "string",
-            "Malformed VERTEX_INFLUENCES chunk: " + *err);
+        fields.emplace_back("error", "string", "Malformed VERTEX_INFLUENCES chunk: " + *err);
         return fields;
     }
 
-    auto infs = std::get<std::span<const W3dVertInfStruct>>(parsed);
+    const auto% data = std::get<std::vector<W3dVertInfStruct>>(parsed);
 
     ChunkFieldBuilder B(fields);
 
-    for (size_t i = 0; i < infs.size(); ++i) {
-        const auto& inf = infs[i];
+    for (size_t i = 0; i < data.size(); ++i) {
+        const auto& inf = data[i];
         const std::string pfx = "VertexInfluence[" + std::to_string(i) + "]";
         for (int j = 0; j < 2; ++j) {
             B.UInt16(pfx + ".BoneIdx[" + std::to_string(j) + "]", inf.BoneIdx[j]);
@@ -247,22 +245,21 @@ inline std::vector<ChunkField> InterpretTriangles(const std::shared_ptr<ChunkIte
 
     auto parsed = ParseChunkArray<W3dTriStruct>(chunk);
     if (auto err = std::get_if<std::string>(&parsed)) {
-        fields.emplace_back("error", "string",
-            "Malformed TRIANGLES chunk: " + *err);
+        fields.emplace_back("error", "string", "Malformed TRIANGLES chunk: " + *err);
         return fields;
     }
 
-    auto tris = std::get<std::span<const W3dTriStruct>>(parsed);
+    auto data = std::get<std::vector<W3dTriStruct>>(parsed);
 
     // --- Builder
     ChunkFieldBuilder B(fields);
 
-    for (size_t i = 0; i < tris.size(); ++i) {
-        const auto& T = tris[i];
+    for (size_t i = 0; i < data.size(); ++i) {
+        const auto& T = data[i];
         std::string pfx = "Triangle[" + std::to_string(i) + "]";
 
         // int32[3] array of indices
-        B.UInt32Array(pfx + ".Vertexindices", T.Vindex, 3);
+        B.UInt32Array(pfx + ".VertexIndices", T.Vindex, 3);
 
         // attributes
         B.UInt32(pfx + ".Attributes", T.Attributes);
@@ -271,8 +268,7 @@ inline std::vector<ChunkField> InterpretTriangles(const std::shared_ptr<ChunkIte
         B.Vec3(pfx + ".Normal", T.Normal);
 
         // dist
-        // BUG: Something is off here example: 0.441293 reads as 1054994752.000000
-        B.Float(pfx + ".Dist", T.Dist);
+        B.UInt32(pfx + ".Dist", T.Dist);
     }
 
     return fields;
@@ -284,12 +280,11 @@ inline std::vector<ChunkField> InterpretVertexShadeIndices(const std::shared_ptr
 
     auto parsed = ParseChunkArray<uint32_t>(chunk);
     if (auto err = std::get_if<std::string>(&parsed)) {
-        fields.emplace_back("error", "string",
-            "Malformed VERTEX_SHADE_INDICES chunk: " + *err);
+        fields.emplace_back("error", "string", "Malformed VERTEX_SHADE_INDICES chunk: " + *err);
         return fields;
     }
 
-    auto data = std::get<std::span<const uint32_t>>(parsed);
+    auto data = std::get<std::vector<uint32_t>>(parsed);
 
     ChunkFieldBuilder B(fields);
     for (size_t i = 0; i < data.size(); ++i) {
@@ -303,31 +298,25 @@ inline std::vector<ChunkField> InterpretMaterialInfo(const std::shared_ptr<Chunk
     std::vector<ChunkField> fields;
     if (!chunk) return fields;
 
-    const auto& buf = chunk->data;
-
-    if (buf.size() < sizeof(W3dMaterialInfoStruct)) {
-        fields.emplace_back(
-            "error", "string",
-            "Malformed MATERIAL_INFO chunk; size=" + std::to_string(buf.size())
-        );
+    auto buff = ParseChunkStruct<W3dMaterialInfoStruct>(chunk);
+    if (auto err = std::get_if<std::string>(&buff)) {
+        fields.emplace_back("error", "string", "Malformed Material Info chunk: " + *err);
         return fields;
     }
+    const auto& data = std::get<W3dMaterialInfoStruct>(buff);
 
-    auto const* hdr = reinterpret_cast<const W3dMaterialInfoStruct*>(buf.data());
     ChunkFieldBuilder B(fields);
 
    
-    B.UInt32("PassCount", hdr->PassCount);
-    B.UInt32("VertexMaterialCount", hdr->VertexMaterialCount);
-    B.UInt32("ShaderCount", hdr->ShaderCount);
-    B.UInt32("TextureCount", hdr->TextureCount);
+    B.UInt32("PassCount", data.PassCount);
+    B.UInt32("VertexMaterialCount", data.VertexMaterialCount);
+    B.UInt32("ShaderCount", data.ShaderCount);
+    B.UInt32("TextureCount", data.TextureCount);
 
     return fields;
 }
 
-inline std::vector<ChunkField> InterpretVertexMaterialName(
-    const std::shared_ptr<ChunkItem>& chunk
-) {
+inline std::vector<ChunkField> InterpretVertexMaterialName(const std::shared_ptr<ChunkItem>& chunk) {
     std::vector<ChunkField> fields;
     if (!chunk) return fields;
 
@@ -342,23 +331,20 @@ inline std::vector<ChunkField> InterpretVertexMaterialName(
     return fields;
 }
 
-inline std::vector<ChunkField> InterpretVertexMaterialInfo(
-    const std::shared_ptr<ChunkItem>& chunk
-) {
+inline std::vector<ChunkField> InterpretVertexMaterialInfo(const std::shared_ptr<ChunkItem>& chunk) {
     std::vector<ChunkField> fields;
     if (!chunk) return fields;
 
-    const auto& buf = chunk->data;
-    constexpr size_t REC = sizeof(W3dVertexMaterialStruct);
-    if (buf.size() < REC) {
-        fields.emplace_back("error", "string", "Material info too short");
+    auto buff = ParseChunkStruct<W3dVertexMaterialStruct>(chunk);
+    if (auto err = std::get_if<std::string>(&buff)) {
+        fields.emplace_back("error", "string", "Malformed Material Info chunk: " + *err);
         return fields;
     }
-
-    auto vm = reinterpret_cast<const W3dVertexMaterialStruct*>(buf.data());
+    const auto& data = std::get<W3dVertexMaterialStruct>(buff);
+    
     ChunkFieldBuilder B(fields);
 
-    uint32_t attr = vm->Attributes;
+    uint32_t attr = data.Attributes;
     
 
     // basic flags
@@ -385,44 +371,37 @@ inline std::vector<ChunkField> InterpretVertexMaterialInfo(
     }
 
     // finally the colors & floats
-    B.RGB("Material.Ambient", vm->Ambient.R, vm->Ambient.G, vm->Ambient.B);
-    B.RGB("Material.Diffuse", vm->Diffuse.R, vm->Diffuse.G, vm->Diffuse.B);
-    B.RGB("Material.Specular", vm->Specular.R, vm->Specular.G, vm->Specular.B);
-    B.RGB("Material.Emissive", vm->Emissive.R, vm->Emissive.G, vm->Emissive.B);
-    B.Float("Material.Shininess", vm->Shininess);
-    B.Float("Material.Opacity", vm->Opacity);
-    B.Float("Material.Translucency", vm->Translucency);
+    B.RGB("Material.Ambient", data.Ambient.R, data.Ambient.G, data.Ambient.B);
+    B.RGB("Material.Diffuse", data.Diffuse.R, data.Diffuse.G, data.Diffuse.B);
+    B.RGB("Material.Specular", data.Specular.R, data.Specular.G, data.Specular.B);
+    B.RGB("Material.Emissive", data.Emissive.R, data.Emissive.G, data.Emissive.B);
+    B.Float("Material.Shininess", data.Shininess);
+    B.Float("Material.Opacity", data.Opacity);
+    B.Float("Material.Translucency", data.Translucency);
 
     return fields;
 }
 
 
-
-
-
-inline std::vector<ChunkField> InterpretShaders(
-    const std::shared_ptr<ChunkItem>& chunk
-) {
+inline std::vector<ChunkField> InterpretShaders(const std::shared_ptr<ChunkItem>& chunk) {
     std::vector<ChunkField> fields;
     if (!chunk) return fields;
 
-    const auto& buf = chunk->data;
-    constexpr size_t REC = sizeof(W3dShaderStruct);
-    if (buf.size() % REC != 0) {
-        fields.emplace_back(
-            "error", "string",
-            "Malformed SHADERS chunk; size=" + std::to_string(buf.size())
-        );
+
+    auto parsed = ParseChunkArray<W3dShaderStruct>(chunk);
+    if (auto err = std::get_if<std::string>(&parsed)) { 
+        fields.emplace_back("error", "string", "Malformed SHADERS chunk: " + *err);
         return fields;
     }
+    const auto& data = std::get<W3dShaderStruct>(parsed);
 
-    auto shaders = reinterpret_cast<const W3dShaderStruct*>(buf.data());
-    size_t count = buf.size() / REC;
 
     ChunkFieldBuilder B(fields);
-    for (size_t i = 0; i < count; ++i) {
-        const auto& s = shaders[i];
-        std::string pfx = "Shader[" + std::to_string(i) + "]";
+    B.UInt32("Count", static_cast<uint32_t>(data.size()));
+
+    for (size_t i = 0; i < data.size(); ++i) {
+        const auto& s = data[i];
+        const std::string pfx = "Shader[" + std::to_string(i) + "]";
 
         B.DepthCompareField(pfx + ".DepthCompare", s.DepthCompare);
         B.DepthMaskField(pfx + ".DepthMask", s.DepthMask);
@@ -498,6 +477,7 @@ inline std::vector<ChunkField> InterpretTextureName(
     return fields;
 }
 
+// TODO: Update next:
 inline std::vector<ChunkField> InterpretTextureInfo(
     const std::shared_ptr<ChunkItem>& chunk
 ) {
