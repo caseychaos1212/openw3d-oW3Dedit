@@ -20,9 +20,9 @@ inline std::vector<ChunkField> InterpretAnimationHeader(
     }
 
     auto hdr = reinterpret_cast<const W3dAnimHeaderStruct*>(buf.data());
-    fields.emplace_back("Version", "string", std::move(FormatVersion(hdr->Version)));
-    fields.emplace_back("AnimationName", "string", std::move(FormatName(hdr->Name, W3D_NAME_LEN)));
-    fields.emplace_back("HierarchyName", "string", std::move(FormatName(hdr->HierarchyName, W3D_NAME_LEN)));
+    fields.emplace_back("Version", "string", std::move(FormatUtils::FormatVersion(hdr->Version)));
+    fields.emplace_back("AnimationName", "string", std::move(FormatUtils::FormatName(hdr->Name, W3D_NAME_LEN)));
+    fields.emplace_back("HierarchyName", "string", std::move(FormatUtils::FormatName(hdr->HierarchyName, W3D_NAME_LEN)));
     fields.emplace_back("NumFrames", "int32", std::to_string(hdr->NumFrames));
     fields.emplace_back("FrameRate", "int32", std::to_string(hdr->FrameRate));
     return fields;

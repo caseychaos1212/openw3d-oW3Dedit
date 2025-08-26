@@ -12,13 +12,11 @@
 #include <QTreeWidget>
 #include <QTableWidget>
 #include <iostream>
-#include "backend/ChunkData.h" 
 #include <QStandardPaths>
 #include <QTextStream>
 #include <QFile>
 #include <QDir>
 #include <QFileInfo>
-#include <QAction>
 #include "backend/W3DMesh.h"
 
 Q_DECLARE_METATYPE(void*)
@@ -257,8 +255,8 @@ void MainWindow::handleTreeSelection() {
 
         switch (target->id) {
         case 0x0101: fields = InterpretHierarchyHeader(target); break;
-        case 0x0102: fields = InterpretPivots(target); break;
-        case 0x0103: fields = InterpretPivotFixups(target); break;
+//        case 0x0102: fields = InterpretPivots(target); break;
+//        case 0x0103: fields = InterpretPivotFixups(target); break;
         case 0x001F: fields = InterpretMeshHeader3(target); break;
         case 0x0002: fields = InterpretVertices(target); break;
         case 0x0003: fields = InterpretVertexNormals(target); break;

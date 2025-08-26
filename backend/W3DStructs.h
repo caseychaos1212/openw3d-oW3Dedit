@@ -7,7 +7,7 @@
 #include <algorithm>
 #include <sstream>
 #include <iomanip>
-#include "FormatUtills.h"
+#include "FormatUtils.h"
 #include "EnumToString.h"
 
 
@@ -198,7 +198,7 @@ struct W3dTriStruct
 	uint32_t					Vindex[3];			// vertex,vnormal,texcoord,color indices
 	uint32_t					Attributes;			// attributes bits
 	W3dVectorStruct		Normal;				// plane normal
-	uint32_t				Dist;					// plane distance
+	float				Dist;					// plane distance
 };
 
 struct W3dMaterialInfoStruct
@@ -474,6 +474,9 @@ enum class TextureAttr : uint16_t {
 };
 */
 
+
+
+
 enum class TextureAttr : uint16_t {
 	PUBLISH = 0x0001,
 	RESIZE_OBSOLETE = 0x0002,
@@ -481,29 +484,55 @@ enum class TextureAttr : uint16_t {
 	CLAMP_U = 0x0008,
 	CLAMP_V = 0x0010,
 	ALPHA_BITMAP = 0x0020,
-	
+	MIP_MASK = 0x00c0,
+	MIP_ALL = 0x0000,
+	MIP_2 = 0x0040,		
+	MIP_3 = 0x0080,		
+	MIP_4 = 0x00c0,		
+	HINT_SHIFT = 8,
+	HINT_MASK = 0x0000ff00,
+	HINT_BASE = 0x0000,
+	HINT_EMISSIVE = 0x0100,		
+	HINT_ENVIRONMENT = 0x0200,		
+	HINT_SHINY_MASK = 0x0300,		
+	TYPE_MASK = 0x1000,
+	TYPE_COLORMAP = 0x0000,		
+	TYPE_BUMPMAP = 0x1000,		
+	ANIM_LOOP = 0x0000,
+	ANIM_PINGPONG = 0x0001,
+	ANIM_ONCE = 0x0002,
+	ANIM_MANUAL = 0x0003
 };
+	
 
-static constexpr std::array<std::pair<TextureAttr, std::string_view>, 6> TextureAttrNames{ {
+
+static constexpr std::array<std::pair<TextureAttr, std::string_view>, 23> TextureAttrNames{ {
 	{ TextureAttr::PUBLISH,      "W3DTEXTURE_PUBLISH"       },
 	{ TextureAttr::RESIZE_OBSOLETE, "W3DTEXTURE_RESIZE_OBSOLETE" },
 	{ TextureAttr::NO_LOD,       "W3DTEXTURE_NO_LOD"        },
 	{ TextureAttr::CLAMP_U,      "W3DTEXTURE_CLAMP_U"       },
 	{ TextureAttr::CLAMP_V,      "W3DTEXTURE_CLAMP_V"       },
 	{ TextureAttr::ALPHA_BITMAP, "W3DTEXTURE_ALPHA_BITMAP"  },
+	{ TextureAttr::MIP_ALL,		 "W3DTEXTURE_MIP_LEVELS_ALL"  },
+	{ TextureAttr::MIP_2,		 "W3DTEXTURE_MIP_LEVELS_2"  },
+	{ TextureAttr::MIP_3,		 "W3DTEXTURE_MIP_LEVELS_3"  },
+	{ TextureAttr::MIP_4,		 "W3DTEXTURE_MIP_LEVELS_4" },
+	{ TextureAttr::HINT_SHIFT,   "W3DTEXTURE_HINT_SHIFT" },
+	{ TextureAttr::HINT_MASK,	"W3DTEXTURE_HINT_MASK" },
+	{ TextureAttr::HINT_BASE,	"W3DTEXTURE_HINT_BASE" },
+	{ TextureAttr::HINT_EMISSIVE, "W3DTEXTURE_HINT_EMISSIVE" },
+	{ TextureAttr::HINT_ENVIRONMENT,	"W3DTEXTURE_HINT_ENVIRONMENT" },
+	{ TextureAttr::HINT_SHINY_MASK,	"W3DTEXTURE_HINT_SHINY_MASK" },
+	{ TextureAttr::TYPE_MASK,	"W3DTEXTURE_TYPE_MASK" },
+	{ TextureAttr::TYPE_COLORMAP,	"W3DTEXTURE_TYPE_COLORMAP" },
+	{ TextureAttr::TYPE_BUMPMAP,	"W3DTEXTURE_TYPE_BUMPMAP" },
+	{ TextureAttr::ANIM_LOOP,	"W3DTEXTURE_ANIM_LOOP" },
+	{ TextureAttr::ANIM_PINGPONG,	"W3DTEXTURE_ANIM_PINGPONG" },
+	{ TextureAttr::ANIM_ONCE,	"W3DTEXTURE_ANIM_ONCE" },
+	{ TextureAttr::ANIM_MANUAL,	"W3DTEXTURE_ANIM_MANUAL" },
 } };
 
-enum class TextureAnim : uint16_t {
-	LOOP = 0,
-	PINGPONG = 1,
-	ONCE = 2,
-	MANUAL = 3,
-};
-ENUM_TO_STRING(TextureAnim,
-	"W3DTEXTURE_ANIM_LOOP",
-	"W3DTEXTURE_ANIM_PINGPONG",
-	"W3DTEXTURE_ANIM_ONCE",
-	"W3DTEXTURE_ANIM_MANUAL")
+
 
 
 struct W3dTextureInfoStruct
@@ -1256,7 +1285,7 @@ struct ChunkFieldBuilder {
 	}
 
 	void Version(std::string name, uint32_t raw) {
-		Push(std::move(name), "string", FormatVersion(raw));
+		Push(std::move(name), "string", FormatUtils::FormatVersion(raw));
 	}
 
 	void Name(const char* fieldName, const char* rawName, size_t maxLen = W3D_NAME_LEN) {
@@ -1290,11 +1319,11 @@ struct ChunkFieldBuilder {
 	}
 
 	void RGB(std::string name, uint8_t r, uint8_t g, uint8_t b) {
-		Push(std::move(name), "RGB", FormatUtils::FormatVector(int(r), int(g), int(b)));
+		Push(std::move(name), "RGB", FormatUtils::FormatRGB(int(r), int(g), int(b)));
 	}
 
 	void RGBA(std::string name, uint8_t r, uint8_t g, uint8_t b, uint8_t a) {
-		Push(std::move(name), "RGBA", FormatUtils::FormatVector(int(r), int(g), int(b), int(a)));
+		Push(std::move(name), "RGBA", FormatUtils::FormatRGBA(int(r), int(g), int(b), int(a)));
 	}
 
 	void UInt32Array(const std::string& name, const uint32_t* arr, size_t count) {
@@ -1310,6 +1339,10 @@ struct ChunkFieldBuilder {
 		if (bits & mask) Push("Attributes", "flag", std::string(flagName));
 	}
 
+	void TextureFlag(std::string_view field, uint32_t bits, uint32_t mask, std::string_view flagName) {
+		if (bits & mask) Push(std::string(field), "flag", std::string(flagName));
+	}
+
 	void Versioned(std::string name, uint32_t bits, uint32_t mask, uint32_t version) {
 		if ((bits & mask) == 0) {
 			Push(std::move(name), "string", "N/A");
@@ -1318,20 +1351,20 @@ struct ChunkFieldBuilder {
 			Push(std::move(name), "string", "UNKNOWN");
 		}
 		else {
-			Push(std::move(name), "string", FormatVersion(version));
+			Push(std::move(name), "string", FormatUtils::FormatVersion(version));
 		}
 	}
 
 	void Vec3(std::string name, const W3dVectorStruct& v) {
-		Push(std::move(name), "vector3", FormatUtils::FormatVector(v.X, v.Y, v.Z));
+		Push(std::move(name), "vector3", FormatUtils::FormatVec3(v.X, v.Y, v.Z));
 	}
 
 	void Vec3i(std::string name, const Vector3i& v) {
-		Push(std::move(name), "vector3i", FormatUtils::FormatVector(v.I, v.K, v.J));
+		Push(std::move(name), "vector3i", FormatUtils::FormatVec3i(v.I, v.K, v.J));
 	}
 
 	void Float(std::string name, float v) {
-		Push(std::move(name), "float", FormatUtils::FormatValue(v));
+		Push(std::move(name), "float", FormatUtils::FormatFloat(v));
 	}
 
 	// Shader enum display helpers
@@ -1395,7 +1428,7 @@ struct ChunkFieldBuilder {
 
 	// TexCoord helpers
 	void TexCoord(std::string name, const W3dTexCoordStruct& tc) {
-		Push(std::move(name), "vector2", FormatUtils::FormatVector(tc.U, tc.V));
+		Push(std::move(name), "vector2", FormatUtils::FormatVec2(tc.U, tc.V));
 	}
 	void TexCoordUV(std::string base, const W3dTexCoordStruct& tc) {
 		Push(base + ".U", "float", std::to_string(tc.U));

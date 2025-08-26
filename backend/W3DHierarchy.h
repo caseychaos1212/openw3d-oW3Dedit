@@ -23,10 +23,10 @@ inline std::vector<ChunkField> InterpretHierarchyHeader(
    
     auto hdr = reinterpret_cast<const W3dHierarchyStruct*>(buf.data());
 
-    fields.emplace_back("Version", "string", FormatVersion(hdr->Version));
-    fields.emplace_back("Name", "string", FormatName(hdr->Name, W3D_NAME_LEN));
+    fields.emplace_back("Version", "string", FormatUtils::FormatVersion(hdr->Version));
+    fields.emplace_back("Name", "string", FormatUtils::FormatName(hdr->Name, W3D_NAME_LEN));
     fields.emplace_back("NumPivots", "uint32", std::to_string(hdr->NumPivots));
-    fields.emplace_back("Center", "vector", FormatVec3(hdr->Center));
+//    fields.emplace_back("Center", "vector", FormatUtils::FormatVec3(hdr->Center));
 
     return fields;
 }
@@ -40,7 +40,7 @@ inline std::string FormatQuat(const W3dQuaternionStruct& q) {
         << q.Q[0] << " " << q.Q[1] << " " << q.Q[2] << " " << q.Q[3];
     return o.str();
 }
-
+/*
 inline std::vector<ChunkField> InterpretPivots(
     const std::shared_ptr<ChunkItem>& chunk
 ) {
@@ -65,7 +65,7 @@ inline std::vector<ChunkField> InterpretPivots(
 
         fields.emplace_back(
             pfx + ".Name", "string",
-            FormatName(p.Name, W3D_NAME_LEN)
+            FormatUtils::FormatName(p.Name, W3D_NAME_LEN)
         );
         fields.emplace_back(
             pfx + ".Parentidx", "int32",
@@ -87,6 +87,7 @@ inline std::vector<ChunkField> InterpretPivots(
 
     return fields;
 }
+
 
 inline std::vector<ChunkField> InterpretPivotFixups(
     const std::shared_ptr<ChunkItem>& chunk
@@ -127,3 +128,4 @@ inline std::vector<ChunkField> InterpretPivotFixups(
 
     return fields;
 }
+*/

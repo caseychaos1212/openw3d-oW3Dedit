@@ -28,7 +28,7 @@ inline bool IsForcedWrapper(uint32_t id, uint32_t parent = 0)
         return false;
     }
 }
-}
+
 
 bool ChunkData::loadFromFile(const std::string& filename) {
     std::ifstream file(filename, std::ios::binary);
@@ -75,7 +75,7 @@ bool ChunkData::loadFromFile(const std::string& filename) {
         chunk->data.resize(chunk->length);
         file.read(reinterpret_cast<char*>(chunk->data.data()), chunk->length);
 
-        std::cout << "Top‑level chunk: 0x"
+        std::cout << "Top level chunk: 0x"
             << std::hex << chunk->id
             << std::dec << "  size=" << chunk->length
             << "  wraps=" << chunk->hasSubChunks
