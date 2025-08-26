@@ -6,25 +6,27 @@
 
 
 
-inline std::vector<ChunkField> InterpretAnimationHeader(
-    const std::shared_ptr<ChunkItem>& chunk
-) {
+inline std::vector<ChunkField> InterpretAnimationHeader(const std::shared_ptr<ChunkItem>& chunk) {
     std::vector<ChunkField> fields;
     if (!chunk) return fields;
 
-    const auto& buf = chunk->data;
-    constexpr size_t SZ = sizeof(W3dAnimHeaderStruct);
-    if (buf.size() < SZ) {
-        fields.emplace_back("Error", "string", "Animation header too small");
+    auto buff = ParseChunkStruct<W3dAnimHeaderStruct>(chunk);
+    if (auto err = std::get_if<std::string>(&buff)) {
+        fields.emplace_back("error", "string", "Malformed Animation_Header chunk: " + *err);
         return fields;
     }
 
-    auto hdr = reinterpret_cast<const W3dAnimHeaderStruct*>(buf.data());
-    fields.emplace_back("Version", "string", std::move(FormatUtils::FormatVersion(hdr->Version)));
-    fields.emplace_back("AnimationName", "string", std::move(FormatUtils::FormatName(hdr->Name, W3D_NAME_LEN)));
-    fields.emplace_back("HierarchyName", "string", std::move(FormatUtils::FormatName(hdr->HierarchyName, W3D_NAME_LEN)));
-    fields.emplace_back("NumFrames", "int32", std::to_string(hdr->NumFrames));
-    fields.emplace_back("FrameRate", "int32", std::to_string(hdr->FrameRate));
+    const auto& data = std::get<W3dAnimHeaderStruct>(buff);
+
+    uint32_t attr = data.Attributes;
+
+    ChunkFieldBuilder B(fields);
+
+    B.Version("Version", data.Version);
+    B.Name("AnimationName", data.Name);
+    B.Name("HierarchyName", data.HierarchyName);
+    B.UInt32("NumFrames", data.NumFrames);
+    B.UInt32("FrameRate", data.FrameRate);
     return fields;
 }
 
