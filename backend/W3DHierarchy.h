@@ -1,5 +1,7 @@
 #pragma once
 #include "W3DStructs.h"
+#include "FormatUtils.h"
+#include "ParseUtils.h"
 #include <vector>
 #include <string>
 #include <sstream>
@@ -7,125 +9,85 @@
 #include <cstring>
 
 
-inline std::vector<ChunkField> InterpretHierarchyHeader(
-    const std::shared_ptr<ChunkItem>& chunk
-) {
+inline std::vector<ChunkField> InterpretHierarchyHeader(const std::shared_ptr<ChunkItem>& chunk) {
     std::vector<ChunkField> fields;
     if (!chunk) return fields;
 
-    const auto& buf = chunk->data;
-    constexpr size_t MIN_SZ = sizeof(W3dHierarchyStruct);
-    if (buf.size() < MIN_SZ) {
-        
+    auto buff = ParseChunkStruct<W3dHierarchyStruct>(chunk);
+    if (auto err = std::get_if<std::string>(&buff)) {
+        fields.emplace_back("error", "string", "Malformed Hierarchy_Header chunk: " + *err);
         return fields;
     }
 
-   
-    auto hdr = reinterpret_cast<const W3dHierarchyStruct*>(buf.data());
+    const auto& data = std::get<W3dHierarchyStruct>(buff);
 
-    fields.emplace_back("Version", "string", FormatUtils::FormatVersion(hdr->Version));
-    fields.emplace_back("Name", "string", FormatUtils::FormatName(hdr->Name, W3D_NAME_LEN));
-    fields.emplace_back("NumPivots", "uint32", std::to_string(hdr->NumPivots));
-//    fields.emplace_back("Center", "vector", FormatUtils::FormatVec3(hdr->Center));
+    ChunkFieldBuilder B(fields);
 
+    B.Version("Version", data.Version);
+    B.Name("MeshName", data.Name);
+    B.UInt32("NumPivots", data.NumPivots);
+    B.Vec3("Center", data.Center);
     return fields;
 }
 
 
 
 
-inline std::string FormatQuat(const W3dQuaternionStruct& q) {
-    std::ostringstream o;
-    o << std::fixed << std::setprecision(6)
-        << q.Q[0] << " " << q.Q[1] << " " << q.Q[2] << " " << q.Q[3];
-    return o.str();
-}
-/*
-inline std::vector<ChunkField> InterpretPivots(
-    const std::shared_ptr<ChunkItem>& chunk
-) {
+
+inline std::vector<ChunkField> InterpretPivots(const std::shared_ptr<ChunkItem>& chunk) {
     std::vector<ChunkField> fields;
     if (!chunk) return fields;
 
-    const auto& buf = chunk->data;
-    constexpr size_t REC = sizeof(W3dPivotStruct);
-    if (buf.size() % REC != 0) {
-        fields.emplace_back(
-            "error", "string",
-            "Malformed Pivots chunk; size=" + std::to_string(buf.size())
-        );
+    auto parsed = ParseChunkArray<W3dPivotStruct>(chunk);
+    if (auto err = std::get_if<std::string>(&parsed)) {
+        fields.emplace_back("error", "string", "Malformed Pivot chunk: " + *err);
         return fields;
     }
 
-    auto pivots = reinterpret_cast<const W3dPivotStruct*>(buf.data());
-    size_t count = buf.size() / REC;
-    for (size_t i = 0; i < count; ++i) {
-        const auto& p = pivots[i];
-        std::string pfx = "Pivot[" + std::to_string(i) + "]";
+    const auto& data = std::get<std::vector<W3dPivotStruct>>(parsed);
 
-        fields.emplace_back(
-            pfx + ".Name", "string",
-            FormatUtils::FormatName(p.Name, W3D_NAME_LEN)
-        );
-        fields.emplace_back(
-            pfx + ".Parentidx", "int32",
-            std::to_string(static_cast<int32_t>(p.ParentIdx))
-        );
-        fields.emplace_back(
-            pfx + ".Translation", "vector",
-            FormatVec3(p.Translation)
-        );
-        fields.emplace_back(
-            pfx + ".EulerAngles", "vector",
-            FormatVec3(p.EulerAngles)
-        );
-        fields.emplace_back(
-            pfx + ".Rotation", "quaternion",
-            FormatQuat(p.Rotation)
-        );
-    }
+    ChunkFieldBuilder B(fields);
 
-    return fields;
-}
-
-
-inline std::vector<ChunkField> InterpretPivotFixups(
-    const std::shared_ptr<ChunkItem>& chunk
-) {
-    std::vector<ChunkField> fields;
-    if (!chunk) return fields;
-
-    const auto& buf = chunk->data;
-    constexpr size_t REC = sizeof(W3dPivotFixupStruct);
-    if (buf.size() % REC != 0) {
-        fields.emplace_back(
-            "error", "string",
-            "Malformed PivotFixups; size=" + std::to_string(buf.size())
-        );
-        return fields;
-    }
-
-    auto fixes = reinterpret_cast<const W3dPivotFixupStruct*>(buf.data());
-    size_t count = buf.size() / REC;
-
-    for (size_t i = 0; i < count; ++i) {
-        const auto& PF = fixes[i];
-        std::string pfx = "PivotFixup[" + std::to_string(i) + "]";
-
-        for (size_t row = 0; row < 4; ++row) {
-            W3dVectorStruct v{
-                PF.TM[row][0],
-                PF.TM[row][1],
-                PF.TM[row][2]
-            };
-            fields.emplace_back(
-                pfx + ".Row" + std::to_string(row),
-                "vector3",
-                FormatVec3(v)
-            );
+    for (size_t i = 0; i < data.size(); ++i) {
+        const auto& piv = data[i];
+        const std::string pfx = "Pivot[" + std::to_string(i) + "]";
+        for (int j = 0; j < 2; ++j) {
+            B.Name(pfx + ".Name[" + std::to_string(j) + "]", piv.Name[j]);
+            B.UInt16(pfx + ".ParentIDx[" + std::to_string(j) + "]", piv.ParentIDx[j]);
+            B.Vec3(pfx + ".Translation[" + std::to_string(j) + "]", piv.Translation[j]);
+            B.Vec3(pfx + ".EulerAngles[" + std::to_string(j) + "]", piv.EulerAngles[j]);
+            B.Quat(pfx + ".Rotation[" + std::to_string(j) + "]", piv.Rotation[j]);
         }
     }
 
     return fields;
 }
-*/
+
+
+
+inline std::vector<ChunkField> InterpretPivotFixups(const std::shared_ptr<ChunkItem>& chunk) {
+    std::vector<ChunkField> fields;
+    if (!chunk) return fields;
+
+    auto parsed = ParseChunkArray<W3dPivotFixupStruct>(chunk);
+    if (auto err = std::get_if<std::string>(&parsed)) {
+        fields.emplace_back("error", "string", "Malformed PivotFixups chunk: " + *err);
+        return fields;
+    }
+
+    const auto& data = std::get<std::vector<W3dPivotFixupStruct>>(parsed);
+
+    ChunkFieldBuilder B(fields);
+
+    for (size_t i = 0; i < data.size(); ++i) {
+        const auto& pf = data[i];
+        for (int j = 0; j < 4; ++j) {
+            const std::string pfx = "Transform" + std::to_string(j) + "," + "Row";
+
+            B.Vec3(pfx + [ + std::to_string(i) + "]", pf.TM[i]);
+
+        }
+    }
+
+    return fields;
+}

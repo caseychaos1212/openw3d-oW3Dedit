@@ -480,7 +480,7 @@ inline std::vector<ChunkField> InterpretTextureName(
     return fields;
 }
 
-//TODO: Flags don't show up
+
 inline std::vector<ChunkField> InterpretTextureInfo(const std::shared_ptr<ChunkItem>& chunk) {
     std::vector<ChunkField> fields;
     if (!chunk) return fields;

@@ -68,4 +68,10 @@ namespace FormatUtils {
 		return oss.str();
 	}
 
+	inline std::string FormatQuat(float x, float y, float, z, float w) {
+		std::ostringstream oss;
+		oss << std::fixed << std::setprecision(6) << x << ' ' << y << ' ' << z << ' ' << w;
+		return oss.str();
+	}
+
 }

@@ -1366,6 +1366,9 @@ struct ChunkFieldBuilder {
 	void Float(std::string name, float v) {
 		Push(std::move(name), "float", FormatUtils::FormatFloat(v));
 	}
+		void Quat(std::string name, const W3dQuaternionStruct& q) {
+	Push(std::move(name), "quaternion", FormatUtils::FormatQuat(q.X, q.Y, q.Z q.W));
+}
 
 	// Shader enum display helpers
 	void DepthCompareField(std::string_view name, uint8_t raw) {
@@ -1408,6 +1411,7 @@ struct ChunkFieldBuilder {
 		Push(std::string(name), "AlphaTest",
 			ToString(static_cast<AlphaTest>(raw)));
 	}
+
 
 	// PS2 shader variants
 	void Ps2DepthCompareField(std::string_view name, uint8_t raw) {
