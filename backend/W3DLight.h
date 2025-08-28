@@ -2,124 +2,97 @@
 #include "W3DStructs.h"
 #include <vector>
 
-inline std::vector<ChunkField> InterpretLightInfo(
-    const std::shared_ptr<ChunkItem>& chunk
-) {
+inline std::vector<ChunkField> InterpretLightInfo(const std::shared_ptr<ChunkItem>& chunk) {
     std::vector<ChunkField> fields;
+    if (!chunk) return fields;
 
-    // 1 Bounds check
-    if (!chunk || chunk->data.size() < sizeof(W3dLightStruct)) {
-        fields.emplace_back("error", "string", "Invalid LIGHT_INFO chunk size");
+    auto v = ParseChunkStruct<W3dLightStruct>(chunk);
+    if (auto err = std::get_if<std::string>(&v)) {
+        fields.emplace_back("error", "string", "Malformed LIGHT_INFO: " + *err);
         return fields;
     }
+    const auto& L = std::get<W3dLightStruct>(v);
 
-    // 2 Reinterpret the buffer directly as our struct
-    auto const* light = reinterpret_cast<const W3dLightStruct*>(chunk->data.data());
+    ChunkFieldBuilder B(fields);
 
-    // 3 Decode type low byte of Attributes
-    uint8_t type = static_cast<uint8_t>(light->Attributes & 0xFF);
-    static const std::array<const char*, 3> typeNames = {
-        "POINT", "DIRECTIONAL", "SPOT"
-    };
-    std::string typeStr = (type >= 1 && type <= 3)
-        ? std::string("W3D_LIGHT_ATTRIBUTE_") + typeNames[type - 1]
-        : "UNKNOWN(0x" + std::to_string(type) + ")";
-    fields.emplace_back("Attributes.Type", "string", typeStr);
+    // Raw attributes (full 32 bits, if that is the wire type)
+    B.UInt32("Attributes", L.Attributes);
 
-    // 4 Cast shadows bit
-    if (light->Attributes & 0x00000100) {
-        fields.emplace_back(
-            "Attributes.CastShadows",
-            "flag",
-            "W3D_LIGHT_ATTRIBUTE_CAST_SHADOWS"
-        );
+    // Decode type from low byte (1..3 -> POINT/DIRECTIONAL/SPOT)
+    const uint32_t type = (L.Attributes & 0xFFu);
+    switch (type) {
+    case 1: B.Push("Attributes", "flag", "W3D_LIGHT_ATTRIBUTE_POINT");       break;
+    case 2: B.Push("Attributes", "flag", "W3D_LIGHT_ATTRIBUTE_DIRECTIONAL"); break;
+    case 3: B.Push("Attributes", "flag", "W3D_LIGHT_ATTRIBUTE_SPOT");        break;
+    default: B.Push("Attributes", "string", "UNKNOWN_TYPE_" + std::to_string(type)); break;
     }
 
-    // 5 Helper to emit an RGB triple
-    auto emitRGB = [&](const char* name, const W3dRGBStruct& c) {
-        std::ostringstream oss;
-        oss << "("
-            << int(c.R) << " "
-            << int(c.G) << " "
-            << int(c.B) << ")";
-        fields.emplace_back(name, "RGB", oss.str());
-        };
+    // Cast shadows bit (0x00000100)
+    if (L.Attributes & 0x00000100u) {
+        B.Push("Attributes", "flag", "W3D_LIGHT_ATTRIBUTE_CAST_SHADOWS");
+    }
 
-    emitRGB("Ambient", light->Ambient);
-    emitRGB("Diffuse", light->Diffuse);
-    emitRGB("Specular", light->Specular);
+    // Colors
+    B.RGB("Ambient", L.Ambient.R, L.Ambient.G, L.Ambient.B);
+    B.RGB("Diffuse", L.Diffuse.R, L.Diffuse.G, L.Diffuse.B);
+    B.RGB("Specular", L.Specular.R, L.Specular.G, L.Specular.B);
 
-    // 6 Intensity
-    fields.emplace_back(
-        "Intensity",
-        "float",
-        std::to_string(light->Intensity)
-    );
+    // Intensity
+    B.Float("Intensity", L.Intensity);
 
     return fields;
 }
 
-inline std::vector<ChunkField> InterpretSpotLightInfo(
-    const std::shared_ptr<ChunkItem>& chunk
-) {
+inline std::vector<ChunkField> InterpretSpotLightInfo(const std::shared_ptr<ChunkItem>& chunk) {
     std::vector<ChunkField> fields;
+    if (!chunk) return fields;
 
-    // 1 Size check
-    if (!chunk || chunk->data.size() < sizeof(W3dSpotLightStruct)) {
-        fields.emplace_back("error", "string", "Invalid SPOT_LIGHT_INFO chunk size");
+    auto v = ParseChunkStruct<W3dSpotLightStruct>(chunk);
+    if (auto err = std::get_if<std::string>(&v)) {
+        fields.emplace_back("error", "string", "Malformed SPOT_LIGHT_INFO: " + *err);
         return fields;
     }
+    const auto& S = std::get<W3dSpotLightStruct>(v);
 
-    // 2 Cast once
-    auto const* spot = reinterpret_cast<const W3dSpotLightStruct*>(chunk->data.data());
-
-    // 3 SpotDirection
-    {
-        std::ostringstream oss;
-        oss << "("
-            << std::fixed << std::setprecision(6)
-            << spot->SpotDirection.X << " "
-            << spot->SpotDirection.Y << " "
-            << spot->SpotDirection.Z
-            << ")";
-        fields.emplace_back("SpotDirection", "vector3", oss.str());
-    }
-
-    // 4 SpotAngle & SpotExponent
-    fields.emplace_back(
-        "SpotAngle",
-        "float",
-        std::to_string(spot->SpotAngle)
-    );
-    fields.emplace_back(
-        "SpotExponent",
-        "float",
-        std::to_string(spot->SpotExponent)
-    );
-
+    ChunkFieldBuilder B(fields);
+    B.Vec3("SpotDirection", S.SpotDirection);
+    B.Float("SpotAngle", S.SpotAngle);
+    B.Float("SpotExponent", S.SpotExponent);
     return fields;
 }
+
 
 inline std::vector<ChunkField> InterpretNearAtten(const std::shared_ptr<ChunkItem>& chunk) {
-    std::vector<ChunkField> f;
-    if (!chunk || chunk->data.size() < sizeof(W3dLightAttenuationStruct)) {
-        f.emplace_back("error", "string", "Invalid NEAR_ATTENUATION chunk size");
-        return f;
+    std::vector<ChunkField> fields;
+    if (!chunk) return fields;
+
+    auto v = ParseChunkStruct<W3dLightAttenuationStruct>(chunk);
+    if (auto err = std::get_if<std::string>(&v)) {
+        fields.emplace_back("error", "string", "Malformed NEAR_ATTENUATION: " + *err);
+        return fields;
     }
-    auto const* att = reinterpret_cast<const W3dLightAttenuationStruct*>(chunk->data.data());
-    f.emplace_back("Near Atten Start", "float", std::to_string(att->Start));
-    f.emplace_back("Near Atten End", "float", std::to_string(att->End));
-    return f;
+    const auto& A = std::get<W3dLightAttenuationStruct>(v);
+
+    ChunkFieldBuilder B(fields);
+    B.Float("NearAtten.Start", A.Start);
+    B.Float("NearAtten.End", A.End);
+    return fields;
 }
 
+
 inline std::vector<ChunkField> InterpretFarAtten(const std::shared_ptr<ChunkItem>& chunk) {
-    std::vector<ChunkField> f;
-    if (!chunk || chunk->data.size() < sizeof(W3dLightAttenuationStruct)) {
-        f.emplace_back("error", "string", "Invalid FAR_ATTENUATION chunk size");
-        return f;
+    std::vector<ChunkField> fields;
+    if (!chunk) return fields;
+
+    auto v = ParseChunkStruct<W3dLightAttenuationStruct>(chunk);
+    if (auto err = std::get_if<std::string>(&v)) {
+        fields.emplace_back("error", "string", "Malformed FAR_ATTENUATION: " + *err);
+        return fields;
     }
-    auto const* att = reinterpret_cast<const W3dLightAttenuationStruct*>(chunk->data.data());
-    f.emplace_back("Far Atten Start", "float", std::to_string(att->Start));
-    f.emplace_back("Far Atten End", "float", std::to_string(att->End));
-    return f;
+    const auto& A = std::get<W3dLightAttenuationStruct>(v);
+
+    ChunkFieldBuilder B(fields);
+    B.Float("FarAtten.Start", A.Start);
+    B.Float("FarAtten.End", A.End);
+    return fields;
 }

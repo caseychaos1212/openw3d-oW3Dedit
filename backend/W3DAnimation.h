@@ -43,62 +43,70 @@ inline const char* AnimationChannelName(uint16_t flags) {
     }
 }
 
-inline std::vector<ChunkField> InterpretAnimationChannel(
-    const std::shared_ptr<ChunkItem>& chunk
-) {
+inline std::vector<ChunkField> InterpretAnimationChannel(const std::shared_ptr<ChunkItem>& chunk) {
     std::vector<ChunkField> fields;
     if (!chunk) return fields;
 
     const auto& buf = chunk->data;
-    // Must have at least the fixed header (12 bytes) + one float
+
+    // Safety: need at least the fixed header (which includes Data[1])
     if (buf.size() < sizeof(W3dAnimChannelStruct)) {
-        fields.emplace_back("Error", "string", "Animation channel chunk too small");
+        fields.emplace_back("error", "string", "Animation channel chunk too small");
         return fields;
     }
 
-    // Cast into our POD
-    auto hdr = reinterpret_cast<const W3dAnimChannelStruct*>(buf.data());
+    // Copy header safely (avoid aliasing UB)
+    W3dAnimChannelStruct hdr{};
+    std::memcpy(&hdr, buf.data(), sizeof(W3dAnimChannelStruct));
 
-    // compute how many frames we actually have
-    int frameCount = int(hdr->LastFrame) - int(hdr->FirstFrame) + 1;
-    size_t expectedFloats = size_t(frameCount) * hdr->VectorLen;
-    size_t expectedBytes = sizeof(W3dAnimChannelStruct) + expectedFloats * sizeof(float) - sizeof(float);
-    // subtract one float because struct.Data[1] already counts one
+    // Compute payload size (floats)
+    // total values = (#frames) * VectorLen
+    const int frameCount = int(hdr.LastFrame) - int(hdr.FirstFrame) + 1;
+    if (frameCount <= 0 || hdr.VectorLen == 0) {
+        fields.emplace_back("error", "string", "Invalid channel header (frame count or vector length)");
+        return fields;
+    }
 
-    if (buf.size() < expectedBytes) {
+    const size_t valueCount = size_t(frameCount) * size_t(hdr.VectorLen);
+    const size_t headerBytes = sizeof(W3dAnimChannelStruct); // includes first float
+    const size_t neededBytes = headerBytes + (valueCount - 1) * sizeof(float);
+    if (buf.size() < neededBytes) {
         fields.emplace_back(
-            "Error", "string",
-            "Animation channel data truncated; expected " +
-            std::to_string(expectedBytes) + " bytes"
+            "error", "string",
+            "Animation channel data truncated; expected " + std::to_string(neededBytes) +
+            " bytes, have " + std::to_string(buf.size())
         );
         return fields;
     }
 
-    // Header fields
-    fields.emplace_back("FirstFrame", "uint16", std::to_string(hdr->FirstFrame));
-    fields.emplace_back("LastFrame", "uint16", std::to_string(hdr->LastFrame));
-    fields.emplace_back("VectorLen", "uint16", std::to_string(hdr->VectorLen));
-    fields.emplace_back("Pivot", "uint16", std::to_string(hdr->Pivot));
+    // Gather all floats into a vector<float>
+    std::vector<float> values(valueCount);
+    // First float is inside the header’s Data[0]
+    values[0] = hdr.Data[0];
+    if (valueCount > 1) {
+        const auto* tail = reinterpret_cast<const float*>(buf.data() + headerBytes);
+        std::memcpy(values.data() + 1, tail, (valueCount - 1) * sizeof(float));
+    }
 
-    // ChannelType
-    if (auto name = AnimationChannelName(hdr->Flags)) {
-        fields.emplace_back("ChannelType", "string", name);
+    // Emit fields
+    ChunkFieldBuilder B(fields);
+    B.UInt16("FirstFrame", hdr.FirstFrame);
+    B.UInt16("LastFrame", hdr.LastFrame);
+    B.UInt16("VectorLen", hdr.VectorLen);
+    B.UInt16("Pivot", hdr.Pivot);
+
+    if (const char* nm = AnimationChannelName(hdr.Flags)) {
+        B.Push("ChannelType", "string", nm);
     }
     else {
-        fields.emplace_back("ChannelType", "string",
-            "Unknown(" + std::to_string(hdr->Flags) + ")");
+        B.Push("ChannelType", "string", "Unknown(" + std::to_string(hdr.Flags) + ")");
     }
 
-    // Now dump the float data
-    const float* data = hdr->Data;
+    // Dump values as Data[f][v]
     for (int f = 0; f < frameCount; ++f) {
-        for (int v = 0; v < int(hdr->VectorLen); ++v) {
-            float val = data[size_t(f) * hdr->VectorLen + v];
-            fields.emplace_back(
-                "Data[" + std::to_string(f) + "][" + std::to_string(v) + "]",
-                "float",
-                std::to_string(val)
-            );
+        for (int v = 0; v < int(hdr.VectorLen); ++v) {
+            const float val = values[size_t(f) * hdr.VectorLen + v];
+            B.Float("Data[" + std::to_string(f) + "][" + std::to_string(v) + "]", val);
         }
     }
 
@@ -113,60 +121,73 @@ inline const char* BitChannelName(uint16_t f) {
     }
 }
 
-inline std::vector<ChunkField> InterpretBitChannel(
-    const std::shared_ptr<ChunkItem>& chunk
-) {
+inline std::vector<ChunkField> InterpretBitChannel(const std::shared_ptr<ChunkItem>& chunk) {
     std::vector<ChunkField> fields;
     if (!chunk) return fields;
 
     const auto& buf = chunk->data;
-    // Must have at least the fixed header (9 bytes)
+
+    // Need at least the fixed header (includes Data[1] sentinel byte)
     if (buf.size() < sizeof(W3dBitChannelStruct)) {
-        fields.emplace_back("Error", "string", "Bit channel chunk too small");
+        fields.emplace_back("error", "string", "Bit channel chunk too small");
         return fields;
     }
 
-    // Cast into our POD
-    auto hdr = reinterpret_cast<const W3dBitChannelStruct*>(buf.data());
-    int   first = hdr->FirstFrame;
-    int   last = hdr->LastFrame;
-    int   count = last - first + 1;
-    size_t bitBytes = (count + 7) / 8;
-    size_t expected = sizeof(W3dBitChannelStruct) - 1 + bitBytes;
-    if (buf.size() < expected) {
+    // Copy header safely (avoid aliasing UB)
+    W3dBitChannelStruct hdr{};
+    std::memcpy(&hdr, buf.data(), sizeof(W3dBitChannelStruct));
+
+    const int first = static_cast<int>(hdr.FirstFrame);
+    const int last = static_cast<int>(hdr.LastFrame);
+    const int count = last - first + 1;
+
+    if (count <= 0) {
+        fields.emplace_back("error", "string", "Invalid bit channel frame range");
+        return fields;
+    }
+
+    // Payload sizing: header has Data[1], so total bytes = (sizeof - 1) + bitBytes
+    const size_t bitBytes = static_cast<size_t>((count + 7) / 8);
+    const size_t headerBytes = sizeof(W3dBitChannelStruct);
+    const size_t neededBytes = (headerBytes - 1) + bitBytes;
+
+    if (buf.size() < neededBytes) {
         fields.emplace_back(
-            "Error", "string",
-            "Bit channel data truncated; expected " +
-            std::to_string(expected) + " bytes"
+            "error", "string",
+            "Bit channel data truncated; expected " + std::to_string(neededBytes) +
+            " bytes, have " + std::to_string(buf.size())
         );
         return fields;
     }
 
-    // Header fields
-    fields.emplace_back("FirstFrame", "uint16", std::to_string(first));
-    fields.emplace_back("LastFrame", "uint16", std::to_string(last));
-    fields.emplace_back("Pivot", "uint16", std::to_string(hdr->Pivot));
+    // Gather bit payload into owned storage
+    std::vector<uint8_t> bits(bitBytes);
+    // First byte is hdr.Data[0] (inside the header)
+    bits[0] = hdr.Data[0];
+    if (bitBytes > 1) {
+        const uint8_t* tail = reinterpret_cast<const uint8_t*>(buf.data() + headerBytes);
+        std::memcpy(bits.data() + 1, tail, bitBytes - 1);
+    }
 
-    // ChannelType
-    if (auto name = BitChannelName(hdr->Flags)) {
-        fields.emplace_back("ChannelType", "string", name);
+    // Emit fields
+    ChunkFieldBuilder B(fields);
+    B.UInt16("FirstFrame", hdr.FirstFrame);
+    B.UInt16("LastFrame", hdr.LastFrame);
+    B.UInt16("Pivot", hdr.Pivot);
+
+    if (const char* nm = BitChannelName(hdr.Flags)) {
+        B.Push("ChannelType", "string", nm);
     }
     else {
-        fields.emplace_back("ChannelType", "string",
-            "Unknown(" + std::to_string(hdr->Flags) + ")");
+        B.Push("ChannelType", "string", "Unknown(" + std::to_string(hdr.Flags) + ")");
     }
 
-    fields.emplace_back("DefaultVal", "uint8", std::to_string(hdr->DefaultVal));
+    B.UInt8("DefaultVal", hdr.DefaultVal);
 
-    // Unpack bits
-    const uint8_t* bits = hdr->Data;
+    // Unpack bits: little-endian within each byte, same as your original
     for (int i = 0; i < count; ++i) {
-        bool val = (bits[i / 8] >> (i % 8)) & 1;
-        fields.emplace_back(
-            "Data[" + std::to_string(i) + "]",
-            "bool",
-            val ? "true" : "false"
-        );
+        const bool val = (bits[static_cast<size_t>(i / 8)] >> (i % 8)) & 1;
+        B.Push("Data[" + std::to_string(i) + "]", "bool", val ? "true" : "false");
     }
 
     return fields;

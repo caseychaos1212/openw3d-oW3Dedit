@@ -3,332 +3,228 @@
 #include <vector>
 
 inline std::vector<ChunkField> InterpretEmitterHeader(const std::shared_ptr<ChunkItem>& chunk) {
-    std::vector<ChunkField> fields;
-    if (!chunk || chunk->data.size() < sizeof(W3dEmitterHeaderStruct)) {
-        fields.emplace_back("Error", "string", "Invalid EMITTER_HEADER chunk");
+    std::vector<ChunkField> fields; if (!chunk) return fields;
+
+    auto v = ParseChunkStruct<W3dEmitterHeaderStruct>(chunk);
+    if (auto err = std::get_if<std::string>(&v)) {
+        fields.emplace_back("error", "string", "Malformed EMITTER_HEADER: " + *err);
         return fields;
     }
-    auto const* hdr = reinterpret_cast<const W3dEmitterHeaderStruct*>(chunk->data.data());
+    const auto& h = std::get<W3dEmitterHeaderStruct>(v);
 
-    // Version  highword.major, low word.minor
-    uint16_t major = static_cast<uint16_t>(hdr->Version >> 16);
-    uint16_t minor = static_cast<uint16_t>(hdr->Version & 0xFFFF);
-    fields.emplace_back("Version", "string",
-        std::to_string(major) + "." + std::to_string(minor));
-
-    // Name is null terminated or padded
-    std::string name(hdr->Name, strnlen(hdr->Name, W3D_NAME_LEN));
-    fields.emplace_back("Name", "string", name);
-
+    ChunkFieldBuilder B(fields);
+    B.Version("Version", h.Version);
+    B.Name("Name", h.Name);
     return fields;
 }
 
-inline std::vector<ChunkField> InterpretEmitterUserData(
-    const std::shared_ptr<ChunkItem>& chunk
-) {
-    std::vector<ChunkField> fields;
-    if (!chunk) return fields;
-
-    // build the helper from the raw bytes
-    W3dNullTermString nts(
-        chunk->data.data(),
-        chunk->data.size()
-    );
-
-    fields.push_back({
-      "User Data",
-      "string",
-      nts.value
-        });
+inline std::vector<ChunkField> InterpretEmitterUserData(const std::shared_ptr<ChunkItem>& chunk) {
+    std::vector<ChunkField> fields; if (!chunk) return fields;
+    ChunkFieldBuilder B(fields);
+    B.NullTerm("User Data",
+        reinterpret_cast<const char*>(chunk->data.data()),
+        chunk->data.size());
     return fields;
 }
+
 
 inline std::vector<ChunkField> InterpretEmitterInfo(const std::shared_ptr<ChunkItem>& chunk) {
-    std::vector<ChunkField> fields;
-    if (!chunk || chunk->data.size() < sizeof(W3dEmitterInfoStruct)) {
-        fields.emplace_back("Error", "string", "Invalid EMITTER_INFO chunk");
+    std::vector<ChunkField> fields; if (!chunk) return fields;
+
+    auto v = ParseChunkStruct<W3dEmitterInfoStruct>(chunk);
+    if (auto err = std::get_if<std::string>(&v)) {
+        fields.emplace_back("error", "string", "Malformed EMITTER_INFO: " + *err);
         return fields;
     }
+    const auto& info = std::get<W3dEmitterInfoStruct>(v);
 
-    
-    auto const* info = reinterpret_cast<const W3dEmitterInfoStruct*>(chunk->data.data());
-
-    
-    std::string texName(info->TextureFilename,
-        strnlen(info->TextureFilename, sizeof(info->TextureFilename)));
-    fields.emplace_back("TextureFilename", "string", texName);
-
-    
-    fields.emplace_back("StartSize", "float", std::to_string(info->StartSize));
-    fields.emplace_back("EndSize", "float", std::to_string(info->EndSize));
-    fields.emplace_back("Lifetime", "float", std::to_string(info->Lifetime));
-    fields.emplace_back("EmissionRate", "float", std::to_string(info->EmissionRate));
-    fields.emplace_back("MaxEmissions", "float", std::to_string(info->MaxEmissions));
-    fields.emplace_back("VelocityRandom", "float", std::to_string(info->VelocityRandom));
-    fields.emplace_back("PositionRandom", "float", std::to_string(info->PositionRandom));
-    fields.emplace_back("FadeTime", "float", std::to_string(info->FadeTime));
-    fields.emplace_back("Gravity", "float", std::to_string(info->Gravity));
-    fields.emplace_back("Elasticity", "float", std::to_string(info->Elasticity));
-
-    
-    auto vec3str = [&](const W3dVectorStruct& v) {
-        std::ostringstream o;
-        o << std::fixed << std::setprecision(6)
-            << v.X << " " << v.Y << " " << v.Z;
-        return o.str();
-        };
-    fields.emplace_back("Velocity", "vector3", vec3str(info->Velocity));
-    fields.emplace_back("Acceleration", "vector3", vec3str(info->Acceleration));
-
-    
-    auto rgbaStr = [&](const W3dRGBAStruct& c) {
-        std::ostringstream o;
-        o << int(c.R) << " " << int(c.G) << " " << int(c.B) << " " << int(c.A);
-        return o.str();
-        };
-    fields.emplace_back("StartColor", "RGBA", rgbaStr(info->StartColor));
-    fields.emplace_back("EndColor", "RGBA", rgbaStr(info->EndColor));
-
+    ChunkFieldBuilder B(fields);
+    B.Name("TextureFilename", info.TextureFilename, sizeof info.TextureFilename);
+    B.Float("StartSize", info.StartSize);
+    B.Float("EndSize", info.EndSize);
+    B.Float("Lifetime", info.Lifetime);
+    B.Float("EmissionRate", info.EmissionRate);
+    B.Float("MaxEmissions", info.MaxEmissions);
+    B.Float("VelocityRandom", info.VelocityRandom);
+    B.Float("PositionRandom", info.PositionRandom);
+    B.Float("FadeTime", info.FadeTime);
+    B.Float("Gravity", info.Gravity);
+    B.Float("Elasticity", info.Elasticity);
+    B.Vec3("Velocity", info.Velocity);
+    B.Vec3("Acceleration", info.Acceleration);
+    B.RGBA("StartColor", info.StartColor.R, info.StartColor.G, info.StartColor.B, info.StartColor.A);
+    B.RGBA("EndColor", info.EndColor.R, info.EndColor.G, info.EndColor.B, info.EndColor.A);
     return fields;
 }
 
-// small helper to unroll each VolumeRandomizer
-static void EmitVolumeRandomizer(std::vector<ChunkField>& fields,
-    std::string const& prefix,
-    W3dVolumeRandomizerStruct const& vol)
-{
-    fields.emplace_back(prefix + ".ClassID", "uint32",
-        std::to_string(vol.ClassID));
-    fields.emplace_back(prefix + ".Value1", "float",
-        std::to_string(vol.Value1));
-    fields.emplace_back(prefix + ".Value2", "float",
-        std::to_string(vol.Value2));
-    fields.emplace_back(prefix + ".Value3", "float",
-        std::to_string(vol.Value3));
+static inline void EmitVolumeRandomizer(ChunkFieldBuilder& B,
+    const std::string& pfx,
+    const W3dVolumeRandomizerStruct& v) {
+    B.UInt32(pfx + ".ClassID", v.ClassID);
+    B.Float(pfx + ".Value1", v.Value1);
+    B.Float(pfx + ".Value2", v.Value2);
+    B.Float(pfx + ".Value3", v.Value3);
 }
 
 
-inline std::vector<ChunkField> InterpretEmitterInfoV2(
-    const std::shared_ptr<ChunkItem>& chunk)
-{
-    std::vector<ChunkField> fields;
-    if (!chunk || chunk->data.size() < sizeof(W3dEmitterInfoStructV2)) {
-        fields.emplace_back("Error", "string",
-            "EmitterInfoV2 chunk too small");
+inline std::vector<ChunkField> InterpretEmitterInfoV2(const std::shared_ptr<ChunkItem>& chunk) {
+    std::vector<ChunkField> fields; if (!chunk) return fields;
+
+    auto v = ParseChunkStruct<W3dEmitterInfoStructV2>(chunk);
+    if (auto err = std::get_if<std::string>(&v)) {
+        fields.emplace_back("error", "string", "Malformed EMITTER_INFO_V2: " + *err);
         return fields;
     }
+    const auto& info = std::get<W3dEmitterInfoStructV2>(v);
 
-    
-    auto const* info =
-        reinterpret_cast<const W3dEmitterInfoStructV2*>(chunk->data.data());
+    ChunkFieldBuilder B(fields);
+    B.UInt32("BurstSize", info.BurstSize);
+    EmitVolumeRandomizer(B, "CreationVolume", info.CreationVolume);
+    EmitVolumeRandomizer(B, "VelRandom", info.VelRandom);
+    B.Float("OutwardVel", info.OutwardVel);
+    B.Float("VelInherit", info.VelInherit);
 
-    fields.emplace_back("BurstSize", "uint32",
-        std::to_string(info->BurstSize));
+    // Shader sub-struct
+    B.DepthCompareField("Shader.DepthCompare", info.Shader.DepthCompare);
+    B.DepthMaskField("Shader.DepthMask", info.Shader.DepthMask);
 
-    EmitVolumeRandomizer(fields, "CreationVolume", info->CreationVolume);
-    EmitVolumeRandomizer(fields, "VelRandom", info->VelRandom);
-
-    fields.emplace_back("OutwardVel", "float",
-        std::to_string(info->OutwardVel));
-    fields.emplace_back("VelInherit", "float",
-        std::to_string(info->VelInherit));
-
-    // inline unpack your shader struct
-    fields.emplace_back("Shader.DepthCompare", "uint8",
-        std::to_string(info->Shader.DepthCompare));
-    fields.emplace_back("Shader.DepthMask", "uint8",
-        std::to_string(info->Shader.DepthMask));
-   
-
-    fields.emplace_back("RenderMode", "uint32",
-        std::to_string(info->RenderMode));
-    fields.emplace_back("FrameMode", "uint32",
-        std::to_string(info->FrameMode));
-    // reserved you can ignore
-
+    B.UInt32("RenderMode", info.RenderMode);
+    B.UInt32("FrameMode", info.FrameMode);
     return fields;
 }
 
-inline std::vector<ChunkField> InterpretEmitterProps(
-    const std::shared_ptr<ChunkItem>& chunk)
-{
-    std::vector<ChunkField> fields;
-    if (!chunk || chunk->data.size() < sizeof(W3dEmitterPropertyStruct)) {
-        fields.emplace_back("Error", "string",
-            "EmitterProps chunk too small");
+inline std::vector<ChunkField> InterpretEmitterProps(const std::shared_ptr<ChunkItem>& chunk) {
+    std::vector<ChunkField> fields; if (!chunk) return fields;
+
+    auto v = ParseChunkStruct<W3dEmitterPropertyStruct>(chunk);
+    if (auto err = std::get_if<std::string>(&v)) {
+        fields.emplace_back("error", "string", "Malformed EMITTER_PROPS: " + *err);
+        return fields;
+    }
+    const auto& h = std::get<W3dEmitterPropertyStruct>(v);
+
+    const size_t headerBytes = sizeof(W3dEmitterPropertyStruct);
+    if (chunk->data.size() < headerBytes) {
+        fields.emplace_back("error", "string", "EMITTER_PROPS truncated before keyframes");
         return fields;
     }
 
-    // 1) pull out the fixed size header in one cast
-    auto const* hdr = reinterpret_cast<
-        const W3dEmitterPropertyStruct*>(
-            chunk->data.data());
+    ChunkFieldBuilder B(fields);
+    B.UInt32("ColorKeyframes", h.ColorKeyframes);
+    B.UInt32("OpacityKeyframes", h.OpacityKeyframes);
+    B.UInt32("SizeKeyframes", h.SizeKeyframes);
+    B.RGBA("ColorRandom", h.ColorRandom.R, h.ColorRandom.G, h.ColorRandom.B, h.ColorRandom.A);
+    B.Float("OpacityRandom", h.OpacityRandom);
+    B.Float("SizeRandom", h.SizeRandom);
 
-    fields.emplace_back("ColorKeyframes", "uint32",
-        std::to_string(hdr->ColorKeyframes));
-    fields.emplace_back("OpacityKeyframes", "uint32",
-        std::to_string(hdr->OpacityKeyframes));
-    fields.emplace_back("SizeKeyframes", "uint32",
-        std::to_string(hdr->SizeKeyframes));
+    // Walk payload after fixed header.
+    const uint8_t* ptr = chunk->data.data() + headerBytes;
+    const size_t   remain = chunk->data.size() - headerBytes;
+    size_t off = 0;
 
-    // ColorRandom is stored as RGBA:
-    {
-        auto const& c = hdr->ColorRandom;
-        fields.emplace_back("ColorRandom", "rgba",
-            std::to_string(c.R) + " "
-            + std::to_string(c.G) + " "
-            + std::to_string(c.B) + " "
-            + std::to_string(c.A)  // if pad holds alpha
-        );
+    // Color keyframes: [float time][RGBA]
+    for (uint32_t i = 0; i < h.ColorKeyframes; ++i) {
+        if (off + sizeof(float) + sizeof(W3dRGBAStruct) > remain) break;
+        float t; std::memcpy(&t, ptr + off, sizeof(float)); off += sizeof(float);
+        W3dRGBAStruct c{}; std::memcpy(&c, ptr + off, sizeof(W3dRGBAStruct)); off += sizeof(W3dRGBAStruct);
+
+        const std::string pfx = "ColorKey[" + std::to_string(i) + "]";
+        B.Float(pfx + ".Time", t);
+        B.RGBA(pfx + ".Color", c.R, c.G, c.B, c.A);
     }
 
-    fields.emplace_back("OpacityRandom", "float",
-        std::to_string(hdr->OpacityRandom));
-    fields.emplace_back("SizeRandom", "float",
-        std::to_string(hdr->SizeRandom));
+    // Opacity keyframes: [float time][float value]
+    for (uint32_t i = 0; i < h.OpacityKeyframes; ++i) {
+        if (off + sizeof(float) * 2 > remain) break;
+        float t, v;
+        std::memcpy(&t, ptr + off, sizeof(float)); off += sizeof(float);
+        std::memcpy(&v, ptr + off, sizeof(float)); off += sizeof(float);
 
-    // 2) now advance past that header into the keyframe data
-    size_t offset = sizeof(W3dEmitterPropertyStruct);
-    auto const* ptr = chunk->data.data();
-    auto remain = chunk->data.size();
-
-    // --- color keyframes (time + RGBA) ---
-    for (uint32_t i = 0; i < hdr->ColorKeyframes; ++i) {
-        if (offset + 4 + sizeof(W3dRGBAStruct) > remain) break;
-        float t = *reinterpret_cast<const float*>(ptr + offset);
-        offset += 4;
-        auto const* col = reinterpret_cast<
-            const W3dRGBAStruct*>(ptr + offset);
-        offset += sizeof(W3dRGBAStruct);
-
-        fields.emplace_back("ColorTime[" + std::to_string(i) + "]",
-            "float", std::to_string(t));
-        fields.emplace_back("Color[" + std::to_string(i) + "]",
-            "rgba",
-            std::to_string(col->R) + " "
-            + std::to_string(col->G) + " "
-            + std::to_string(col->B) + " "
-            + std::to_string(col->A));
+        const std::string pfx = "OpacityKey[" + std::to_string(i) + "]";
+        B.Float(pfx + ".Time", t);
+        B.Float(pfx + ".Value", v);
     }
 
-    // --- opacity keyframes (time + value) ---
-    for (uint32_t i = 0; i < hdr->OpacityKeyframes; ++i) {
-        if (offset + 8 > remain) break;
-        float t = *reinterpret_cast<const float*>(ptr + offset);
-        float v = *reinterpret_cast<const float*>(ptr + offset + 4);
-        offset += 8;
+    // Size keyframes: [float time][float value]
+    for (uint32_t i = 0; i < h.SizeKeyframes; ++i) {
+        if (off + sizeof(float) * 2 > remain) break;
+        float t, v;
+        std::memcpy(&t, ptr + off, sizeof(float)); off += sizeof(float);
+        std::memcpy(&v, ptr + off, sizeof(float)); off += sizeof(float);
 
-        fields.emplace_back("OpacityTime[" + std::to_string(i) + "]",
-            "float", std::to_string(t));
-        fields.emplace_back("Opacity[" + std::to_string(i) + "]",
-            "float", std::to_string(v));
-    }
-
-    // --- size keyframes (time + value) ---
-    for (uint32_t i = 0; i < hdr->SizeKeyframes; ++i) {
-        if (offset + 8 > remain) break;
-        float t = *reinterpret_cast<const float*>(ptr + offset);
-        float v = *reinterpret_cast<const float*>(ptr + offset + 4);
-        offset += 8;
-
-        fields.emplace_back("SizeTime[" + std::to_string(i) + "]",
-            "float", std::to_string(t));
-        fields.emplace_back("Size[" + std::to_string(i) + "]",
-            "float", std::to_string(v));
+        const std::string pfx = "SizeKey[" + std::to_string(i) + "]";
+        B.Float(pfx + ".Time", t);
+        B.Float(pfx + ".Value", v);
     }
 
     return fields;
 }
 
-inline std::vector<ChunkField> InterpretEmitterColorKeyframe(
-    const std::shared_ptr<ChunkItem>& chunk)
-{
-    std::vector<ChunkField> fields;
-    if (!chunk) {
-        fields.emplace_back("error", "string", "Empty EMITTER_COLOR_KEYFRAME chunk");
+inline std::vector<ChunkField> InterpretEmitterColorKeyframe(const std::shared_ptr<ChunkItem>& chunk) {
+    std::vector<ChunkField> fields; if (!chunk) return fields;
+
+    auto parsed = ParseChunkArray<W3dEmitterColorKeyframeStruct>(chunk);
+    if (auto err = std::get_if<std::string>(&parsed)) {
+        fields.emplace_back("error", "string", "Malformed EMITTER_COLOR_KEYFRAME: " + *err);
         return fields;
     }
+    const auto& arr = std::get<std::vector<W3dEmitterColorKeyframeStruct>>(parsed);
 
-    constexpr size_t REC_SZ = sizeof(W3dEmitterColorKeyframeStruct);
-    auto& data = chunk->data;
-    if (data.size() % REC_SZ != 0) {
-        fields.emplace_back(
-            "error", "string",
-            "Unexpected EMITTER_COLOR_KEYFRAME size: " + std::to_string(data.size()));
-        return fields;
-    }
-
-    auto ptr = reinterpret_cast<const W3dEmitterColorKeyframeStruct*>(data.data());
-    size_t count = data.size() / REC_SZ;
-    for (size_t i = 0; i < count; ++i) {
-        auto const& r = ptr[i];
-        std::string pfx = "Keyframe[" + std::to_string(i) + "]";
-        fields.emplace_back(pfx + ".Time", "float", std::to_string(r.Time));
-        fields.emplace_back(pfx + ".Color.R", "uint8_t", std::to_string(r.Color.R));
-        fields.emplace_back(pfx + ".Color.G", "uint8_t", std::to_string(r.Color.G));
-        fields.emplace_back(pfx + ".Color.B", "uint8_t", std::to_string(r.Color.B));
-        fields.emplace_back(pfx + ".Color.A", "uint8_t", std::to_string(r.Color.A));
+    ChunkFieldBuilder B(fields);
+    B.UInt32("Count", static_cast<uint32_t>(arr.size()));
+    for (size_t i = 0; i < arr.size(); ++i) {
+        const auto& r = arr[i];
+        const std::string pfx = "Keyframe[" + std::to_string(i) + "]";
+        B.Float(pfx + ".Time", r.Time);
+        B.RGBA(pfx + ".Color", r.Color.R, r.Color.G, r.Color.B, r.Color.A);
     }
     return fields;
 }
 
-inline std::vector<ChunkField> InterpretEmitterOpacityKeyframe(
-    const std::shared_ptr<ChunkItem>& chunk)
-{
-    std::vector<ChunkField> fields;
-    if (!chunk) {
-        fields.emplace_back("error", "string", "Empty EMITTER_OPACITY_KEYFRAME chunk");
+
+inline std::vector<ChunkField> InterpretEmitterOpacityKeyframe(const std::shared_ptr<ChunkItem>& chunk) {
+    std::vector<ChunkField> fields; if (!chunk) return fields;
+
+    auto parsed = ParseChunkArray<W3dEmitterOpacityKeyframeStruct>(chunk);
+    if (auto err = std::get_if<std::string>(&parsed)) {
+        fields.emplace_back("error", "string", "Malformed EMITTER_OPACITY_KEYFRAME: " + *err);
         return fields;
     }
+    const auto& arr = std::get<std::vector<W3dEmitterOpacityKeyframeStruct>>(parsed);
 
-    constexpr size_t REC_SZ = sizeof(W3dEmitterOpacityKeyframeStruct);
-    auto& data = chunk->data;
-    if (data.size() % REC_SZ != 0) {
-        fields.emplace_back(
-            "error", "string",
-            "Unexpected EMITTER_OPACITY_KEYFRAME size: " + std::to_string(data.size()));
-        return fields;
-    }
-
-    auto ptr = reinterpret_cast<const W3dEmitterOpacityKeyframeStruct*>(data.data());
-    size_t count = data.size() / REC_SZ;
-    for (size_t i = 0; i < count; ++i) {
-        auto const& r = ptr[i];
-        std::string pfx = "Keyframe[" + std::to_string(i) + "]";
-        fields.emplace_back(pfx + ".Time", "float", std::to_string(r.Time));
-        fields.emplace_back(pfx + ".Opacity", "float", std::to_string(r.Opacity));
+    ChunkFieldBuilder B(fields);
+    B.UInt32("Count", static_cast<uint32_t>(arr.size()));
+    for (size_t i = 0; i < arr.size(); ++i) {
+        const auto& r = arr[i];
+        const std::string pfx = "Keyframe[" + std::to_string(i) + "]";
+        B.Float(pfx + ".Time", r.Time);
+        B.Float(pfx + ".Opacity", r.Opacity);
     }
     return fields;
 }
 
-inline std::vector<ChunkField> InterpretEmitterSizeKeyframe(
-    const std::shared_ptr<ChunkItem>& chunk)
-{
-    std::vector<ChunkField> fields;
-    if (!chunk) {
-        fields.emplace_back("error", "string", "Empty EMITTER_SIZE_KEYFRAME chunk");
+
+inline std::vector<ChunkField> InterpretEmitterSizeKeyframe(const std::shared_ptr<ChunkItem>& chunk) {
+    std::vector<ChunkField> fields; if (!chunk) return fields;
+
+    auto parsed = ParseChunkArray<W3dEmitterSizeKeyframeStruct>(chunk);
+    if (auto err = std::get_if<std::string>(&parsed)) {
+        fields.emplace_back("error", "string", "Malformed EMITTER_SIZE_KEYFRAME: " + *err);
         return fields;
     }
+    const auto& arr = std::get<std::vector<W3dEmitterSizeKeyframeStruct>>(parsed);
 
-    constexpr size_t REC_SZ = sizeof(W3dEmitterSizeKeyframeStruct);
-    auto& data = chunk->data;
-    if (data.size() % REC_SZ != 0) {
-        fields.emplace_back(
-            "error", "string",
-            "Unexpected EMITTER_SIZE_KEYFRAME size: " + std::to_string(data.size()));
-        return fields;
-    }
-
-    auto ptr = reinterpret_cast<const W3dEmitterSizeKeyframeStruct*>(data.data());
-    size_t count = data.size() / REC_SZ;
-    for (size_t i = 0; i < count; ++i) {
-        auto const& r = ptr[i];
-        std::string pfx = "Keyframe[" + std::to_string(i) + "]";
-        fields.emplace_back(pfx + ".Time", "float", std::to_string(r.Time));
-        fields.emplace_back(pfx + ".Size", "float", std::to_string(r.Size));
+    ChunkFieldBuilder B(fields);
+    B.UInt32("Count", static_cast<uint32_t>(arr.size()));
+    for (size_t i = 0; i < arr.size(); ++i) {
+        const auto& r = arr[i];
+        const std::string pfx = "Keyframe[" + std::to_string(i) + "]";
+        B.Float(pfx + ".Time", r.Time);
+        B.Float(pfx + ".Size", r.Size);
     }
     return fields;
 }
+
 
 enum : uint32_t {
     W3D_ELINE_MERGE_INTERSECTIONS = 0x00000001,        // merge crossings
@@ -345,166 +241,136 @@ enum : uint32_t {
     W3D_ELINE_TILED_TEXTURE_MAP = 0x02u << W3D_ELINE_TEXTURE_MAP_MODE_OFFSET,
 };
 
-inline std::vector<ChunkField> InterpretEmitterLineProperties(
-    const std::shared_ptr<ChunkItem>& chunk)
-{
-    std::vector<ChunkField> fields;
-    // must have at least one full struct
-    if (!chunk || chunk->data.size() < sizeof(W3dEmitterLinePropertiesStruct)) {
-        fields.emplace_back("error", "string", "Invalid EMITTER_LINE_PROPERTIES chunk");
+inline std::vector<ChunkField> InterpretEmitterLineProperties(const std::shared_ptr<ChunkItem>& chunk) {
+    std::vector<ChunkField> fields; if (!chunk) return fields;
+
+    auto v = ParseChunkStruct<W3dEmitterLinePropertiesStruct>(chunk);
+    if (auto err = std::get_if<std::string>(&v)) {
+        fields.emplace_back("error", "string", "Malformed EMITTER_LINE_PROPERTIES: " + *err);
         return fields;
     }
+    const auto& p = std::get<W3dEmitterLinePropertiesStruct>(v);
 
-    auto const* p = reinterpret_cast<const W3dEmitterLinePropertiesStruct*>(chunk->data.data());
+    ChunkFieldBuilder B(fields);
+    B.UInt32("Flags", p.Flags);
 
-    // 1 Flags
-    uint32_t flags = p->Flags;
-    fields.emplace_back("Flags (raw)", "uint32", std::to_string(flags));
+    // decoded flags
+    if (p.Flags & W3D_ELINE_MERGE_INTERSECTIONS) B.Push("Flags", "flag", "MergeIntersections");
+    if (p.Flags & W3D_ELINE_FREEZE_RANDOM)       B.Push("Flags", "flag", "FreezeRandom");
+    if (p.Flags & W3D_ELINE_DISABLE_SORTING)     B.Push("Flags", "flag", "DisableSorting");
+    if (p.Flags & W3D_ELINE_END_CAPS)            B.Push("Flags", "flag", "EndCaps");
 
-    // decode bits
-    std::vector<std::string> parts;
-    if (flags & W3D_ELINE_MERGE_INTERSECTIONS)  parts.emplace_back("MergeIntersections");
-    if (flags & W3D_ELINE_FREEZE_RANDOM)        parts.emplace_back("FreezeRandom");
-    if (flags & W3D_ELINE_DISABLE_SORTING)      parts.emplace_back("DisableSorting");
-    if (flags & W3D_ELINE_END_CAPS)             parts.emplace_back("EndCaps");
-    // texture map mode in high byte
-    switch ((flags & W3D_ELINE_TEXTURE_MAP_MODE_MASK) >> W3D_ELINE_TEXTURE_MAP_MODE_OFFSET) {
-    case W3D_ELINE_UNIFORM_WIDTH_TEXTURE_MAP:  parts.emplace_back("UniformWidthTextureMap"); break;
-    case W3D_ELINE_UNIFORM_LENGTH_TEXTURE_MAP: parts.emplace_back("UniformLengthTextureMap"); break;
-    case W3D_ELINE_TILED_TEXTURE_MAP:          parts.emplace_back("TiledTextureMap"); break;
-    default:                                   parts.emplace_back("UnknownTextureMapMode"); break;
+    const uint32_t tmode = (p.Flags & W3D_ELINE_TEXTURE_MAP_MODE_MASK) >> W3D_ELINE_TEXTURE_MAP_MODE_OFFSET;
+    switch (tmode) {
+    case (W3D_ELINE_UNIFORM_WIDTH_TEXTURE_MAP >> W3D_ELINE_TEXTURE_MAP_MODE_OFFSET):  B.Push("Flags", "flag", "UniformWidthTextureMap");  break;
+    case (W3D_ELINE_UNIFORM_LENGTH_TEXTURE_MAP >> W3D_ELINE_TEXTURE_MAP_MODE_OFFSET):  B.Push("Flags", "flag", "UniformLengthTextureMap"); break;
+    case (W3D_ELINE_TILED_TEXTURE_MAP >> W3D_ELINE_TEXTURE_MAP_MODE_OFFSET):  B.Push("Flags", "flag", "TiledTextureMap");         break;
+    default: B.Push("Flags", "flag", "UnknownTextureMapMode"); break;
     }
-    // join
-    std::string decoded;
-    for (size_t i = 0; i < parts.size(); ++i) {
-        if (i) decoded += " | ";
-        decoded += parts[i];
-    }
-    fields.emplace_back("Flags (decoded)", "flags", decoded);
 
-    // now the rest of the struct
-    fields.emplace_back("SubdivisionLevel", "uint32", std::to_string(p->SubdivisionLevel));
-    fields.emplace_back("NoiseAmplitude", "float", std::to_string(p->NoiseAmplitude));
-    fields.emplace_back("MergeAbortFactor", "float", std::to_string(p->MergeAbortFactor));
-    fields.emplace_back("TextureTileFactor", "float", std::to_string(p->TextureTileFactor));
-    fields.emplace_back("UPerSec", "float", std::to_string(p->UPerSec));
-    fields.emplace_back("VPerSec", "float", std::to_string(p->VPerSec));
+    B.UInt32("SubdivisionLevel", p.SubdivisionLevel);
+    B.Float("NoiseAmplitude", p.NoiseAmplitude);
+    B.Float("MergeAbortFactor", p.MergeAbortFactor);
+    B.Float("TextureTileFactor", p.TextureTileFactor);
+    B.Float("UPerSec", p.UPerSec);
+    B.Float("VPerSec", p.VPerSec);
 
     return fields;
 }
+
 inline std::vector<ChunkField> InterpretEmitterRotationKeys(const std::shared_ptr<ChunkItem>& chunk) {
-    std::vector<ChunkField> fields;
-    if (!chunk || chunk->data.size() < sizeof(W3dEmitterRotationHeaderStruct)) {
-        fields.emplace_back("error", "string", "Invalid EMITTER_ROTATION_KEYFRAMES chunk");
+    std::vector<ChunkField> fields; if (!chunk) return fields;
+
+    auto v = ParseChunkStruct<W3dEmitterRotationHeaderStruct>(chunk);
+    if (auto err = std::get_if<std::string>(&v)) {
+        fields.emplace_back("error", "string", "Malformed EMITTER_ROTATION_KEYFRAMES: " + *err);
+        return fields;
+    }
+    const auto& h = std::get<W3dEmitterRotationHeaderStruct>(v);
+
+    if (chunk->data.size() < sizeof(W3dEmitterRotationHeaderStruct)) {
+        fields.emplace_back("error", "string", "Rotation header truncated");
         return fields;
     }
 
-    // 1) header
-    auto const* hdr = reinterpret_cast<const W3dEmitterRotationHeaderStruct*>(chunk->data.data());
-    fields.emplace_back("KeyframeCount", "uint32", std::to_string(hdr->KeyframeCount));
-    fields.emplace_back("RandomVelocity", "float", std::to_string(hdr->Random));
-    fields.emplace_back("OrientationRandom", "float", std::to_string(hdr->OrientationRandom));
+    const size_t headerBytes = sizeof(W3dEmitterRotationHeaderStruct);
+    const size_t availableFloats = (chunk->data.size() - headerBytes) / sizeof(float);
+    const size_t count = std::min<size_t>(h.KeyframeCount, availableFloats);
 
-    // 2) keyframes (just an array of float32's)
-    size_t n = hdr->KeyframeCount;
-    auto const* keys = reinterpret_cast<const float*>(
-        chunk->data.data() + sizeof(W3dEmitterRotationHeaderStruct)
-        );
-    // make sure we have enough bytes
-    size_t available = (chunk->data.size() - sizeof(W3dEmitterRotationHeaderStruct)) / sizeof(float);
-    n = std::min(n, available);
-    for (size_t i = 0; i < n; ++i) {
-        fields.emplace_back(
-            "Keyframe[" + std::to_string(i) + "]",
-            "float",
-            std::to_string(keys[i])
-        );
+    ChunkFieldBuilder B(fields);
+    B.UInt32("KeyframeCount", h.KeyframeCount);
+    B.Float("RandomVelocity", h.Random);
+    B.Float("OrientationRandom", h.OrientationRandom);
+
+    const float* keys = reinterpret_cast<const float*>(chunk->data.data() + headerBytes);
+    for (size_t i = 0; i < count; ++i) {
+        B.Float("Keyframe[" + std::to_string(i) + "]", keys[i]);
     }
-
     return fields;
 }
+
 
 inline std::vector<ChunkField> InterpretEmitterFrameKeys(const std::shared_ptr<ChunkItem>& chunk) {
-    std::vector<ChunkField> fields;
+    std::vector<ChunkField> fields; if (!chunk) return fields;
 
-    // 1) Make sure we have at least the header
-    if (!chunk || chunk->data.size() < sizeof(W3dEmitterFrameHeaderStruct)) {
-        fields.emplace_back("error", "string", "Invalid EMITTER_FRAME_KEYFRAMES chunk");
+    auto v = ParseChunkStruct<W3dEmitterFrameHeaderStruct>(chunk);
+    if (auto err = std::get_if<std::string>(&v)) {
+        fields.emplace_back("error", "string", "Malformed EMITTER_FRAME_KEYFRAMES: " + *err);
+        return fields;
+    }
+    const auto& h = std::get<W3dEmitterFrameHeaderStruct>(v);
+
+    const size_t headerBytes = sizeof(W3dEmitterFrameHeaderStruct);
+    if (chunk->data.size() < headerBytes) {
+        fields.emplace_back("error", "string", "Frame header truncated");
         return fields;
     }
 
-    // 2) Interpret the header
-    auto const* hdr = reinterpret_cast<const W3dEmitterFrameHeaderStruct*>(chunk->data.data());
-    fields.emplace_back("KeyframeCount", "uint32", std::to_string(hdr->KeyframeCount));
-    fields.emplace_back("Random", "float", std::to_string(hdr->Random));
+    const size_t available = (chunk->data.size() - headerBytes) / sizeof(W3dEmitterFrameKeyframeStruct);
+    const size_t count = std::min<size_t>(h.KeyframeCount, available);
 
-    // 3) Now point at the keyframe data
-    size_t headerBytes = sizeof(W3dEmitterFrameHeaderStruct);
-    auto const* keys = reinterpret_cast<const W3dEmitterFrameKeyframeStruct*>(
-        chunk->data.data() + headerBytes
-        );
+    ChunkFieldBuilder B(fields);
+    B.UInt32("KeyframeCount", h.KeyframeCount);
+    B.Float("Random", h.Random);
 
-    // 4) How many full keyframes actually fit?
-    size_t available = (chunk->data.size() - headerBytes)
-        / sizeof(W3dEmitterFrameKeyframeStruct);
-    size_t count = std::min<size_t>(hdr->KeyframeCount, available);
-
-    // 5) Emit each (time,frame) pair
+    const auto* keys = reinterpret_cast<const W3dEmitterFrameKeyframeStruct*>(chunk->data.data() + headerBytes);
     for (size_t i = 0; i < count; ++i) {
-        fields.emplace_back(
-            "Time[" + std::to_string(i) + "]",
-            "float",
-            std::to_string(keys[i].Time)
-        );
-        fields.emplace_back(
-            "Frame[" + std::to_string(i) + "]",
-            "float",
-            std::to_string(keys[i].Frame)
-        );
+        const std::string pfx = "Keyframe[" + std::to_string(i) + "]";
+        B.Float(pfx + ".Time", keys[i].Time);
+        B.Float(pfx + ".Frame", keys[i].Frame);
     }
-
     return fields;
 }
 
-inline std::vector<ChunkField> InterpretEmitterBlurTimeKeyframes(
-    const std::shared_ptr<ChunkItem>& chunk
-) {
-    std::vector<ChunkField> fields;
 
-    // 1) Check we have at least the header
-    if (!chunk || chunk->data.size() < sizeof(W3dEmitterBlurTimeHeaderStruct)) {
-        fields.emplace_back("error", "string", "Invalid EMITTER_BLUR_TIME_KEYFRAMES chunk");
+inline std::vector<ChunkField> InterpretEmitterBlurTimeKeyframes(const std::shared_ptr<ChunkItem>& chunk) {
+    std::vector<ChunkField> fields; if (!chunk) return fields;
+
+    auto v = ParseChunkStruct<W3dEmitterBlurTimeHeaderStruct>(chunk);
+    if (auto err = std::get_if<std::string>(&v)) {
+        fields.emplace_back("error", "string", "Malformed EMITTER_BLUR_TIME_KEYFRAMES: " + *err);
+        return fields;
+    }
+    const auto& h = std::get<W3dEmitterBlurTimeHeaderStruct>(v);
+
+    const size_t headerBytes = sizeof(W3dEmitterBlurTimeHeaderStruct);
+    if (chunk->data.size() < headerBytes) {
+        fields.emplace_back("error", "string", "BlurTime header truncated");
         return fields;
     }
 
-    // 2) Cast and emit header fields
-    auto const* hdr = reinterpret_cast<const W3dEmitterBlurTimeHeaderStruct*>(chunk->data.data());
-    fields.emplace_back("KeyframeCount", "uint32", std::to_string(hdr->KeyframeCount));
-    fields.emplace_back("Random", "float", std::to_string(hdr->Random));
+    const size_t available = (chunk->data.size() - headerBytes) / sizeof(W3dEmitterBlurTimeKeyframeStruct);
+    const size_t count = std::min<size_t>(h.KeyframeCount, available);
+    const auto* entries = reinterpret_cast<const W3dEmitterBlurTimeKeyframeStruct*>(chunk->data.data() + headerBytes);
 
-    // 3) Compute how many keyframes actually fit
-    size_t headerBytes = sizeof(W3dEmitterBlurTimeHeaderStruct);
-    size_t entrySize = sizeof(W3dEmitterBlurTimeKeyframeStruct);
-    size_t available = chunk->data.size() - headerBytes;
-    size_t maxEntries = available / entrySize;
-    size_t count = std::min<size_t>(hdr->KeyframeCount, maxEntries);
+    ChunkFieldBuilder B(fields);
+    B.UInt32("KeyframeCount", h.KeyframeCount);
+    B.Float("Random", h.Random);
 
-    // 4) Walk the array of {Time, BlurTime}
-    auto const* entries = reinterpret_cast<const W3dEmitterBlurTimeKeyframeStruct*>(
-        chunk->data.data() + headerBytes
-        );
     for (size_t i = 0; i < count; ++i) {
-        fields.emplace_back(
-            "Keyframe[" + std::to_string(i) + "].Time",
-            "float",
-            std::to_string(entries[i].Time)
-        );
-        fields.emplace_back(
-            "Keyframe[" + std::to_string(i) + "].BlurTime",
-            "float",
-            std::to_string(entries[i].BlurTime)
-        );
+        const std::string pfx = "Keyframe[" + std::to_string(i) + "]";
+        B.Float(pfx + ".Time", entries[i].Time);
+        B.Float(pfx + ".BlurTime", entries[i].BlurTime);
     }
-
     return fields;
 }

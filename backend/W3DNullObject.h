@@ -4,45 +4,28 @@
 
 inline std::vector<ChunkField> InterpretNullObject(const std::shared_ptr<ChunkItem>& chunk) {
     std::vector<ChunkField> fields;
+    if (!chunk) return fields;
 
-    // Must be at least the size of our struct
-    if (!chunk || chunk->data.size() < sizeof(W3dNullObjectStruct)) {
-        fields.emplace_back("Error", "string", "Invalid NULL_OBJECT chunk");
+    // Parse once, validate size
+    auto v = ParseChunkStruct<W3dNullObjectStruct>(chunk);
+    if (auto err = std::get_if<std::string>(&v)) {
+        fields.emplace_back("error", "string", "Malformed NULL_OBJECT chunk: " + *err);
         return fields;
     }
+    const auto& obj = std::get<W3dNullObjectStruct>(v);
 
-    // Cast to our struct
-    auto obj = reinterpret_cast<const W3dNullObjectStruct*>(chunk->data.data());
+    ChunkFieldBuilder B(fields);
 
-    // 1) Version
-    {
-        uint16_t major = uint16_t(obj->Version >> 16);
-        uint16_t minor = uint16_t(obj->Version & 0xFFFF);
-        fields.emplace_back(
-            "Version", "uint32_t",
-            std::to_string(major) + "." + std::to_string(minor)
-        );
-    }
+    // Version (packed major.minor, consistent with your other headers)
+    B.Version("Version", obj.Version);
 
-    // 2) Attributes (hex + decimal)
-    {
-        std::ostringstream ss;
-        ss << "0x" << std::hex << obj->Attributes
-            << std::dec << " (" << obj->Attributes << ")";
-        fields.emplace_back("Attributes", "uint32_t", ss.str());
-    }
+    // Raw attributes first (prefix matches your convention, e.g. Texture.Attributes / Box.Attributes)
+    B.UInt32("Null.Attributes", obj.Attributes);
 
-    // 3) Name (trim at first NUL)
-    {
-        const char* raw = obj->Name;
-        size_t len = 0, max = sizeof(obj->Name);
-        // scan up to the first NUL (or max)
-        while (len < max && raw[len] != '\0') {
-            ++len;
-        }
-        fields.emplace_back("Name", "string", std::string(raw, len));
-    }
+    // Name (fixed-size, NUL-terminated)
+    B.Name("Name", obj.Name);
 
     return fields;
 }
+
 

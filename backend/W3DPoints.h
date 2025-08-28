@@ -3,45 +3,22 @@
 #include <vector>
 
 
-inline std::vector<ChunkField> InterpretPoints(
-    const std::shared_ptr<ChunkItem>& chunk
-) {
+inline std::vector<ChunkField> InterpretPoints(const std::shared_ptr<ChunkItem>& chunk) {
     std::vector<ChunkField> fields;
-    if (!chunk) {
-        fields.emplace_back("error", "string", "Empty POINTS chunk");
+    if (!chunk) return fields;
+
+    auto parsed = ParseChunkArray<W3dVectorStruct>(chunk);
+    if (auto err = std::get_if<std::string>(&parsed)) {
+        fields.emplace_back("error", "string", "Malformed POINTS chunk: " + *err);
         return fields;
     }
+    const auto& pts = std::get<std::vector<W3dVectorStruct>>(parsed);
 
-    auto const& buf = chunk->data;
-    size_t totalBytes = buf.size();
-    constexpr size_t stride = sizeof(W3dVectorStruct);
+    ChunkFieldBuilder B(fields);
+    B.UInt32("Count", static_cast<uint32_t>(pts.size()));
 
-    // must be an exact multiple of our struct size
-    if (totalBytes % stride != 0) {
-        fields.emplace_back(
-            "error", "string",
-            "Unexpected POINTS chunk size: " + std::to_string(totalBytes)
-        );
-        return fields;
-    }
-
-    size_t count = totalBytes / stride;
-    auto const* pts = reinterpret_cast<const W3dVectorStruct*>(buf.data());
-
-    for (size_t i = 0; i < count; ++i) {
-        auto const& v = pts[i];
-        std::ostringstream oss;
-        oss << "("
-            << std::fixed << std::setprecision(6)
-            << v.X << " "
-            << v.Y << " "
-            << v.Z << ")";
-
-        fields.emplace_back(
-            "Point[" + std::to_string(i) + "]",
-            "vector3",
-            oss.str()
-        );
+    for (size_t i = 0; i < pts.size(); ++i) {
+        B.Vec3("Point[" + std::to_string(i) + "]", pts[i]);
     }
 
     return fields;

@@ -5,185 +5,108 @@
 #include <algorithm>
 
 
-inline std::vector<ChunkField> InterpretCollectionHeader(
-    const std::shared_ptr<ChunkItem>& chunk
-) {
-    std::vector<ChunkField> fields;
-
-    // Make sure we have at least a full header
-    if (!chunk || chunk->data.size() < sizeof(W3dCollectionHeaderStruct)) {
-        fields.push_back({ "Error", "string", "Invalid COLLECTION_HEADER chunk" });
-        return fields;
-    }
-
-    // Reinterpret the raw bytes as our header struct
-    auto const* hdr = reinterpret_cast<const W3dCollectionHeaderStruct*>(chunk->data.data());
-
-    // 1 Version  Major.Minor
-    uint16_t major = static_cast<uint16_t>((hdr->Version >> 16) & 0xFFFF);
-    uint16_t minor = static_cast<uint16_t>(hdr->Version & 0xFFFF);
-    fields.push_back({
-        "Version", "string",
-        std::to_string(major) + "." + std::to_string(minor)
-        });
-
-    // 2 Name null?terminated within W3D_NAME_LEN bytes
-    auto nameStart = hdr->Name;
-    auto nameEnd = std::find(nameStart, nameStart + W3D_NAME_LEN, '\0');
-    std::string name(nameStart, nameEnd);
-    fields.push_back({ "Name", "string", name });
-
-    // 3 RenderObjectCount
-    fields.push_back({
-        "RenderObjectCount", "uint32_t",
-        std::to_string(hdr->RenderObjectCount)
-        });
-
-    // pad[] is ignored
-    return fields;
-}
-
-inline std::vector<ChunkField> InterpretCollectionObjName(
-    const std::shared_ptr<ChunkItem>& chunk
-) {
+inline std::vector<ChunkField> InterpretCollectionHeader(const std::shared_ptr<ChunkItem>& chunk) {
     std::vector<ChunkField> fields;
     if (!chunk) return fields;
 
-    // build the helper from the raw bytes
-    W3dNullTermString nts(
-        chunk->data.data(),
-        chunk->data.size()
-    );
-
-    fields.push_back({
-      "ObjectName",
-      "string",
-      nts.value
-        });
-    return fields;
-}
-
-inline std::vector<ChunkField> InterpretTransformNode(
-    const std::shared_ptr<ChunkItem>& chunk
-) {
-    std::vector<ChunkField> fields;
-
-    // Minimum size = struct + at least 1 byte of name
-    if (!chunk || chunk->data.size() < sizeof(W3dTransformNodeStruct) + 1) {
-        fields.emplace_back("error", "string", "Invalid TRANSFORM_NODE chunk");
+    auto v = ParseChunkStruct<W3dCollectionHeaderStruct>(chunk);
+    if (auto err = std::get_if<std::string>(&v)) {
+        fields.emplace_back("error", "string", "Malformed COLLECTION_HEADER: " + *err);
         return fields;
     }
+    const auto& h = std::get<W3dCollectionHeaderStruct>(v);
 
-    // Cast the first part of data to our struct
-    auto const* hdr = reinterpret_cast<const W3dTransformNodeStruct*>(chunk->data.data());
+    ChunkFieldBuilder B(fields);
+    B.Version("Version", h.Version);
+    B.Name("Name", h.Name);
+    B.UInt32("RenderObjectCount", h.RenderObjectCount);
+    return fields;
+}
 
-    // 1 Version  Major.Minor
-    uint32_t rawVer = hdr->version;
-    uint16_t major = static_cast<uint16_t>(rawVer >> 16);
-    uint16_t minor = static_cast<uint16_t>(rawVer & 0xFFFF);
-    fields.emplace_back(
-        "Version",
-        "uint32_t",
-        std::to_string(major) + "." + std::to_string(minor)
-    );
+inline std::vector<ChunkField> InterpretCollectionObjName(const std::shared_ptr<ChunkItem>& chunk) {
+    std::vector<ChunkField> fields;
+    if (!chunk) return fields;
 
-    // 2 4×3 transform rows
-    for (int row = 0; row < 4; ++row) {
-        auto& t = hdr->transform[row];
-        std::ostringstream oss;
-        oss << "("
-            << t[0] << " "
-            << t[1] << " "
-            << t[2] << ")";
-        fields.emplace_back(
-            "Transform[" + std::to_string(row) + "]",
-            "vector3",   // or "Vector3" if you prefer
-            oss.str()
-        );
+    ChunkFieldBuilder B(fields);
+    B.NullTerm("ObjectName",
+        reinterpret_cast<const char*>(chunk->data.data()),
+        chunk->data.size(),
+        W3D_NAME_LEN);
+    return fields;
+}
+
+inline std::vector<ChunkField> InterpretTransformNode(const std::shared_ptr<ChunkItem>& chunk) {
+    std::vector<ChunkField> fields;
+    if (!chunk) return fields;
+
+    // Need at least the fixed header (which contains name_len but not the trailing name bytes)
+    auto v = ParseChunkStruct<W3dTransformNodeStruct>(chunk);
+    if (auto err = std::get_if<std::string>(&v)) {
+        fields.emplace_back("error", "string", "Malformed TRANSFORM_NODE: " + *err);
+        return fields;
     }
+    const auto& h = std::get<W3dTransformNodeStruct>(v);
 
-    // 3 Name length + the name itself
-    size_t headerSize = sizeof(W3dTransformNodeStruct);
-    uint32_t nameLen = hdr->name_len;
-
-    // clamp to available bytes
-    size_t available = chunk->data.size() - headerSize;
+    const size_t headerBytes = sizeof(W3dTransformNodeStruct);
+    size_t available = (chunk->data.size() > headerBytes) ? (chunk->data.size() - headerBytes) : 0;
+    uint32_t nameLen = h.name_len;
     if (nameLen > available) nameLen = static_cast<uint32_t>(available);
 
-    fields.emplace_back(
-        "NameLength",
-        "uint32_t",
-        std::to_string(hdr->name_len)
-    );
+    ChunkFieldBuilder B(fields);
+    B.Version("Version", h.version);
 
-    // 4 Read the name and trim trailing NULs/spaces
-    const char* nameStart = reinterpret_cast<const char*>(chunk->data.data() + headerSize);
+    // 4x3 transform rows
+    for (int row = 0; row < 4; ++row) {
+        B.Push("Transform[" + std::to_string(row) + "]",
+            "vector3",
+            FormatUtils::FormatVec3(h.transform[row][0], h.transform[row][1], h.transform[row][2]));
+    }
+
+    B.UInt32("NameLength", h.name_len);
+
+    // trailing name
+    const char* nameStart = reinterpret_cast<const char*>(chunk->data.data() + headerBytes);
     std::string name(nameStart, nameLen);
-    while (!name.empty() && (name.back() == '\0' || std::isspace((unsigned char)name.back())))
+    while (!name.empty() && (name.back() == '\0' || std::isspace(static_cast<unsigned char>(name.back()))))
         name.pop_back();
-
-    fields.emplace_back("NodeName", "string", name);
+    B.Push("NodeName", "string", std::move(name));
 
     return fields;
 }
+
 inline std::vector<ChunkField> InterpretPlaceHolder(const std::shared_ptr<ChunkItem>& chunk) {
     std::vector<ChunkField> fields;
-    if (!chunk) {
-        return { { "error", "string", "Empty COLLECTION_PLACEHOLDER chunk" } };
+    if (!chunk) return fields;
+
+    auto v = ParseChunkStruct<W3dPlaceholderStruct>(chunk);
+    if (auto err = std::get_if<std::string>(&v)) {
+        fields.emplace_back("error", "string", "Malformed COLLECTION_PLACEHOLDER: " + *err);
+        return fields;
     }
+    const auto& h = std::get<W3dPlaceholderStruct>(v);
 
-    const auto& data = chunk->data;
-    const size_t len = data.size();
+    const size_t headerBytes = sizeof(W3dPlaceholderStruct);
+    size_t available = (chunk->data.size() > headerBytes) ? (chunk->data.size() - headerBytes) : 0;
+    uint32_t nameLen = h.name_len;
+    if (nameLen > available) nameLen = static_cast<uint32_t>(available);
 
-    // Must hold at least our struct header
-    if (len < sizeof(W3dPlaceholderStruct)) {
-        return { { "error", "string", "Unexpected COLLECTION_PLACEHOLDER size: " + std::to_string(len) } };
-    }
+    ChunkFieldBuilder B(fields);
+    B.UInt32("Version", h.version);
 
-    // Map the first bytes to our struct
-    auto const* hdr = reinterpret_cast<const W3dPlaceholderStruct*>(data.data());
-
-    // 1) Version
-    fields.push_back({
-        "Version",
-        "uint32_t",
-        std::to_string(hdr->version)
-        });
-
-    // 2) 4×3 transform matrix
     for (int row = 0; row < 4; ++row) {
-        std::ostringstream oss;
-        oss << "("
-            << hdr->transform[row][0] << " "
-            << hdr->transform[row][1] << " "
-            << hdr->transform[row][2]
-            << ")";
-        fields.push_back({
-            "Transform[" + std::to_string(row) + "]",
-            "Vector3",
-            oss.str()
-            });
+        B.Push("Transform[" + std::to_string(row) + "]",
+            "vector3",
+            FormatUtils::FormatVec3(h.transform[row][0], h.transform[row][1], h.transform[row][2]));
     }
 
-    // 3) Name length
-    uint32_t nameLen = hdr->name_len;
-    fields.push_back({
-        "NameLength",
-        "uint32_t",
-        std::to_string(nameLen)
-        });
+    B.UInt32("NameLength", h.name_len);
 
-    // 4) Name string immediately follows the struct header
-    size_t offset = sizeof(W3dPlaceholderStruct);
-    if (offset + nameLen > len) {
-        nameLen = static_cast<uint32_t>(len - offset);
-    }
-    std::string name(reinterpret_cast<const char*>(data.data() + offset), nameLen);
-    // trim trailing NUL/whitespace
-    while (!name.empty() && (name.back() == '\0' || std::isspace((unsigned char)name.back()))) {
+    const char* nameStart = reinterpret_cast<const char*>(chunk->data.data() + headerBytes);
+    std::string name(nameStart, nameLen);
+    while (!name.empty() && (name.back() == '\0' || std::isspace(static_cast<unsigned char>(name.back()))))
         name.pop_back();
-    }
-    fields.push_back({ "Name", "string", name });
+    B.Push("Name", "string", std::move(name));
 
     return fields;
 }
+

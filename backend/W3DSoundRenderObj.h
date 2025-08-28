@@ -2,205 +2,116 @@
 #include "W3DStructs.h"
 #include <vector>
 
+// SOUND RENDER OBJECTS
+
 inline std::vector<ChunkField> InterpretSoundRObjHeader(
     const std::shared_ptr<ChunkItem>& chunk
-) 
-
-{
+) {
     std::vector<ChunkField> fields;
-    if (!chunk || chunk->data.size() < sizeof(W3dSoundRObjHeaderStruct)) {
-        fields.push_back({ "Error", "string", "Invalid SOUNDROBJ_HEADER size" });
+    if (!chunk) return fields;
+
+    auto parsed = ParseChunkStruct<W3dSoundRObjHeaderStruct>(chunk);
+    if (auto err = std::get_if<std::string>(&parsed)) {
+        fields.push_back({ "Error", "string", "Invalid SOUNDROBJ_HEADER: " + *err });
         return fields;
     }
+    const auto& hdr = std::get<W3dSoundRObjHeaderStruct>(parsed);
 
-    auto const* hdr = reinterpret_cast<const W3dSoundRObjHeaderStruct*>(chunk->data.data());
-
-    // Version
-    {
-        uint16_t major = static_cast<uint16_t>(hdr->Version >> 16);
-        uint16_t minor = static_cast<uint16_t>(hdr->Version & 0xFFFF);
-        fields.push_back({
-            "Version", "version",
-            std::to_string(major) + "." + std::to_string(minor)
-            });
-    }
-
-    // Name (null terminated within fixed buffer)
-    {
-        size_t len = strnlen(hdr->Name, sizeof(hdr->Name));
-        fields.push_back({
-            "Name", "string",
-            std::string(hdr->Name, len)
-            });
-    }
-
-    // Flags
-    fields.push_back({
-        "Flags", "uint32",
-        std::to_string(hdr->Flags)
-        });
+    ChunkFieldBuilder B(fields);
+    B.Version("Version", hdr.Version);
+    B.Name("Name", hdr.Name);                 // 16-byte fixed buffer; B.Name trims NUL
+    B.UInt32("Flags", hdr.Flags);
 
     return fields;
+}
+
+
+// Helpers for the definition/microchunks
+inline bool ReadFloat(const std::shared_ptr<ChunkItem>& c, float& out) {
+    if (!c || c->data.size() < sizeof(float)) return false;
+    std::memcpy(&out, c->data.data(), sizeof(float));
+    return true;
+}
+inline bool ReadU32(const std::shared_ptr<ChunkItem>& c, uint32_t& out) {
+    if (!c || c->data.size() < sizeof(uint32_t)) return false;
+    std::memcpy(&out, c->data.data(), sizeof(uint32_t));
+    return true;
+}
+inline bool ReadU8(const std::shared_ptr<ChunkItem>& c, uint8_t& out) {
+    if (!c || c->data.size() < sizeof(uint8_t)) return false;
+    out = *reinterpret_cast<const uint8_t*>(c->data.data());
+    return true;
+}
+inline void PushNullTerm(ChunkFieldBuilder& B, const std::string& field, const std::shared_ptr<ChunkItem>& c) {
+    B.NullTerm(field, reinterpret_cast<const char*>(c->data.data()), c->data.size());
 }
 
 inline std::vector<ChunkField> InterpretSoundRObjDefinition(
     const std::shared_ptr<ChunkItem>& chunk
 ) {
     std::vector<ChunkField> fields;
-    if (!chunk) {
-        fields.push_back({ "error","string","Empty SOUNDROBJ_DEFINITION" });
-        return fields;
-    }
+    if (!chunk) return fields;
+    ChunkFieldBuilder B(fields);
 
-
-    constexpr uint32_t SOUND_RENDER_DEF_EXT = 0x0200;
-    if (chunk->parent && chunk->parent->id == SOUND_RENDER_DEF_EXT) {
-        for (auto& child : chunk->children) {
+    // CHUNKID_BASE_CLASS wrapper path (0x0200) -> inner CHUNKID_VARIABLES (contains m_ID, m_Name)
+    constexpr uint32_t CHUNKID_BASE_CLASS = 0x0200;
+    if (chunk->parent && chunk->parent->id == CHUNKID_BASE_CLASS) {
+        for (const auto& child : chunk->children) {
             switch (child->id) {
-            case 0x01: {
-                // m_ID is stored as a 4-byte uint
-                uint32_t v = *reinterpret_cast<const uint32_t*>(child->data.data());
-                fields.push_back({ "m_ID", "int32", std::to_string(v) });
+            case 0x01: { // m_ID (uint32)
+                uint32_t v{};
+                if (ReadU32(child, v)) B.UInt32("m_ID", v);
                 break;
             }
-            case 0x03: {
-                // m_Name is a null-terminated string
-                std::string s(
-                    reinterpret_cast<const char*>(child->data.data()),
-                    child->data.size()
-                );
-                if (!s.empty() && s.back() == '\0') s.pop_back();
-                fields.push_back({ "m_Name", "string", s });
+            case 0x03: { // m_Name (null-terminated)
+                PushNullTerm(B, "m_Name", child);
                 break;
             }
-            default:
-                // you can ignore or log other micro-IDs here
-                break;
+            default: break; // ignore other base-class fields
             }
         }
         return fields;
     }
 
-    // For each saved variable sub-chunk, dispatch by its ID:
-    for (auto& child : chunk->children) {
-        uint32_t id = child->id;
-        switch (id) {
-
-        case 0x03: {
-            float v = *reinterpret_cast<const float*>(child->data.data());
-            fields.push_back({ "m_Priority", "float", std::to_string(v) });
-            break;
-        }
-        case 0x04: {
-            float v = *reinterpret_cast<const float*>(child->data.data());
-            fields.push_back({ "m_Volume", "float", std::to_string(v) });
-            break;
-        }
-        case 0x05: {
-            float v = *reinterpret_cast<const float*>(child->data.data());
-            fields.push_back({ "m_Pan", "float", std::to_string(v) });
-            break;
-        }
-        case 0x06: {
-            uint32_t v = *reinterpret_cast<const uint32_t*>(child->data.data());
-            fields.push_back({ "m_LoopCount", "int32", std::to_string(v) });
-            break;
-        }
-        case 0x07: {
-            float v = *reinterpret_cast<const float*>(child->data.data());
-            fields.push_back({ "m_DropoffRadius", "float", std::to_string(v) });
-            break;
-        }
-        case 0x08: {
-            float v = *reinterpret_cast<const float*>(child->data.data());
-            fields.push_back({ "m_MaxVolRadius", "float", std::to_string(v) });
-            break;
-        }
-        case 0x09: {
-            uint32_t v = *reinterpret_cast<const uint32_t*>(child->data.data());
-            fields.push_back({ "m_Type", "int32", std::to_string(v) });
-            break;
-        }
-        case 0x0A: {
-            uint8_t v = *reinterpret_cast<const uint8_t*>(child->data.data());
-            fields.push_back({ "m_is3DSound", "int8", std::to_string(v) });
-            break;
-        }
-        case 0x0B: {
-            std::string s(reinterpret_cast<const char*>(child->data.data()), child->data.size());
-            if (!s.empty() && s.back() == '\0') s.pop_back();
-            fields.push_back({ "m_Filename", "string", s });
-            break;
-        }
-        case 0x0C: {
-            std::string s(reinterpret_cast<const char*>(child->data.data()), child->data.size());
-            if (!s.empty() && s.back() == '\0') s.pop_back();
-            fields.push_back({ "m_DisplayText", "string", s });
-            break;
-        }
-        case 0x12: {
-            float v = *reinterpret_cast<const float*>(child->data.data());
-            fields.push_back({ "m_StartOffset", "float", std::to_string(v) });
-            break;
-        }
-        case 0x13: {
-            float v = *reinterpret_cast<const float*>(child->data.data());
-            fields.push_back({ "m_PitchFactor", "float", std::to_string(v) });
-            break;
-        }
-        case 0x14: {
-            float v = *reinterpret_cast<const float*>(child->data.data());
-            fields.push_back({ "m_PitchFactorRandomizer", "float", std::to_string(v) });
-            break;
-        }
-        case 0x15: {
-            float v = *reinterpret_cast<const float*>(child->data.data());
-            fields.push_back({ "m_VolumeRandomizer", "float", std::to_string(v) });
-            break;
-        }
-        case 0x16: {
-            float v = *reinterpret_cast<const float*>(child->data.data());
-            fields.push_back({ "m_VirtualChannel", "float", std::to_string(v) });
-            break;
-        }
-        case 0x0D: {
-            uint32_t v = *reinterpret_cast<const uint32_t*>(child->data.data());
-            fields.push_back({ "m_LogicalType", "int32", std::to_string(v) });
-            break;
-        }
-        case 0x0E: {
-            float v = *reinterpret_cast<const float*>(child->data.data());
-            fields.push_back({ "m_LogicalNotifDelay", "float", std::to_string(v) });
-            break;
-        }
-        case 0x0F: {
-            uint8_t v = *reinterpret_cast<const uint8_t*>(child->data.data());
-            fields.push_back({ "m_CreateLogicalSound", "int8", std::to_string(v) });
-            break;
-        }
-        case 0x10: {
-            float v = *reinterpret_cast<const float*>(child->data.data());
-            fields.push_back({ "m_LogicalDropoffRadius", "float", std::to_string(v) });
-            break;
-        }
-        case 0x11: {
-            auto ptr = reinterpret_cast<const float*>(child->data.data());
-            std::string val = "("
-                + std::to_string(ptr[0]) + " "
-                + std::to_string(ptr[1]) + " "
-                + std::to_string(ptr[2]) + ")";
-            fields.push_back({ "m_SphereColor", "Vector", val });
+    // Main CHUNKID_VARIABLES block (0x0100) — individual micro-IDs
+    for (const auto& child : chunk->children) {
+        switch (child->id) {
+        case 0x03: { float v{}; if (ReadFloat(child, v)) B.Float("m_Priority", v); break; }
+        case 0x04: { float v{}; if (ReadFloat(child, v)) B.Float("m_Volume", v); break; }
+        case 0x05: { float v{}; if (ReadFloat(child, v)) B.Float("m_Pan", v); break; }
+        case 0x06: { uint32_t v{}; if (ReadU32(child, v)) B.UInt32("m_LoopCount", v); break; }
+        case 0x07: { float v{}; if (ReadFloat(child, v)) B.Float("m_DropoffRadius", v); break; }
+        case 0x08: { float v{}; if (ReadFloat(child, v)) B.Float("m_MaxVolRadius", v); break; }
+        case 0x09: { uint32_t v{}; if (ReadU32(child, v)) B.UInt32("m_Type", v); break; }
+        case 0x0A: { uint8_t v{}; if (ReadU8(child, v))  B.UInt8("m_is3DSound", v); break; }
+        case 0x0B: { PushNullTerm(B, "m_Filename", child); break; }
+        case 0x0C: { PushNullTerm(B, "m_DisplayText", child); break; }
+        case 0x12: { float v{}; if (ReadFloat(child, v)) B.Float("m_StartOffset", v); break; }
+        case 0x13: { float v{}; if (ReadFloat(child, v)) B.Float("m_PitchFactor", v); break; }
+        case 0x14: { float v{}; if (ReadFloat(child, v)) B.Float("m_PitchFactorRandomizer", v); break; }
+        case 0x15: { float v{}; if (ReadFloat(child, v)) B.Float("m_VolumeRandomizer", v); break; }
+        case 0x16: { uint32_t v{}; if (ReadU32(child, v)) B.UInt32("m_VirtualChannel", v); break; }
+        case 0x0D: { uint32_t v{}; if (ReadU32(child, v)) B.UInt32("m_LogicalType", v); break; }
+        case 0x0E: { float v{}; if (ReadFloat(child, v)) B.Float("m_LogicalNotifDelay", v); break; }
+        case 0x0F: { uint8_t v{}; if (ReadU8(child, v))  B.UInt8("m_CreateLogicalSound", v); break; }
+        case 0x10: { float v{}; if (ReadFloat(child, v)) B.Float("m_LogicalDropoffRadius", v); break; }
+        case 0x11: { // m_SphereColor as 3 floats
+            if (child->data.size() >= sizeof(float) * 3) {
+                const float* f = reinterpret_cast<const float*>(child->data.data());
+                std::ostringstream oss;
+                oss << std::fixed << std::setprecision(6) << f[0] << ' ' << f[1] << ' ' << f[2];
+                B.Push("m_SphereColor", "vector3", oss.str());
+            }
             break;
         }
 
-        default:
-            // unknown or not-yet-supported
-            fields.push_back({
-              "UnknownVar(0x" + ToHex(id) + ")",
-              "bytes[" + std::to_string(child->data.size()) + "]",
-              std::to_string(child->data.size()) + " bytes"
-                });
+        default: {
+            // Unknown/unsupported var: record ID and byte count for debugging
+            std::ostringstream tag; tag << "UnknownVar(0x" << std::hex << std::uppercase << child->id << ")";
+            std::ostringstream ty;  ty << "bytes[" << std::dec << child->data.size() << "]";
+            B.Push(tag.str(), ty.str(), std::to_string(child->data.size()) + " bytes");
             break;
+        }
         }
     }
 
