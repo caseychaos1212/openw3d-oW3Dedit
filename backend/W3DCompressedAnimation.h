@@ -12,7 +12,7 @@ inline const char* CompressedAnimFlavorName(uint16_t f) {
     default: return nullptr;
     }
 }
-
+//TODO: TEST
 // Compressed Animation Header (fixed-size -> use ParseChunkStruct)
 inline std::vector<ChunkField> InterpretCompressedAnimationHeader(const std::shared_ptr<ChunkItem>& chunk) {
     std::vector<ChunkField> fields;
@@ -43,14 +43,14 @@ inline std::vector<ChunkField> InterpretCompressedAnimationHeader(const std::sha
 
 // Helper for channel type name (compressed channels share the same mapping)
 inline const char* CompressedChannelTypeName(uint8_t flags) {
-    static constexpr const char* k = {
+    static constexpr const char* k[] = {
         "X Translation", "Y Translation", "Z Translation",
         "X Rotation",    "Y Rotation",    "Z Rotation",
         "Quaternion Rotation", "Visibility"
     };
     return (flags < 8) ? k[flags] : nullptr;
 }
-
+//TODO: TEST
 // Timecoded vs AdaptiveDelta channel 
 inline std::vector<ChunkField> InterpretCompressedAnimationChannel(const std::shared_ptr<ChunkItem>& chunk,
     uint16_t flavor /*0=timecoded, 1=adaptive*/) {
@@ -145,7 +145,7 @@ inline std::vector<ChunkField> InterpretCompressedAnimationChannel(const std::sh
     }
     return fields;
 }
-
+//TODO: TEST
 // Compressed Bit Channel (timecoded bit events)
 // Fixed header with Data[0] present -> use offsetof to size payload safely
 inline std::vector<ChunkField> InterpretCompressedBitChannel(const std::shared_ptr<ChunkItem>& chunk) {
