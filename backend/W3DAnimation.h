@@ -18,7 +18,7 @@ inline std::vector<ChunkField> InterpretAnimationHeader(const std::shared_ptr<Ch
 
     const auto& data = std::get<W3dAnimHeaderStruct>(buff);
 
-    uint32_t attr = data.Attributes;
+    
 
     ChunkFieldBuilder B(fields);
 
@@ -92,8 +92,7 @@ inline std::vector<ChunkField> InterpretAnimationChannel(const std::shared_ptr<C
     ChunkFieldBuilder B(fields);
     B.UInt16("FirstFrame", hdr.FirstFrame);
     B.UInt16("LastFrame", hdr.LastFrame);
-    B.UInt16("VectorLen", hdr.VectorLen);
-    B.UInt16("Pivot", hdr.Pivot);
+
 
     if (const char* nm = AnimationChannelName(hdr.Flags)) {
         B.Push("ChannelType", "string", nm);
@@ -102,6 +101,9 @@ inline std::vector<ChunkField> InterpretAnimationChannel(const std::shared_ptr<C
         B.Push("ChannelType", "string", "Unknown(" + std::to_string(hdr.Flags) + ")");
     }
 
+    B.UInt16("Pivot", hdr.Pivot);
+    B.UInt16("VectorLen", hdr.VectorLen);
+
     // Dump values as Data[f][v]
     for (int f = 0; f < frameCount; ++f) {
         for (int v = 0; v < int(hdr.VectorLen); ++v) {
@@ -109,6 +111,8 @@ inline std::vector<ChunkField> InterpretAnimationChannel(const std::shared_ptr<C
             B.Float("Data[" + std::to_string(f) + "][" + std::to_string(v) + "]", val);
         }
     }
+
+    
 
     return fields;
 }
@@ -173,7 +177,7 @@ inline std::vector<ChunkField> InterpretBitChannel(const std::shared_ptr<ChunkIt
     ChunkFieldBuilder B(fields);
     B.UInt16("FirstFrame", hdr.FirstFrame);
     B.UInt16("LastFrame", hdr.LastFrame);
-    B.UInt16("Pivot", hdr.Pivot);
+    
 
     if (const char* nm = BitChannelName(hdr.Flags)) {
         B.Push("ChannelType", "string", nm);
@@ -182,12 +186,15 @@ inline std::vector<ChunkField> InterpretBitChannel(const std::shared_ptr<ChunkIt
         B.Push("ChannelType", "string", "Unknown(" + std::to_string(hdr.Flags) + ")");
     }
 
+    B.UInt16("Pivot", hdr.Pivot);
     B.UInt8("DefaultVal", hdr.DefaultVal);
 
-    // Unpack bits: little-endian within each byte, same as your original
+    // Unpack bits
+    const int label_base = std::max(0, first );  // convention: start at FirstFrame-1
     for (int i = 0; i < count; ++i) {
         const bool val = (bits[static_cast<size_t>(i / 8)] >> (i % 8)) & 1;
-        B.Push("Data[" + std::to_string(i) + "]", "bool", val ? "true" : "false");
+        const int label = label_base + i;
+        B.Push("Data[" + std::to_string(label) + "]", "bool", val ? "true" : "false");
     }
 
     return fields;

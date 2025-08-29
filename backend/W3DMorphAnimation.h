@@ -3,6 +3,7 @@
 #include <vector>
 #include "ChunkItem.h"
 
+//TODO: Find Example
 inline std::vector<ChunkField> InterpretMorphAnimHeader(const std::shared_ptr<ChunkItem>& chunk) {
     std::vector<ChunkField> fields;
     if (!chunk) return fields;
@@ -24,6 +25,7 @@ inline std::vector<ChunkField> InterpretMorphAnimHeader(const std::shared_ptr<Ch
     return fields;
 }
 
+//TODO: Find Example
 inline std::vector<ChunkField> InterpretMorphAnimPoseName(const std::shared_ptr<ChunkItem>& chunk) {
     std::vector<ChunkField> fields;
     if (!chunk) return fields;
@@ -36,7 +38,7 @@ inline std::vector<ChunkField> InterpretMorphAnimPoseName(const std::shared_ptr<
     return fields;
 }
 
-
+//TODO: Find Example
 inline std::vector<ChunkField> InterpretMorphAnimKeyData(const std::shared_ptr<ChunkItem>& chunk) {
     std::vector<ChunkField> fields;
     if (!chunk) return fields;
@@ -58,7 +60,7 @@ inline std::vector<ChunkField> InterpretMorphAnimKeyData(const std::shared_ptr<C
     }
     return fields;
 }
-
+//TODO: Find Example
 inline std::vector<ChunkField> InterpretMorphAnimPivotChannelData(const std::shared_ptr<ChunkItem>& chunk) {
     std::vector<ChunkField> fields;
     if (!chunk) return fields;

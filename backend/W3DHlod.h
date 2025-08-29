@@ -56,8 +56,8 @@ inline std::vector<ChunkField> InterpretHLODSubObject_LodArray(const std::shared
     const auto& h = std::get<W3dHLodSubObjectStruct>(v);
 
     ChunkFieldBuilder B(fields);
+    B.Name("Name", h.Name, 2 * W3D_NAME_LEN);
     B.UInt32("BoneIndex", h.BoneIndex);
-    B.Name("Name", h.Name);
     return fields;
 }
 

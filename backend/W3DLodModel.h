@@ -2,6 +2,7 @@
 #include "W3DStructs.h"
 #include <vector>
 
+//TODO: Find Example
 inline std::vector<ChunkField> InterpretLODModelHeader(const std::shared_ptr<ChunkItem>& chunk) {
     std::vector<ChunkField> fields;
     if (!chunk) return fields;
@@ -20,6 +21,7 @@ inline std::vector<ChunkField> InterpretLODModelHeader(const std::shared_ptr<Chu
     return fields;
 }
 
+//TODO: Find Example
 inline std::vector<ChunkField> InterpretLOD(const std::shared_ptr<ChunkItem>& chunk) {
     std::vector<ChunkField> fields;
     if (!chunk) return fields;

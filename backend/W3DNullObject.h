@@ -2,6 +2,7 @@
 #include "W3DStructs.h"
 #include <vector>
 
+//TODO: Find Example
 inline std::vector<ChunkField> InterpretNullObject(const std::shared_ptr<ChunkItem>& chunk) {
     std::vector<ChunkField> fields;
     if (!chunk) return fields;
@@ -23,7 +24,7 @@ inline std::vector<ChunkField> InterpretNullObject(const std::shared_ptr<ChunkIt
     B.UInt32("Null.Attributes", obj.Attributes);
 
     // Name (fixed-size, NUL-terminated)
-    B.Name("Name", obj.Name);
+    B.Name("Name", obj.Name, 2 * W3D_NAME_LEN);
 
     return fields;
 }

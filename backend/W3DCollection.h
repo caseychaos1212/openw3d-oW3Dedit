@@ -31,10 +31,10 @@ inline std::vector<ChunkField> InterpretCollectionObjName(const std::shared_ptr<
     B.NullTerm("ObjectName",
         reinterpret_cast<const char*>(chunk->data.data()),
         chunk->data.size(),
-        W3D_NAME_LEN);
+        2 * W3D_NAME_LEN);
     return fields;
 }
-
+//TODO: FIND EXAMPLE
 inline std::vector<ChunkField> InterpretTransformNode(const std::shared_ptr<ChunkItem>& chunk) {
     std::vector<ChunkField> fields;
     if (!chunk) return fields;
@@ -73,7 +73,7 @@ inline std::vector<ChunkField> InterpretTransformNode(const std::shared_ptr<Chun
 
     return fields;
 }
-
+//TODO: FIND EXAMPLE
 inline std::vector<ChunkField> InterpretPlaceHolder(const std::shared_ptr<ChunkItem>& chunk) {
     std::vector<ChunkField> fields;
     if (!chunk) return fields;

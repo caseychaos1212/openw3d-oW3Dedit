@@ -2,6 +2,7 @@
 #include "W3DStructs.h"
 #include <vector>
 
+
 inline std::vector<ChunkField> InterpretEmitterHeader(const std::shared_ptr<ChunkItem>& chunk) {
     std::vector<ChunkField> fields; if (!chunk) return fields;
 
@@ -17,6 +18,7 @@ inline std::vector<ChunkField> InterpretEmitterHeader(const std::shared_ptr<Chun
     B.Name("Name", h.Name);
     return fields;
 }
+
 
 inline std::vector<ChunkField> InterpretEmitterUserData(const std::shared_ptr<ChunkItem>& chunk) {
     std::vector<ChunkField> fields; if (!chunk) return fields;
@@ -66,7 +68,7 @@ static inline void EmitVolumeRandomizer(ChunkFieldBuilder& B,
     B.Float(pfx + ".Value3", v.Value3);
 }
 
-
+//TODO: Missing shader destblend to alphatest on e_01_dfsmoke.w3d
 inline std::vector<ChunkField> InterpretEmitterInfoV2(const std::shared_ptr<ChunkItem>& chunk) {
     std::vector<ChunkField> fields; if (!chunk) return fields;
 
@@ -93,6 +95,7 @@ inline std::vector<ChunkField> InterpretEmitterInfoV2(const std::shared_ptr<Chun
     return fields;
 }
 
+//TODO: Completely Mis labeling data.
 inline std::vector<ChunkField> InterpretEmitterProps(const std::shared_ptr<ChunkItem>& chunk) {
     std::vector<ChunkField> fields; if (!chunk) return fields;
 
@@ -159,7 +162,7 @@ inline std::vector<ChunkField> InterpretEmitterProps(const std::shared_ptr<Chunk
 
     return fields;
 }
-
+//TODO: OBSOLETE
 inline std::vector<ChunkField> InterpretEmitterColorKeyframe(const std::shared_ptr<ChunkItem>& chunk) {
     std::vector<ChunkField> fields; if (!chunk) return fields;
 
@@ -181,7 +184,7 @@ inline std::vector<ChunkField> InterpretEmitterColorKeyframe(const std::shared_p
     return fields;
 }
 
-
+//TODO: OBSOLETE
 inline std::vector<ChunkField> InterpretEmitterOpacityKeyframe(const std::shared_ptr<ChunkItem>& chunk) {
     std::vector<ChunkField> fields; if (!chunk) return fields;
 
@@ -203,7 +206,7 @@ inline std::vector<ChunkField> InterpretEmitterOpacityKeyframe(const std::shared
     return fields;
 }
 
-
+//TODO: OBSOLETE
 inline std::vector<ChunkField> InterpretEmitterSizeKeyframe(const std::shared_ptr<ChunkItem>& chunk) {
     std::vector<ChunkField> fields; if (!chunk) return fields;
 
@@ -240,7 +243,7 @@ enum : uint32_t {
     W3D_ELINE_UNIFORM_LENGTH_TEXTURE_MAP = 0x01u << W3D_ELINE_TEXTURE_MAP_MODE_OFFSET,
     W3D_ELINE_TILED_TEXTURE_MAP = 0x02u << W3D_ELINE_TEXTURE_MAP_MODE_OFFSET,
 };
-
+//TODO: Find Example
 inline std::vector<ChunkField> InterpretEmitterLineProperties(const std::shared_ptr<ChunkItem>& chunk) {
     std::vector<ChunkField> fields; if (!chunk) return fields;
 
@@ -277,7 +280,7 @@ inline std::vector<ChunkField> InterpretEmitterLineProperties(const std::shared_
 
     return fields;
 }
-
+//TODO: Doesn't match
 inline std::vector<ChunkField> InterpretEmitterRotationKeys(const std::shared_ptr<ChunkItem>& chunk) {
     std::vector<ChunkField> fields; if (!chunk) return fields;
 
@@ -309,7 +312,7 @@ inline std::vector<ChunkField> InterpretEmitterRotationKeys(const std::shared_pt
     return fields;
 }
 
-
+//TODO: doesn't match
 inline std::vector<ChunkField> InterpretEmitterFrameKeys(const std::shared_ptr<ChunkItem>& chunk) {
     std::vector<ChunkField> fields; if (!chunk) return fields;
 
@@ -342,7 +345,7 @@ inline std::vector<ChunkField> InterpretEmitterFrameKeys(const std::shared_ptr<C
     return fields;
 }
 
-
+//TODO: doesn't match
 inline std::vector<ChunkField> InterpretEmitterBlurTimeKeyframes(const std::shared_ptr<ChunkItem>& chunk) {
     std::vector<ChunkField> fields; if (!chunk) return fields;
 

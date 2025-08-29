@@ -740,7 +740,7 @@ inline std::vector<ChunkField> InterpretStageTexCoords(const std::shared_ptr<Chu
     return fields;
 }
 
-//TODO: find Example
+//TODO: Find Example
 inline std::vector<ChunkField> InterpretPerFaceTexcoordIds(const std::shared_ptr<ChunkItem>& chunk) {
     std::vector<ChunkField> fields;
     if (!chunk) return fields;

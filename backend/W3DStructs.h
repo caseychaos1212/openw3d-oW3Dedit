@@ -1089,7 +1089,7 @@ struct W3dHLodSubObjectStruct
 	uint32_t					BoneIndex;
 	char						Name[W3D_NAME_LEN * 2];
 };
-enum class BoxAtrr : uint32_t {
+enum class BoxAttr : uint32_t {
  W3D_BOX_ATTRIBUTE_ORIENTED	= 0x00000001,
  W3D_BOX_ATTRIBUTE_ALIGNED	= 0x00000002,
  W3D_BOX_ATTRIBUTE_COLLISION_TYPE_MASK = 0x00000FF0,		// mask for the collision type bits
@@ -1296,6 +1296,8 @@ struct ChunkFieldBuilder {
 		);
 	}
 
+
+
 	void NullTerm(std::string fieldName, const char* dataPtr, size_t chunkBytes, size_t maxLen = 256) {
 		size_t scanLen = std::min(chunkBytes, maxLen);
 		size_t realLen = strnlen(dataPtr, scanLen);
@@ -1366,9 +1368,10 @@ struct ChunkFieldBuilder {
 	void Float(std::string name, float v) {
 		Push(std::move(name), "float", FormatUtils::FormatFloat(v));
 	}
-		void Quat(std::string name, const W3dQuaternionStruct& q) {
-	Push(std::move(name), "quaternion", FormatUtils::FormatQuat(q.X, q.Y, q.Z q.W));
-}
+	void Quat(std::string name, const W3dQuaternionStruct& q) {
+		Push(std::move(name), "quaternion",
+			FormatUtils::FormatQuat(q.Q[0], q.Q[1], q.Q[2], q.Q[3]));
+	}
 
 	// Shader enum display helpers
 	void DepthCompareField(std::string_view name, uint8_t raw) {

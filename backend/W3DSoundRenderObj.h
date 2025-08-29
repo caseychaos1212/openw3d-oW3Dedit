@@ -3,7 +3,7 @@
 #include <vector>
 
 // SOUND RENDER OBJECTS
-
+//TODO: Broken
 inline std::vector<ChunkField> InterpretSoundRObjHeader(
     const std::shared_ptr<ChunkItem>& chunk
 ) {
@@ -45,7 +45,7 @@ inline bool ReadU8(const std::shared_ptr<ChunkItem>& c, uint8_t& out) {
 inline void PushNullTerm(ChunkFieldBuilder& B, const std::string& field, const std::shared_ptr<ChunkItem>& c) {
     B.NullTerm(field, reinterpret_cast<const char*>(c->data.data()), c->data.size());
 }
-
+//TODO: Broken
 inline std::vector<ChunkField> InterpretSoundRObjDefinition(
     const std::shared_ptr<ChunkItem>& chunk
 ) {

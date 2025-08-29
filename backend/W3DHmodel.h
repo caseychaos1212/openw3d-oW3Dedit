@@ -2,6 +2,7 @@
 #include "W3DStructs.h"
 #include <vector>
 
+
 inline std::vector<ChunkField> InterpretHModelHeader(const std::shared_ptr<ChunkItem>& chunk) {
     std::vector<ChunkField> fields;
     if (!chunk) return fields;
@@ -20,6 +21,7 @@ inline std::vector<ChunkField> InterpretHModelHeader(const std::shared_ptr<Chunk
     B.UInt16("NumConnections", h.NumConnections);
     return fields;
 }
+
 
 inline std::vector<ChunkField> InterpretHModelAuxData(const std::shared_ptr<ChunkItem>& chunk) {
     std::vector<ChunkField> fields;
@@ -84,6 +86,7 @@ static inline std::vector<ChunkField> InterpretNamedNode(
     }
     return f;
 }
+
 
 inline std::vector<ChunkField> InterpretNode(const std::shared_ptr<ChunkItem>& chunk) {
     return InterpretNamedNode(chunk, "RenderObjName");

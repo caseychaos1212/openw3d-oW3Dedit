@@ -2,6 +2,7 @@
 #include "W3DStructs.h"
 #include <vector>
 
+
 // ---------- Shader flatten (use builder enum helpers instead of string tables)
 inline void InterpretSphereShaderStruct(std::vector<ChunkField>& fields,
     const W3dShaderStruct& s)
@@ -20,7 +21,7 @@ inline void InterpretSphereShaderStruct(std::vector<ChunkField>& fields,
     B.AlphaTestField("Shader.AlphaTest", s.AlphaTest);
     // (skip pads/obsolete slots by design)
 }
-
+//TODO: Broken
 // ---------- Sphere header ----------
 inline std::vector<ChunkField> InterpretSphereHeader(const std::shared_ptr<ChunkItem>& chunk) {
     std::vector<ChunkField> F;
@@ -37,7 +38,7 @@ inline std::vector<ChunkField> InterpretSphereHeader(const std::shared_ptr<Chunk
     B.Version("Version", sph.Version);
 
     B.UInt32("Attributes", sph.Attributes);
-    B.Name("Name", sph.Name);
+    B.Name("Name", sph.Name, 2 * W3D_NAME_LEN);
     B.Vec3("Center", sph.Center);
     B.Vec3("Extent", sph.Extent);
     B.Float("AnimationDuration", sph.AnimDuration);
@@ -58,7 +59,7 @@ inline std::vector<ChunkField> InterpretSphereHeader(const std::shared_ptr<Chunk
         B.Float("DefaultVector.Intensity", sph.DefaultVector.intensity);
     }
 
-    B.Name("TextureName", sph.TextureName);
+    B.Name("TextureName", sph.TextureName, 2 * W3D_NAME_LEN);
 
     // Shader
     InterpretSphereShaderStruct(F, sph.Shader);
@@ -88,7 +89,7 @@ OpenVariablesWrapper(const std::shared_ptr<ChunkItem>& chunk, const char* label_
     span.size = size;
     return span;
 }
-
+//TODO: Broken
 // ---------- Sphere channels ----------
 inline std::vector<ChunkField> InterpretSphereChannel(const std::shared_ptr<ChunkItem>& chunk) {
     std::vector<ChunkField> F;
@@ -163,6 +164,7 @@ inline std::vector<ChunkField> InterpretSphereAlphaChannel(const std::shared_ptr
 inline std::vector<ChunkField> InterpretSphereScaleChannel(const std::shared_ptr<ChunkItem>& c) { auto v = InterpretSphereChannel(c); return v; }
 inline std::vector<ChunkField> InterpretSphereVectorChannel(const std::shared_ptr<ChunkItem>& c) { auto v = InterpretSphereChannel(c); return v; }
 
+//TODO: Broken
 // ---------- Ring header ----------
 inline std::vector<ChunkField> InterpretRingHeader(const std::shared_ptr<ChunkItem>& chunk) {
     std::vector<ChunkField> F;
@@ -178,7 +180,7 @@ inline std::vector<ChunkField> InterpretRingHeader(const std::shared_ptr<ChunkIt
     ChunkFieldBuilder B(F);
     B.Version("Version", s.Version);
     B.UInt32("Attributes", s.Attributes);
-    B.Name("Name", s.Name);
+    B.Name("Name", s.Name, 2 * W3D_NAME_LEN);
 
     B.Vec3("Center", s.Center);
     B.Vec3("Extent", s.Extent);
@@ -198,7 +200,7 @@ inline std::vector<ChunkField> InterpretRingHeader(const std::shared_ptr<ChunkIt
     B.Float("OuterExtent.U", s.OuterExtent.x);
     B.Float("OuterExtent.V", s.OuterExtent.y);
 
-    B.Name("TextureName", s.TextureName);
+    B.Name("TextureName", s.TextureName, 2 * W3D_NAME_LEN);
 
     InterpretSphereShaderStruct(F, s.Shader);
 
@@ -206,61 +208,69 @@ inline std::vector<ChunkField> InterpretRingHeader(const std::shared_ptr<ChunkIt
     return F;
 }
 
+//TODO: Broken
 // ---------- Ring channels ----------
 inline std::vector<ChunkField> InterpretRingChannel(const std::shared_ptr<ChunkItem>& chunk) {
     std::vector<ChunkField> F;
+
+    // Expect the usual VARIABLES wrapper you’re using elsewhere.
     auto span = OpenVariablesWrapper(chunk, "RING channel");
     if (!span) return F;
 
     const uint8_t* cur = span->base;
     const uint8_t* end = span->base + span->size;
 
+    // Local PODs to avoid relying on project-wide typedefs
+    struct RingVec3Key { W3dVectorStruct Value; float Time; };
+    struct RingAlphaKey { float Value; float Time; };
+    struct RingVec2Key { float U, V; float Time; };
+
     size_t idx = 0;
     while (cur + 2 <= end) {
-        uint8_t id = cur[0];
-        uint8_t size = cur[1];
+        const uint8_t id = cur[0];
+        const uint8_t size = cur[1];
         cur += 2;
-        if (cur + size > end) break;
+
+        if (cur + size > end) break; // truncated microchunk
 
         switch (id) {
-        case 0x02: // COLOR -> W3dRingVec3Key {Vec3, Time}
-        {
-            if (size == sizeof(W3dRingVec3Key)) {
-                auto const& key = *reinterpret_cast<const W3dRingVec3Key*>(cur);
+        case 0x02: { // COLOR -> { Vec3, Time }
+            if (size == sizeof(RingVec3Key)) {
+                const auto* key = reinterpret_cast<const RingVec3Key*>(cur);
                 ChunkFieldBuilder B(F);
-                std::string base = "ColorChannel[" + std::to_string(idx) + "]";
-                B.Vec3(base + ".Value", key.Value);
-                B.Float(base + ".Time", key.Time);
+                const std::string base = "ColorChannel[" + std::to_string(idx) + "]";
+                B.Vec3(base + ".Value", key->Value);
+                B.Float(base + ".Time", key->Time);
             }
             break;
         }
-        case 0x03: // ALPHA -> W3dRingAlphaKey {float, Time}
-        {
-            if (size == sizeof(W3dRingAlphaKey)) {
-                auto const& key = *reinterpret_cast<const W3dRingAlphaKey*>(cur);
+        case 0x03: { // ALPHA -> { float, Time }
+            if (size == sizeof(RingAlphaKey)) {
+                const auto* key = reinterpret_cast<const RingAlphaKey*>(cur);
                 ChunkFieldBuilder B(F);
-                std::string base = "AlphaChannel[" + std::to_string(idx) + "]";
-                B.Float(base + ".Value", key.Value);
-                B.Float(base + ".Time", key.Time);
+                const std::string base = "AlphaChannel[" + std::to_string(idx) + "]";
+                B.Float(base + ".Value", key->Value);
+                B.Float(base + ".Time", key->Time);
             }
             break;
         }
-        case 0x04: // INNER_SCALE -> W3dRingVec2Key {Vec2, Time}
-        case 0x05: // OUTER_SCALE -> W3dRingVec2Key
-        {
-            if (size == sizeof(W3dRingVec2Key)) {
-                auto const& key = *reinterpret_cast<const W3dRingVec2Key*>(cur);
-                std::string base = (id == 0x04 ? "InnerScaleChannel[" : "OuterScaleChannel[")
+        case 0x04: // INNER_SCALE -> { Vec2, Time }
+        case 0x05: { // OUTER_SCALE -> { Vec2, Time }
+            if (size == sizeof(RingVec2Key)) {
+                const auto* key = reinterpret_cast<const RingVec2Key*>(cur);
+                ChunkFieldBuilder B(F);
+                const std::string base =
+                    (id == 0x04 ? "InnerScaleChannel[" : "OuterScaleChannel[")
                     + std::to_string(idx) + "]";
-                ChunkFieldBuilder B(F);
-                B.Float(base + ".Value.U", key.Value.x);
-                B.Float(base + ".Value.V", key.Value.y);
-                B.Float(base + ".Time", key.Time);
+                // You don’t have Vec2 in the builder, so write components:
+                B.Float(base + ".Value.U", key->U);
+                B.Float(base + ".Value.V", key->V);
+                B.Float(base + ".Time", key->Time);
             }
             break;
         }
         default:
-            // unknown micro-chunk; skip
+            // Unknown micro-chunk – skip it
             break;
         }
 

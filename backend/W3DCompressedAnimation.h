@@ -12,7 +12,7 @@ inline const char* CompressedAnimFlavorName(uint16_t f) {
     default: return nullptr;
     }
 }
-//TODO: TEST
+
 // Compressed Animation Header (fixed-size -> use ParseChunkStruct)
 inline std::vector<ChunkField> InterpretCompressedAnimationHeader(const std::shared_ptr<ChunkItem>& chunk) {
     std::vector<ChunkField> fields;
@@ -50,7 +50,7 @@ inline const char* CompressedChannelTypeName(uint8_t flags) {
     };
     return (flags < 8) ? k[flags] : nullptr;
 }
-//TODO: TEST
+//TODO: TIMECODED GETTING TRUNCATED and FIND DELTA EXAMPLE
 // Timecoded vs AdaptiveDelta channel 
 inline std::vector<ChunkField> InterpretCompressedAnimationChannel(const std::shared_ptr<ChunkItem>& chunk,
     uint16_t flavor /*0=timecoded, 1=adaptive*/) {
@@ -145,7 +145,7 @@ inline std::vector<ChunkField> InterpretCompressedAnimationChannel(const std::sh
     }
     return fields;
 }
-//TODO: TEST
+//TODO: DATA SHOULD NOT BE SIGNED INT???
 // Compressed Bit Channel (timecoded bit events)
 // Fixed header with Data[0] present -> use offsetof to size payload safely
 inline std::vector<ChunkField> InterpretCompressedBitChannel(const std::shared_ptr<ChunkItem>& chunk) {
