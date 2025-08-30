@@ -49,15 +49,39 @@ inline std::string GetChunkName(uint32_t id, uint32_t parentId = 0) {
  
     static const std::unordered_map<uint32_t, std::string> chunkNames = {
         { 0x0000, "W3D_CHUNK_MESH" }, // Mesh definition
-        { 0x0001, "CHUNKID_SPHERE_DEF" }, // Header for mesh (Legacy)
+        { 0x0001, "W3D_CHUNK_MESH_HEADER" }, // Header for mesh (Legacy)
         { 0x0002, "W3D_CHUNK_VERTICES" }, // array of vertices (array of W3dVectorStruct's)
         { 0x0003, "W3D_CHUNK_VERTEX_NORMALS" }, // array of normals (array of W3dVectorStruct's)
-		{ 0x0004, "W3D_CHUNK_SPHERE_CHUNKID_SCALE_CHANNEL" }, // array of vertex colors (array of W3dRGBAStruct's)
-		{ 0x0005, "W3D_CHUNK_SPHERE_CHUNKID_VECTOR_CHANNEL" }, // array of texture coordinates (array of W3dTexCoordStruct's)        
-        { 0x000C, "W3D_CHUNK_MESH_USER_TEXT"}, // Text from the MAX comment field (Null terminated string)
+		{ 0x0004, "W3D_CHUNK_SURRENDER_NORMALS" }, // array of vertex colors (array of W3dRGBAStruct's)
+		{ 0x0005, "W3D_CHUNK_TEXCOORDS" }, // array of texture coordinates (array of W3dTexCoordStruct's)
+        { 0x0006, "O_W3D_CHUNK_MATERIALS" }, //OBSOLETE: array of materials
+        { 0x0007, "O_W3D_CHUNK_TRIANGLES" }, //OBSOLETE: array of triangles
+        { 0x0008, "O_W3D_CHUNK_QUADRANGLES" }, // OBSOLETE: array of quads
+        { 0x0009, "O_W3D_CHUNK_SURRENDER_TRIANGLES" }, // OBSOLETE: array of surrender format tris
+        { 0x000A, "O_W3D_CHUNK_POV_TRIANGLES" }, // OBSOLETE: POV format triangles 
+		{ 0x000B, "O_W3D_CHUNK_POV_QUADRANGLES" }, // OBSOLETE: POV format quads
+        { 0x000C, "W3D_CHUNK_MESH_USER_TEXT" }, // Text from the MAX comment field (Null terminated string)
+        { 0x000D, "W3D_CHUNK_VERTEX_COLORS" }, // OBSOLETE: Pre-set vertex coloring
         { 0x000E, "W3D_CHUNK_VERTEX_INFLUENCES" }, // Mesh Deformation vertex connections (array of W3dVertInfStruct's)
+        { 0x000F, "W3D_CHUNK_DAMAGE" },             // OBSOLETE: Mesh damage (materials, verts, colors)
+        { 0x0010, "W3D_CHUNK_DAMAGE_HEADER" },      // OBSOLETE: Header for damage data
+        { 0x0011, "W3D_CHUNK_DAMAGE_VERTICES" },    // OBSOLETE: Modified vertices (W3dMeshDamageVertexStruct[])
+        { 0x0012, "W3D_CHUNK_DAMAGE_COLORS" },      // OBSOLETE: Modified vertex colors (W3dMeshDamageColorStruct[])
+        { 0x0013, "W3D_CHUNK_DAMAGE_MATERIALS" },   // OBSOLETE
+        { 0x0014, "O_W3D_CHUNK_MATERIALS2" },       // OBSOLETE
+        { 0x0015, "W3D_CHUNK_MATERIALS3" },         // OBSOLETE
+        { 0x0016, "W3D_CHUNK_MATERIAL3" },          // OBSOLETE: wrapper for v3 material
+        { 0x0017, "W3D_CHUNK_MATERIAL3_NAME" },     // OBSOLETE: material name (null term)
+        { 0x0018, "W3D_CHUNK_MATERIAL3_INFO" },     // OBSOLETE: W3dMaterial3Struct
+        { 0x0019, "W3D_CHUNK_MATERIAL3_DC_MAP" },   // OBSOLETE: diffuse color texture map
+        { 0x001A, "W3D_CHUNK_MAP3_FILENAME" },      // OBSOLETE: filename of map texture
+        { 0x001B, "W3D_CHUNK_MAP3_INFO" },          // OBSOLETE: W3dMap3Struct
+        { 0x001C, "W3D_CHUNK_MATERIAL3_DI_MAP" },   // OBSOLETE: diffuse illumination map
+        { 0x001D, "W3D_CHUNK_MATERIAL3_SC_MAP" },   // OBSOLETE: specular color map
+        { 0x001E, "W3D_CHUNK_MATERIAL3_SI_MAP" },   // OBSOLETE: specular illumination map
         { 0x001F, "W3D_CHUNK_MESH_HEADER3" }, // mesh header contains general info about the mesh. (W3dMeshHeader3Struct)
         { 0x0020, "W3D_CHUNK_TRIANGLES" }, // New improved triangles chunk (array of W3dTriangleStruct's)
+        { 0x0021, "W3D_CHUNK_PER_TRI_MATERIALS" }, // OBSOLETE: Multi-Mtl meshes - An array of uint16 material id's
         { 0x0022, "W3D_CHUNK_VERTEX_SHADE_INDICES" }, // shade indexes for each vertex (array of uint32's)
         { 0x0023, "W3D_CHUNK_PRELIT_UNLIT" }, // optional unlit material chunk wrapper
         { 0x0024, "W3D_CHUNK_PRELIT_VERTEX" }, // optional vertex-lit material chunk wrapper
@@ -81,14 +105,21 @@ inline std::string GetChunkName(uint32_t id, uint32_t parentId = 0) {
         { 0x003B, "W3D_CHUNK_DCG" }, // per-vertex diffuse color values (array of W3dRGBAStruct's)
         { 0x003C, "W3D_CHUNK_DIG" }, // per-vertex diffuse illumination values (array of W3dRGBStruct's)
         { 0x003E, "W3D_CHUNK_SCG" }, // per-vertex specular color values (array of W3dRGBStruct's)
+        { 0x003F, "W3D_CHUNK_SHADER_MATERIAL_ID" },   // BFMEII: single or per-tri array of uint32 fx shader indices
         { 0x0048, "W3D_CHUNK_TEXTURE_STAGE" }, // wrapper around a texture stage.
         { 0x0049, "W3D_CHUNK_TEXTURE_IDS" }, // single or per-tri array of uint32 texture indices (check chunk size)
         { 0x004A, "W3D_CHUNK_STAGE_TEXCOORDS" }, // per-vertex texture coordinates (array of W3dTexCoordStruct's)
         { 0x004B, "W3D_CHUNK_PER_FACE_TEXCOORD_IDS" }, // indices to W3D_CHUNK_STAGE_TEXCOORDS, (array of Vector3i)
+        { 0x0050, "W3D_CHUNK_SHADER_MATERIALS" },     // BFMEII: W3D_CHUNK_FX_SHADERS appears first
+        { 0x0051, "W3D_CHUNK_SHADER_MATERIAL" },      // BFMEII
+        { 0x0052, "W3D_CHUNK_SHADER_MATERIAL_HEADER" },// BFMEII
+        { 0x0053, "W3D_CHUNK_SHADER_MATERIAL_PROPERTY" },// BFMEII
         { 0x0058, "W3D_CHUNK_DEFORM" }, // mesh deform or 'damage' information.
         { 0x0059, "W3D_CHUNK_DEFORM_SET" }, // set of deform information
         { 0x005A, "W3D_CHUNK_DEFORM_KEYFRAME" }, // a keyframe of deform information in the set
         { 0x005B, "W3D_CHUNK_DEFORM_DATA" }, // deform information about a single vertex
+        { 0x0060, "W3D_CHUNK_TANGENTS" },             // BFMEII
+        { 0x0061, "W3D_CHUNK_BINORMALS" },            // BFMEII (aka BITANGENTS)
         { 0x0080, "W3D_CHUNK_PS2_SHADERS" }, // Shader info specific to the Playstation 2.
         { 0x0090, "W3D_CHUNK_AABTREE" }, // Axis-Aligned Box Tree for hierarchical polygon culling
         { 0x0091, "W3D_CHUNK_AABTREE_HEADER" }, // catalog of the contents of the AABTree
@@ -98,6 +129,7 @@ inline std::string GetChunkName(uint32_t id, uint32_t parentId = 0) {
         { 0x0101, "W3D_CHUNK_HIERARCHY_HEADER" }, // hierarchy tree Header
         { 0x0102, "W3D_CHUNK_PIVOTS" },       // pivots
         { 0x0103, "W3D_CHUNK_PIVOT_FIXUPS" }, // only needed by the exporter...
+        { 0x0104, "W3D_CHUNK_PIVOT_UNKNOWN1" },       // ENB
         { 0x0200, "W3D_CHUNK_ANIMATION" }, // hierarchy animation data
         { 0x0201, "W3D_CHUNK_ANIMATION_HEADER" }, // Animation Header
         { 0x0202, "W3D_CHUNK_ANIMATION_CHANNEL" }, // channel of vectors
@@ -106,6 +138,7 @@ inline std::string GetChunkName(uint32_t id, uint32_t parentId = 0) {
         { 0x0281, "W3D_CHUNK_COMPRESSED_ANIMATION_HEADER"}, // describes playback rate, number of frames, and type of compression
         { 0x0282, "W3D_CHUNK_COMPRESSED_ANIMATION_CHANNEL"}, // compressed channel, format dependent on type of compression
         { 0x0283, "W3D_CHUNK_COMPRESSED_BIT_CHANNEL"}, // compressed bit stream channel, format dependent on type of compression
+        { 0x0284, "W3D_CHUNK_COMPRESSED_ANIMATION_MOTION_CHANNEL" }, // BFMEII
         { 0x02C0, "W3D_CHUNK_MORPH_ANIMATION" }, // hierarchy morphing animation data (morphs between poses, for facial animation)
 		{ 0x02C1, "W3D_CHUNK_MORPHANIM_HEADER" }, // W3dMorphAnimHeaderStruct describes playback rate, number of frames, and type of compression
 		{ 0x02C2, "W3D_CHUNK_MORPHANIM_CHANNEL" }, // wrapper for a channel
@@ -134,6 +167,8 @@ inline std::string GetChunkName(uint32_t id, uint32_t parentId = 0) {
         { 0x0462, "W3D_CHUNK_SPOT_LIGHT_INFO" }, // extra spot light parameters
         { 0x0463, "W3D_CHUNK_NEAR_ATTENUATION" }, // optional near attenuation parameters
         { 0x0464, "W3D_CHUNK_FAR_ATTENUATION" }, // optional far attenuation parameters
+        { 0x0465, "W3D_CHUNK_SPOT_LIGHT_INFO_5_0" },  // TT: extra spot light params (5.0)
+        { 0x0466, "W3D_CHUNK_PULSE" },                // TT: pulse data (5.0)
 		{ 0x0500, "W3D_CHUNK_EMITTER" }, // description of a particle emitter
 		{ 0x0501, "W3D_CHUNK_EMITTER_HEADER" }, // general information such as name and version
 		{ 0x0502, "W3D_CHUNK_EMITTER_USER_DATA" }, // user-defined data that specific loaders can switch on
@@ -147,6 +182,7 @@ inline std::string GetChunkName(uint32_t id, uint32_t parentId = 0) {
 		{ 0x050A, "W3D_CHUNK_EMITTER_ROTATION_KEYFRAMES" }, // rotation keys for the particles
 		{ 0x050B, "W3D_CHUNK_EMITTER_FRAME_KEYFRAMES" }, // frame keys (u-v based frame animation)
 		{ 0x050C, "W3D_CHUNK_EMITTER_BLUR_TIME_KEYFRAMES" }, // length of tail for line groups
+        { 0x050D, "W3D_CHUNK_EMITTER_EXTRA_INFO" },   // Generals / ENB
         { 0x0600, "W3D_CHUNK_AGGREGATE" }, // description of an aggregate object
 		{ 0x0601, "W3D_CHUNK_AGGREGATE_HEADER" }, // general information such as name and version
 		{ 0x0602, "W3D_CHUNK_AGGREGATE_INFO" }, // references to 'contained' models
@@ -159,6 +195,7 @@ inline std::string GetChunkName(uint32_t id, uint32_t parentId = 0) {
         { 0x0704, "W3D_CHUNK_HLOD_SUB_OBJECT" }, // an object in this level of detail array
         { 0x0705, "W3D_CHUNK_HLOD_AGGREGATE_ARRAY" }, // array of aggregates, contains W3D_CHUNK_SUB_OBJECT_ARRAY_HEADER and W3D_CHUNK_SUB_OBJECT_ARRAY
         { 0x0706, "W3D_CHUNK_HLOD_PROXY_ARRAY" }, // array of proxies, used for application-defined purposes, provides a name and a bone.
+        { 0x0707, "W3D_CHUNK_HLOD_LIGHT_ARRAY" },     // TT: array of lights (5.0)
         { 0x0740, "W3D_CHUNK_BOX" }, // defines an collision box render object (W3dBoxStruct)
         { 0x0741, "W3D_CHUNK_SPHERE"}, //???
         { 0x0742, "W3D_CHUNK_RING" }, //???
@@ -171,7 +208,30 @@ inline std::string GetChunkName(uint32_t id, uint32_t parentId = 0) {
         { 0x0902, "W3D_CHUNK_DAZZLE_TYPENAME" }, // null-terminated string, type of dazzle (from dazzle.ini)
         { 0x0A00, "W3D_CHUNK_SOUNDROBJ" }, // description of a sound render object
         { 0x0A01, "W3D_CHUNK_SOUNDROBJ_HEADER" }, // general information such as name and version
-        { 0x0A02, "W3D_CHUNK_SOUNDROBJ_DEFINITION" }, // chunk containing the definition of the sound that is to play	
+        { 0x0A02, "W3D_CHUNK_SOUNDROBJ_DEFINITION" }, // chunk containing the definition of the sound that is to play
+        { 0x0B00, "W3D_CHUNK_SHDMESH" },              // Generals: Shader mesh (multiple submeshes, scalable shaders)
+        { 0x0B01, "W3D_CHUNK_SHDMESH_NAME" },         // Generals
+        { 0x0B02, "W3D_CHUNK_SHDMESH_HEADER" },       // Generals
+        { 0x0B03, "W3D_CHUNK_SHDMESH_USER_TEXT" },    // Generals: MAX comment field
+        { 0x0B20, "W3D_CHUNK_SHDSUBMESH" },           // Generals: wrapper for submesh
+        { 0x0B21, "W3D_CHUNK_SHDSUBMESH_HEADER" },    // Generals
+        { 0x0B40, "W3D_CHUNK_SHDSUBMESH_SHADER" },    // Generals: shader wrapper
+        { 0x0B41, "W3D_CHUNK_SHDSUBMESH_SHADER_CLASSID" }, // Generals
+        { 0x0B42, "W3D_CHUNK_SHDSUBMESH_SHADER_DEF" },    // Generals
+        { 0x0B43, "W3D_CHUNK_SHDSUBMESH_VERTICES" },  // Generals: array of vertices
+        { 0x0B44, "W3D_CHUNK_SHDSUBMESH_VERTEX_NORMALS" },// Generals: normals
+        { 0x0B45, "W3D_CHUNK_SHDSUBMESH_TRIANGLES" }, // Generals: 16-bit tri indices
+        { 0x0B46, "W3D_CHUNK_SHDSUBMESH_VERTEX_SHADE_INDICES" }, // Generals: per-vertex shade indices
+        { 0x0B47, "W3D_CHUNK_SHDSUBMESH_UV0" },       // Generals: UV0 coords
+        { 0x0B48, "W3D_CHUNK_SHDSUBMESH_UV1" },       // Generals: UV1 coords
+        { 0x0B49, "W3D_CHUNK_SHDSUBMESH_TANGENT_BASIS_S" }, // Generals: tangent basis S
+        { 0x0B4A, "W3D_CHUNK_SHDSUBMESH_TANGENT_BASIS_T" }, // Generals: tangent basis T
+        { 0x0B4B, "W3D_CHUNK_SHDSUBMESH_TANGENT_BASIS_SXT" },// Generals: tangent basis SxT
+        { 0x0B4C, "W3D_CHUNK_SHDSUBMESH_COLOR" },     // Generals: per-vertex color
+        { 0x0B4D, "W3D_CHUNK_SHDSUBMESH_VERTEX_INFLUENCES" }, // Generals: skinning support
+        { 0x0C00, "W3D_CHUNK_SECONDARY_VERTICES" },   // BFMEII: aka VERTICES_COPY
+        { 0x0C01, "W3D_CHUNK_SECONDARY_VERTEX_NORMALS" }, // BFMEII: aka VERTEX_NORMALS_COPY
+        { 0x0C02, "W3D_CHUNK_LIGHTMAP_UV" },          // BFMEII
     };
 
     auto it = chunkNames.find(id);
