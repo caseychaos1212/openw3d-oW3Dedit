@@ -4,46 +4,52 @@
 
 
 inline std::string GetChunkName(uint32_t id, uint32_t parentId = 0) {
+    if (parentId == 0x0741 && id == 0x0001) {
+        return "CHUNKID_SPHERE_DEF ";
+    }
+    if (parentId == 0x0742 && id == 0x0001) {
+        return "CHUNKID_RING_DEF ";
+    }
     if (parentId == 0x0741 && id == 0x0002) {
-        return "W3D_CHUNK_SPHERE_CHUNKID_COLOR_CHANNEL";
+        return "CHUNKID_COLOR_CHANNEL";
     }
     if (parentId == 0x0742 && id == 0x0002) {
-        return "W3D_CHUNK_RING_CHUNKID_COLOR_CHANNEL";
+        return "CHUNKID_COLOR_CHANNEL";
     }
     if (parentId == 0x0741 && id == 0x0003) {
-        return "W3D_CHUNK_SPHERE_CHUNKID_ALPHA_CHANNEL";
+        return "CHUNKID_ALPHA_CHANNEL";
     }  
     if (parentId == 0x0742 && id == 0x0003) {
-        return "W3D_CHUNK_RING_CHUNKID_ALPHA_CHANNEL";
+        return "CHUNKID_ALPHA_CHANNEL";
     }
     if (parentId == 0x0741 && id == 0x0004) {
-        return "W3D_CHUNK_SPHERE_CHUNKID_SCALE_CHANNEL";
+        return "CHUNKID_SCALE_CHANNEL";
     }
     if (parentId == 0x0742 && id == 0x0004) {
-        return "W3D_CHUNK_RING_CHUNKID_INNERSCALE_CHANNEL";
+        return "CHUNKID_INNER_SCALE_CHANNEL";
     }
     if (parentId == 0x0741 && id == 0x0005) {
-        return "W3D_CHUNK_SPHERE_CHUNKID_VECTOR_CHANNEL";
+        return "CHUNKID_VECTOR_CHANNEL";
     }
     if (parentId == 0x0742 && id == 0x0005) {
-        return "W3D_CHUNK_RING_CHUNKID_OUTERSCALE_CHANNEL";
+        return "CHUNKID_OUTER_SCALE_CHANNEL";
     }
     if (parentId == 0x31550809 && id == 0x1) {
         return "ChunkID_FRAME";
     }
     if (parentId == 0xA02 && id == 0x100) {
-        return "W3D_CHUNK_SOUND_RENDER_DEFINITION";
+        return "CHUNKID_VARIABLES";
     }
     if (parentId == 0xA02 && id == 0x200) {
-        return "W3D_CHUNK_SOUND_RENDER_DEFINITION_EXTENTION";
+        return "CHUNKID_BASE_CLASS";
     }
     if (parentId == 0x200 && id == 0x100) {
-        return "W3D_CHUNK_SOUND_RENDER_DEFINITION";
+        return "CHUNKID_VARIABLES";
     }
  
     static const std::unordered_map<uint32_t, std::string> chunkNames = {
         { 0x0000, "W3D_CHUNK_MESH" }, // Mesh definition
-        { 0x0001, "W3D_CHUNK_HEADER" }, // Header for mesh (Legacy)
+        { 0x0001, "CHUNKID_SPHERE_DEF" }, // Header for mesh (Legacy)
         { 0x0002, "W3D_CHUNK_VERTICES" }, // array of vertices (array of W3dVectorStruct's)
         { 0x0003, "W3D_CHUNK_VERTEX_NORMALS" }, // array of normals (array of W3dVectorStruct's)
 		{ 0x0004, "W3D_CHUNK_SPHERE_CHUNKID_SCALE_CHANNEL" }, // array of vertex colors (array of W3dRGBAStruct's)
@@ -113,7 +119,7 @@ inline std::string GetChunkName(uint32_t id, uint32_t parentId = 0) {
 		{ 0x0304, "W3D_CHUNK_SKIN_NODE" }, // skins connected to the hierarchy
 		{ 0x0305, "OBSOLETE_W3D_CHUNK_HMODEL_AUX_DATA" }, // extension of the hierarchy model header
         { 0x0306, "OBSOLETE_W3D_CHUNK_SHADOW_NODE" },  // shadow object connected to the hierarchy
-        { 0x03150809, "W3D_CHUNK_CHUNKID_DATA" },
+        { 0x03150809, "CHUNKID_VARIABLES" },
         { 0x0400, "W3D_CHUNK_LODMODEL" }, // blueprint for an LOD model.  This is simply a collection of 'n' render objects, ordered in terms of their expected rendering costs. (highest is first)
 		{ 0x0401, "W3D_CHUNK_LODMODEL_HEADER" }, // Header
 		{ 0x0402, "W3D_CHUNK_LOD" },          //LOD

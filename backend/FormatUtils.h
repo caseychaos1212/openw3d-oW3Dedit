@@ -8,6 +8,11 @@ namespace FormatUtils {
 		return std::to_string(major) + "." + std::to_string(minor);
 	}
 
+	inline std::string FormatPrimVersion(uint32_t major, uint32_t minor) {
+
+		return std::to_string(major) + "." + std::to_string(minor);
+	}
+
 	inline std::string FormatName(const char* name, size_t len) {
 
 		return std::string(name, strnlen(name, len));

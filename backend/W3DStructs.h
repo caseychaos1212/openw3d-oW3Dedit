@@ -1287,6 +1287,10 @@ struct ChunkFieldBuilder {
 	void Version(std::string name, uint32_t raw) {
 		Push(std::move(name), "string", FormatUtils::FormatVersion(raw));
 	}
+	
+	void PrimVersion(std::string name, uint32_t major, uint32_t minor) {
+		Push(std::move(name), "string", FormatUtils::FormatPrimVersion(major, minor));
+	}
 
 	void Name(const char* fieldName, const char* rawName, size_t maxLen = W3D_NAME_LEN) {
 		F.emplace_back(

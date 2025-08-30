@@ -26,94 +26,112 @@ inline std::vector<ChunkField> InterpretSoundRObjHeader(
 }
 
 
-// Helpers for the definition/microchunks
-inline bool ReadFloat(const std::shared_ptr<ChunkItem>& c, float& out) {
-    if (!c || c->data.size() < sizeof(float)) return false;
-    std::memcpy(&out, c->data.data(), sizeof(float));
-    return true;
-}
-inline bool ReadU32(const std::shared_ptr<ChunkItem>& c, uint32_t& out) {
-    if (!c || c->data.size() < sizeof(uint32_t)) return false;
-    std::memcpy(&out, c->data.data(), sizeof(uint32_t));
-    return true;
-}
-inline bool ReadU8(const std::shared_ptr<ChunkItem>& c, uint8_t& out) {
-    if (!c || c->data.size() < sizeof(uint8_t)) return false;
-    out = *reinterpret_cast<const uint8_t*>(c->data.data());
-    return true;
-}
-inline void PushNullTerm(ChunkFieldBuilder& B, const std::string& field, const std::shared_ptr<ChunkItem>& c) {
-    B.NullTerm(field, reinterpret_cast<const char*>(c->data.data()), c->data.size());
-}
-//TODO: Broken
-inline std::vector<ChunkField> InterpretSoundRObjDefinition(
-    const std::shared_ptr<ChunkItem>& chunk
+// ---- Sound RObj: CHUNKID_VARIABLES micro stream parser -----------------
+static inline void ParseSROVariablesMicro(
+    const std::shared_ptr<ChunkItem>& chunk,
+    ChunkFieldBuilder& B,
+    bool isBaseClassBlock /*true when parent->id == 0x0200*/
 ) {
-    std::vector<ChunkField> fields;
-    if (!chunk) return fields;
-    ChunkFieldBuilder B(fields);
+    if (!chunk) return;
+    const uint8_t* cur = chunk->data.data();
+    const uint8_t* end = cur + chunk->data.size();
 
-    // CHUNKID_BASE_CLASS wrapper path (0x0200) -> inner CHUNKID_VARIABLES (contains m_ID, m_Name)
-    constexpr uint32_t CHUNKID_BASE_CLASS = 0x0200;
-    if (chunk->parent && chunk->parent->id == CHUNKID_BASE_CLASS) {
-        for (const auto& child : chunk->children) {
-            switch (child->id) {
-            case 0x01: { // m_ID (uint32)
-                uint32_t v{};
-                if (ReadU32(child, v)) B.UInt32("m_ID", v);
+    auto need = [&](size_t n) { return static_cast<size_t>(end - cur) >= n; };
+
+    while (need(2)) {               // micro header: [id:u8][size:u8]
+        uint8_t id = cur[0];
+        uint8_t size = cur[1];
+        cur += 2;
+        if (!need(size)) break;     // truncated; bail quietly
+
+        const uint8_t* payload = cur;
+
+        // BASE_CLASS block holds only m_ID(0x01) and m_Name(0x03)
+        if (isBaseClassBlock) {
+            switch (id) {
+            case 0x01:                         // m_ID : uint32
+                if (size == 4) {
+                    uint32_t v;
+                    std::memcpy(&v, payload, 4);
+                    B.UInt32("m_ID", v);
+                }
+                break;
+            case 0x03: {                        // m_Name : null-terminated bytes
+                const char* s = reinterpret_cast<const char*>(payload);
+                const size_t n = std::min<size_t>(size, strnlen(s, size));
+                B.Push("m_Name", "string", std::string(s, n));
                 break;
             }
-            case 0x03: { // m_Name (null-terminated)
-                PushNullTerm(B, "m_Name", child);
-                break;
+            default: break;
             }
-            default: break; // ignore other base-class fields
-            }
+            cur += size;
+            continue;
         }
-        return fields;
-    }
 
-    // Main CHUNKID_VARIABLES block (0x0100) - individual micro-IDs
-    for (const auto& child : chunk->children) {
-        switch (child->id) {
-        case 0x03: { float v{}; if (ReadFloat(child, v)) B.Float("m_Priority", v); break; }
-        case 0x04: { float v{}; if (ReadFloat(child, v)) B.Float("m_Volume", v); break; }
-        case 0x05: { float v{}; if (ReadFloat(child, v)) B.Float("m_Pan", v); break; }
-        case 0x06: { uint32_t v{}; if (ReadU32(child, v)) B.UInt32("m_LoopCount", v); break; }
-        case 0x07: { float v{}; if (ReadFloat(child, v)) B.Float("m_DropoffRadius", v); break; }
-        case 0x08: { float v{}; if (ReadFloat(child, v)) B.Float("m_MaxVolRadius", v); break; }
-        case 0x09: { uint32_t v{}; if (ReadU32(child, v)) B.UInt32("m_Type", v); break; }
-        case 0x0A: { uint8_t v{}; if (ReadU8(child, v))  B.UInt8("m_is3DSound", v); break; }
-        case 0x0B: { PushNullTerm(B, "m_Filename", child); break; }
-        case 0x0C: { PushNullTerm(B, "m_DisplayText", child); break; }
-        case 0x12: { float v{}; if (ReadFloat(child, v)) B.Float("m_StartOffset", v); break; }
-        case 0x13: { float v{}; if (ReadFloat(child, v)) B.Float("m_PitchFactor", v); break; }
-        case 0x14: { float v{}; if (ReadFloat(child, v)) B.Float("m_PitchFactorRandomizer", v); break; }
-        case 0x15: { float v{}; if (ReadFloat(child, v)) B.Float("m_VolumeRandomizer", v); break; }
-        case 0x16: { uint32_t v{}; if (ReadU32(child, v)) B.UInt32("m_VirtualChannel", v); break; }
-        case 0x0D: { uint32_t v{}; if (ReadU32(child, v)) B.UInt32("m_LogicalType", v); break; }
-        case 0x0E: { float v{}; if (ReadFloat(child, v)) B.Float("m_LogicalNotifDelay", v); break; }
-        case 0x0F: { uint8_t v{}; if (ReadU8(child, v))  B.UInt8("m_CreateLogicalSound", v); break; }
-        case 0x10: { float v{}; if (ReadFloat(child, v)) B.Float("m_LogicalDropoffRadius", v); break; }
-        case 0x11: { // m_SphereColor as 3 floats
-            if (child->data.size() >= sizeof(float) * 3) {
-                const float* f = reinterpret_cast<const float*>(child->data.data());
-                std::ostringstream oss;
-                oss << std::fixed << std::setprecision(6) << f[0] << ' ' << f[1] << ' ' << f[2];
-                B.Push("m_SphereColor", "vector3", oss.str());
-            }
+        // MAIN variables block
+        switch (id) {
+        case 0x03: if (size == 4) { float f; std::memcpy(&f, payload, 4); B.Float("m_Priority", f); } break;
+        case 0x04: if (size == 4) { float f; std::memcpy(&f, payload, 4); B.Float("m_Volume", f); } break;
+        case 0x05: if (size == 4) { float f; std::memcpy(&f, payload, 4); B.Float("m_Pan", f); } break;
+        case 0x06: if (size == 4) { uint32_t v; std::memcpy(&v, payload, 4); B.UInt32("m_LoopCount", v); } break;
+        case 0x07: if (size == 4) { float f; std::memcpy(&f, payload, 4); B.Float("m_DropoffRadius", f); } break;
+        case 0x08: if (size == 4) { float f; std::memcpy(&f, payload, 4); B.Float("m_MaxVolRadius", f); } break;
+        case 0x09: if (size == 4) { uint32_t v; std::memcpy(&v, payload, 4); B.UInt32("m_Type", v); } break;
+        case 0x0A: if (size >= 1) { B.UInt8("m_is3DSound", payload[0]); } break;
+
+        case 0x0B: { // m_Filename (bytes include NUL)
+            const char* s = reinterpret_cast<const char*>(payload);
+            const size_t n = std::min<size_t>(size, strnlen(s, size));
+            B.Push("m_Filename", "string", std::string(s, n));
             break;
         }
+        case 0x0C: { // m_DisplayText
+            const char* s = reinterpret_cast<const char*>(payload);
+            const size_t n = std::min<size_t>(size, strnlen(s, size));
+            B.Push("m_DisplayText", "string", std::string(s, n));
+            break;
+        }
+
+        case 0x12: if (size == 4) { float f; std::memcpy(&f, payload, 4); B.Float("m_StartOffset", f); } break;
+        case 0x13: if (size == 4) { float f; std::memcpy(&f, payload, 4); B.Float("m_PitchFactor", f); } break;
+        case 0x14: if (size == 4) { float f; std::memcpy(&f, payload, 4); B.Float("m_PitchFactorRandomizer", f); } break;
+        case 0x15: if (size == 4) { float f; std::memcpy(&f, payload, 4); B.Float("m_VolumeRandomizer", f); } break;
+        case 0x16: if (size == 4) { uint32_t v; std::memcpy(&v, payload, 4); B.UInt32("m_VirtualChannel", v); } break;
+
+        case 0x0D: if (size == 4) { uint32_t v; std::memcpy(&v, payload, 4); B.UInt32("m_LogicalType", v); } break;
+        case 0x0E: if (size == 4) { float f; std::memcpy(&f, payload, 4); B.Float("m_LogicalNotifDelay", f); } break;
+        case 0x0F: if (size >= 1) { B.UInt8("m_CreateLogicalSound", payload[0]); } break;
+        case 0x10: if (size == 4) { float f; std::memcpy(&f, payload, 4); B.Float("m_LogicalDropoffRadius", f); } break;
+
+        case 0x11: // m_SphereColor (3 floats)
+            if (size == 12) {
+                const float* f = reinterpret_cast<const float*>(payload);
+                B.Push("m_SphereColor", "vector3",
+                    FormatUtils::FormatVec3(f[0], f[1], f[2]));
+            }
+            break;
 
         default: {
-            // Unknown/unsupported var: record ID and byte count for debugging
-            std::ostringstream tag; tag << "UnknownVar(0x" << std::hex << std::uppercase << child->id << ")";
-            std::ostringstream ty;  ty << "bytes[" << std::dec << child->data.size() << "]";
-            B.Push(tag.str(), ty.str(), std::to_string(child->data.size()) + " bytes");
+            std::ostringstream tag; tag << "UnknownVar(0x" << std::hex << std::uppercase << int(id) << ")";
+            std::ostringstream ty;  ty << "bytes[" << std::dec << int(size) << "]";
+            B.Push(tag.str(), ty.str(), std::to_string(int(size)) + " bytes");
             break;
         }
         }
-    }
 
+        cur += size;
+    }
+}
+
+inline std::vector<ChunkField> InterpretSoundRObjDefinition(const std::shared_ptr<ChunkItem>& chunk)
+{
+    std::vector<ChunkField> fields;
+    if (!chunk) return fields;
+
+    ChunkFieldBuilder B(fields);
+    const bool isBaseClassBlock =
+        (chunk->parent && chunk->parent->id == 0x0200); // CHUNKID_BASE_CLASS
+
+    ParseSROVariablesMicro(chunk, B, isBaseClassBlock);
     return fields;
 }

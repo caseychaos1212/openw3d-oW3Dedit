@@ -163,13 +163,7 @@ bool ChunkData::parseChunk(std::istream& stream, std::shared_ptr<ChunkItem>& par
             {
                 microMode = true;
             }
-            // sphere/ring channels are also micro mode
-            else if ((parent->id == SPHERE_DEF || parent->id == RING_DEF)) {
-                // peek next byte (but don't consume it here)
-                // we know valid micro IDs are 2..5 for sphere/ring
-                int peek = stream.peek();
-                if (peek >= 2 && peek <= 5) microMode = true;
-            }
+          
         }
 
         if (microMode) {

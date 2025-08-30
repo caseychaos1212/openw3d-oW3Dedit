@@ -154,30 +154,31 @@ constexpr uint32_t SOUND_RENDER_DEF_EXT = 0x0200;
 constexpr uint32_t SOUNDROBJ_DEFINITION = 0x0A02;
 
 void MainWindow::handleTreeSelection() {
-    auto selectedItems = treeWidget->selectedItems();
-    if (selectedItems.empty()) return;
+    const auto selectedItems = treeWidget->selectedItems();
+    if (selectedItems.isEmpty()) return;
 
     QTreeWidgetItem* selected = selectedItems.first();
-    QVariant ptrVar = selected->data(0, Qt::UserRole);
+    const QVariant ptrVar = selected->data(0, Qt::UserRole);
     if (!ptrVar.isValid()) return;
 
     void* targetPtr = ptrVar.value<void*>();
+    if (!targetPtr) return;
+
+    // Resolve ChunkItem*
     std::shared_ptr<ChunkItem> target;
-
-    const auto& topChunks = chunkData->getChunks();
-    std::function<std::shared_ptr<ChunkItem>(const std::shared_ptr<ChunkItem>&)> findByPtr;
-    findByPtr = [&](const std::shared_ptr<ChunkItem>& chunk) -> std::shared_ptr<ChunkItem> {
-        if (chunk.get() == targetPtr) return chunk;
-        for (const auto& child : chunk->children) {
-            auto found = findByPtr(child);
-            if (found) return found;
+    {
+        std::function<std::shared_ptr<ChunkItem>(const std::shared_ptr<ChunkItem>&)> dfs =
+            [&](const std::shared_ptr<ChunkItem>& node) -> std::shared_ptr<ChunkItem> {
+            if (node.get() == targetPtr) return node;
+            for (const auto& c : node->children) {
+                if (auto r = dfs(c)) return r;
+            }
+            return nullptr;
+            };
+        for (const auto& root : chunkData->getChunks()) {
+            target = dfs(root);
+            if (target) break;
         }
-        return nullptr;
-        };
-
-    for (const auto& chunk : topChunks) {
-        target = findByPtr(chunk);
-        if (target) break;
     }
 
     tableWidget->clearContents();
@@ -185,71 +186,83 @@ void MainWindow::handleTreeSelection() {
     if (!target) return;
 
     std::vector<ChunkField> fields;
-    std::cout << "Selected chunk ID: 0x" << std::hex << target->id << std::dec << "\n";
-    std::cout << "Chunk length: " << target->length << " bytes\n";
 
-    if (target->id == SOUND_RENDER_DEF
-        
-        && target->parent
-        && (target->parent->id == SOUNDROBJ_DEFINITION
-            || target->parent->id == SOUND_RENDER_DEF_EXT))
-    {
-        // debug log:
-        std::cout << "DEBUG: firing InterpretSoundRObjDefinition  "
-            << "chunkId=0x" << std::hex << target->id
-            << " parentId=0x" << target->parent->id
-            << std::dec << "\n";
-
+    // --- Special case: Sound Render Object definition microchunks ---
+    if (target->id == SOUND_RENDER_DEF &&
+        target->parent &&
+        (target->parent->id == SOUNDROBJ_DEFINITION || target->parent->id == SOUND_RENDER_DEF_EXT)) {
         fields = InterpretSoundRObjDefinition(target);
-        goto show_table;
     }
 
-    if (target->id == MICRO_ID
-        && target->parent
-        && target->parent->id == CHANNEL_WRAPPER
-        && target->parent->parent
-        && target->parent->parent->parent)
-    {
-        auto wrapperId = target->parent->parent->id;           // usually 0x0002 0x0005
-        auto headerId = target->parent->parent->parent->id;    // sphere vs ring
-        
-        std::cout << "Dispatch micro: channel=0x"
-            << std::hex << wrapperId
-            << " header=0x" << headerId << std::dec << "\n";
+    // --- Sphere / Ring: headers and channels ---
+    if (fields.empty()) {
+        const uint32_t pid = target->parent ? target->parent->id : 0;
 
-     //   if (headerId == SPHERE_ID) {
-     //       fields = InterpretSphereMicrochunk(target, wrapperId);
-     //   }
-     //   else if (headerId == RING_ID) {
-      //      fields = InterpretRingMicrochunk(target, wrapperId);
-      //  }
-    }
-    // Skip remaining chunk-wrapper child summary if we've interpreted real data
-    if (!fields.empty()) goto show_table;
+        // Headers (child id 0x0001 under sphere/ring)
+        if (target->id == 0x0001 && pid == 0x0741) {
+            fields = InterpretSphereHeader(target);
+        }
+        else if (target->id == 0x0001 && pid == 0x0742) {
+            fields = InterpretRingHeader(target);
+        }
+        // Channel wrappers under Sphere (0x0741): wrappers show no fields
+        else if (pid == 0x0741 &&
+            (target->id == 0x0002 || target->id == 0x0003 ||
+                target->id == 0x0004 || target->id == 0x0005)) {
+            // Intentionally empty: just let the 0x03150809 child display data
+        }
+        // Channel wrappers under Ring (0x0742): wrappers show no fields
+        else if (pid == 0x0742 &&
+            (target->id == 0x0002 || target->id == 0x0003 ||
+                target->id == 0x0004 || target->id == 0x0005)) {
+            // Intentionally empty
+        }
+        // DATA node (0x03150809) – interpret based on parent wrapper and root (sphere/ring)
+        else if (target->id == 0x03150809) {
+            const uint32_t wrapper = target->parent ? target->parent->id : 0; // 0x0002..0x0005
+            const uint32_t root = (target->parent && target->parent->parent)
+                ? target->parent->parent->id
+                : 0;                                       // 0x0741/0x0742
 
-    // Populate children if present
-    if (!target->children.empty()) {
-        for (const auto& child : target->children) {
-            std::string name = LabelForChunk(child->id, child.get());
-            fields.push_back({ name, "chunk", "" });
+            if (root == 0x0741) { // Sphere
+                switch (wrapper) {
+                case 0x0002: fields = InterpretSphereColorChannel(target);  break;
+                case 0x0003: fields = InterpretSphereAlphaChannel(target);  break;
+                case 0x0004: fields = InterpretSphereScaleChannel(target);  break;
+                case 0x0005: fields = InterpretSphereVectorChannel(target); break;
+                default: break;
+                }
+            }
+            else if (root == 0x0742) { // Ring
+                switch (wrapper) {
+                case 0x0002: fields = InterpretRingColorChannel(target);        break;
+                case 0x0003: fields = InterpretRingAlphaChannel(target);        break;
+                case 0x0004: fields = InterpretRingInnerScaleChannel(target);   break;
+                case 0x0005: fields = InterpretRingOuterScaleChannel(target);   break;
+                default: break;
+                }
+            }
         }
     }
-    else {
+
+    // --- Generic dispatch (only if still empty) ---
+    if (fields.empty()) {
         uint16_t flavor = 0xFFFF;
         if (target->id == 0x0282) {
-            for (const auto& topChunk : chunkData->getChunks()) {
-                std::function<bool(const std::shared_ptr<ChunkItem>&, uint16_t&)> findFlavor;
-                findFlavor = [&](const std::shared_ptr<ChunkItem>& node, uint16_t& outFlavor) -> bool {
-                    if (node->id == 0x0281 && node->data.size() >= 44) {
-                        outFlavor = *reinterpret_cast<const uint16_t*>(&node->data[42]);
+            auto tryFindFlavor = [&](const std::shared_ptr<ChunkItem>& root) -> bool {
+                std::function<bool(const std::shared_ptr<ChunkItem>&)> dfs =
+                    [&](const std::shared_ptr<ChunkItem>& n) -> bool {
+                    if (n->id == 0x0281 && n->data.size() >= 44) {
+                        flavor = *reinterpret_cast<const uint16_t*>(&n->data[42]);
                         return true;
                     }
-                    for (const auto& child : node->children) {
-                        if (findFlavor(child, outFlavor)) return true;
-                    }
+                    for (const auto& c : n->children) if (dfs(c)) return true;
                     return false;
                     };
-                if (findFlavor(topChunk, flavor)) break;
+                return dfs(root);
+                };
+            for (const auto& r : chunkData->getChunks()) {
+                if (tryFindFlavor(r)) break;
             }
         }
 
@@ -258,45 +271,35 @@ void MainWindow::handleTreeSelection() {
         case 0x0102: fields = InterpretPivots(target); break;
         case 0x0103: fields = InterpretPivotFixups(target); break;
         case 0x001F: fields = InterpretMeshHeader3(target); break;
-        case 0x0002: fields = InterpretVertices(target); break;
-        case 0x0003: fields = InterpretVertexNormals(target); break;
-            // case 0x0002: {
-       //     uint32_t pid = target->parent ? target->parent->id : 0;
-       //     if (pid == 0x0741) {
-       //         fields = InterpretSphereChannel(target, target->id);
-       //     }
-       //     if (pid == 0x0742) {
-       //         fields = InterpretRingChannel(target, target->id);
-       //     }
-       //     else {
-       //         fields = InterpretVertices(target);
-       //     }
-       //     break;
-       // }
-       // case 0x0003: {
-      //      uint32_t pid = target->parent ? target->parent->id : 0;
-       //     if (pid == 0x0741) {
-       //         fields = InterpretSphereChannel(target, target->id);
-        //    }
-        //    if (pid == 0x0742) {
-        //        fields = InterpretRingChannel(target, target->id);
-         //   }
-        //    else {
-        //        fields = InterpretVertexNormals(target);
-        //    }
-        //    break;
-       // }
+
+            // Only hit when not sphere/ring (pid != 0x0741/0x0742)
+        case 0x0002: { // VERTICES normally, but also SPHERE/RING COLOR wrapper
+            uint32_t pid = target->parent ? target->parent->id : 0;
+            if (pid == 0x0741 || pid == 0x0742) break; // wrapper: let the 0x03150809 child show data
+            fields = InterpretVertices(target);
+            break;
+        }
+        case 0x0003: { // NORMALS normally, but also SPHERE/RING ALPHA wrapper
+            uint32_t pid = target->parent ? target->parent->id : 0;
+            if (pid == 0x0741 || pid == 0x0742) break; // wrapper
+            fields = InterpretVertexNormals(target);
+            break;
+        }
+
         case 0x003B: fields = InterpretDCG(target); break;
         case 0x00000020: fields = InterpretTriangles(target); break;
         case 0x00000022: fields = InterpretVertexShadeIndices(target); break;
         case 0x00000028: fields = InterpretMaterialInfo(target); break;
+
         case 0x0282: fields = InterpretCompressedAnimationChannel(target, (flavor != 0xFFFF ? flavor : 0)); break;
         case 0x0000002C: fields = InterpretVertexMaterialName(target); break;
         case 0x0000002D: fields = InterpretVertexMaterialInfo(target); break;
+
         case 0x0301: fields = InterpretHModelHeader(target); break;
-		case 0x0302: fields = InterpretNode(target); break;
-		case 0x0303: fields = InterpretCollisionNode(target); break;
-		case 0x0304: fields = InterpretSkinNode(target); break;
+        case 0x0302: fields = InterpretNode(target); break;
+        case 0x0303: fields = InterpretCollisionNode(target); break;
+        case 0x0304: fields = InterpretSkinNode(target); break;
+
         case 0x0283: fields = InterpretCompressedBitChannel(target); break;
         case 0x0029: fields = InterpretShaders(target); break;
         case 0x0032: fields = InterpretTextureName(target); break;
@@ -304,14 +307,16 @@ void MainWindow::handleTreeSelection() {
         case 0x0039: fields = InterpretVertexMaterialIDs(target); break;
         case 0x003A: fields = InterpretShaderIDs(target); break;
         case 0x0049: fields = InterpretTextureIDs(target); break;
-        case 0x004a: fields = InterpretStageTexCoords(target); break;
+        case 0x004A: fields = InterpretStageTexCoords(target); break;
         case 0x0058: fields = InterpretDeform(target); break;
         case 0x0059: fields = InterpretDeformSet(target); break;
         case 0x005A: fields = InterpretDeformKeyframes(target); break;
         case 0x005B: fields = InterpretDeformData(target); break;
+
         case 0x0091: fields = InterpretAABTreeHeader(target); break;
         case 0x0092: fields = InterpretAABTreePolyIndices(target); break;
         case 0x0093: fields = InterpretAABTreeNodes(target); break;
+
         case 0x0501: fields = InterpretEmitterHeader(target); break;
         case 0x0502: fields = InterpretEmitterUserData(target); break;
         case 0x0503: fields = InterpretEmitterInfo(target); break;
@@ -319,97 +324,88 @@ void MainWindow::handleTreeSelection() {
         case 0x0505: fields = InterpretEmitterProps(target); break;
         case 0x050A: fields = InterpretEmitterRotationKeys(target); break;
         case 0x050B: fields = InterpretEmitterFrameKeys(target); break;
+        case 0x050C: fields = InterpretEmitterBlurTimeKeyframes(target); break;
+        case 0x0509: fields = InterpretEmitterLineProperties(target); break;
+
         case 0x0601: fields = InterpretAggregateHeader(target); break;
         case 0x0602: fields = InterpretAggregateInfo(target); break;
         case 0x0603: fields = InterpretTextureReplacerInfo(target); break;
         case 0x0604: fields = InterpretAggregateClassInfo(target); break;
+
         case 0x0701: fields = InterpretHLODHeader(target); break;
         case 0x0703: fields = InterpretHLODSubObjectArrayHeader(target); break;
         case 0x0704: fields = InterpretHLODSubObject_LodArray(target); break;
-        case 0x0001: {
-            uint32_t pid = target->parent ? target->parent->id : 0;
-            if (pid == 0x0741) {
-                fields = InterpretSphereHeader(target);
-                std::cout << ">>> HEADER node clicked, parent="
-                    << std::hex << pid << std::dec << "\n";
-            }
-            else if (pid == 0x0742) {
-                fields = InterpretRingHeader(target);
-                std::cout << ">>> HEADER node clicked, parent="
-                    << std::hex << pid << std::dec << "\n";
-            }
-            break;
-        }
+
         case 0x0201: fields = InterpretAnimationHeader(target); break;
         case 0x0202: fields = InterpretAnimationChannel(target); break;
         case 0x0203: fields = InterpretBitChannel(target); break;
+
         case 0x0305: fields = InterpretHModelAuxData(target); break;
         case 0x0281: fields = InterpretCompressedAnimationHeader(target); break;
         case 0x000E: fields = InterpretVertexInfluences(target); break;
+
         case 0x0740: fields = InterpretBox(target); break;
         case 0x000C: fields = InterpretMeshUserText(target); break;
-        case 0x00000004: fields = InterpretRingChannel(target); break;
-        case 0x00000005: fields = InterpretSphereChannel(target); break;
-        {
-            uint32_t pid = target->parent ? target->parent->id : 0;
-            if (pid == 0x0741) {
-                fields = InterpretSphereChannel(target);
-            }
-            else if (pid == 0x0742) {
-                fields = InterpretRingChannel(target);
 
-            }
-            break;
-        }
-		case 0x461: fields = InterpretLightInfo(target); break;
-		case 0x462: fields = InterpretSpotLightInfo(target); break;
-		case 0x463: fields = InterpretNearAtten(target); break;
-        case 0x464: fields = InterpretFarAtten(target); break;
-        case 0x802: fields = InterpretLightTransform(target); break;
-		case 0x901: fields = InterpretDazzleName(target); break;
-		case 0x902: fields = InterpretDazzleTypeName(target); break;
-		case 0xa01: fields = InterpretSoundRObjHeader(target); break;
-        case 0x100: fields = InterpretSoundRObjDefinition(target); break;
-        case 0x02E: fields = InterpretARG0(target); break;
-        case 0x02F: fields = InterpretARG1(target); break;
-		case 0x03C: fields = InterpretDIG(target); break;
-        case 0x03E: fields = InterpretSCG(target); break;
-        case 0x04B: fields = InterpretPerFaceTexcoordIds(target); break;
-//		case 0x200: fields = InterpretSoundRObjExt(target); break;
-        case 0x2C1: fields = InterpretMorphAnimHeader(target); break;
-		case 0x2C3: fields = InterpretMorphAnimPoseName(target); break;
-		case 0x2C4: fields = InterpretMorphAnimKeyData(target); break;
-		case 0x2C5: fields = InterpretMorphAnimPivotChannelData(target); break;
-		case 0x306: fields = InterpretHModelNode(target); break;
-		case 0x401: fields = InterpretLODModelHeader(target); break;
-		case 0x402: fields = InterpretLOD(target); break;
-		case 0x421: fields = InterpretCollectionHeader(target); break;
-		case 0x422: fields = InterpretCollectionObjName(target); break;
-		case 0x423: fields = InterpretPlaceHolder(target); break;
-		case 0x424: fields = InterpretTransformNode(target); break;
-		case 0x440: fields = InterpretPoints(target); break;
-		case 0x506: fields = InterpretEmitterColorKeyframe(target); break;
-		case 0x507: fields = InterpretEmitterOpacityKeyframe(target); break;
-		case 0x508: fields = InterpretEmitterSizeKeyframe(target); break;
-		case 0x509: fields = InterpretEmitterLineProperties(target); break;
-		case 0x50C: fields = InterpretEmitterBlurTimeKeyframes(target); break;
-		case 0x750: fields = InterpretNullObject(target); break;
-		case 0x080: fields = InterpretPS2Shaders(target); break;
-        {
+        case 0x0461: fields = InterpretLightInfo(target); break;
+        case 0x0462: fields = InterpretSpotLightInfo(target); break;
+        case 0x0463: fields = InterpretNearAtten(target); break;
+        case 0x0464: fields = InterpretFarAtten(target); break;
+        case 0x0802: fields = InterpretLightTransform(target); break;
 
-        };
+        case 0x0901: fields = InterpretDazzleName(target); break;
+        case 0x0902: fields = InterpretDazzleTypeName(target); break;
+
+        case 0x0A01: fields = InterpretSoundRObjHeader(target); break;
+        case 0x0100: fields = InterpretSoundRObjDefinition(target); break;
+
+        case 0x002E: fields = InterpretARG0(target); break;
+        case 0x002F: fields = InterpretARG1(target); break;
+        case 0x003C: fields = InterpretDIG(target); break;
+        case 0x003E: fields = InterpretSCG(target); break;
+        case 0x004B: fields = InterpretPerFaceTexcoordIds(target); break;
+
+        case 0x02C1: fields = InterpretMorphAnimHeader(target); break;
+        case 0x02C3: fields = InterpretMorphAnimPoseName(target); break;
+        case 0x02C4: fields = InterpretMorphAnimKeyData(target); break;
+        case 0x02C5: fields = InterpretMorphAnimPivotChannelData(target); break;
+
+        case 0x0306: fields = InterpretHModelNode(target); break;
+
+        case 0x0401: fields = InterpretLODModelHeader(target); break;
+        case 0x0402: fields = InterpretLOD(target); break;
+
+        case 0x0421: fields = InterpretCollectionHeader(target); break;
+        case 0x0422: fields = InterpretCollectionObjName(target); break;
+        case 0x0423: fields = InterpretPlaceHolder(target); break;
+        case 0x0424: fields = InterpretTransformNode(target); break;
+
+        case 0x0440: fields = InterpretPoints(target); break;
+
+        case 0x0750: fields = InterpretNullObject(target); break;
+
+        case 0x0080: fields = InterpretPS2Shaders(target); break;
+
         default: break;
         }
     }
 
-show_table:
+    // If still empty and there are children, show child nodes
+    if (fields.empty() && !target->children.empty()) {
+        for (const auto& child : target->children) {
+            fields.push_back({ LabelForChunk(child->id, child.get()), "chunk", "" });
+        }
+    }
+
+    // Render table
     tableWidget->setRowCount(static_cast<int>(fields.size()));
-    for (int i = 0; i < fields.size(); ++i) {
+    for (int i = 0; i < static_cast<int>(fields.size()); ++i) {
         tableWidget->setItem(i, 0, new QTableWidgetItem(QString::fromStdString(fields[i].field)));
         tableWidget->setItem(i, 1, new QTableWidgetItem(QString::fromStdString(fields[i].type)));
         tableWidget->setItem(i, 2, new QTableWidgetItem(QString::fromStdString(fields[i].value)));
     }
 }
+
 
 void MainWindow::LoadRecentFiles() {
     QFile file(recentFilesPath);
