@@ -16,7 +16,37 @@ static uint32_t readUint32(std::istream& stream) {
 inline bool IsForcedWrapper(uint32_t id, uint32_t parent = 0)
 {
     switch (id) {
+    case 0x0000: // W3D_CHUNK_MESH
+    case 0x0023: // W3D_CHUNK_PRELIT_UNLIT
+    case 0x0024: // W3D_CHUNK_PRELIT_VERTEX
+    case 0x0025: // W3D_CHUNK_LIGHTMAP_MULTI_PASS
+    case 0x0026: // W3D_CHUNK_LIGHTMAP_MULTI_TEXTURE
     case 0x002A: // W3D_CHUNK_VERTEX_MATERIALS
+    case 0x002B: // W3D_CHUNK_VERTEX_MATERIAL
+    case 0x0030: //W3D_CHUNK_TEXTURES
+    case 0x0031: // W3D_CHUNK_TEXTURE
+    case 0x0048: // W3D_CHUNK_TEXTURE_STAGE
+    case 0x0058: // W3D_CHUNK_DEFORM
+    case 0x0059: // W3D_CHUNK_DEFORM_SET
+    case 0x005A: // W3D_CHUNK_DEFORM_KEYFRAME
+    case 0x005B: // W3D_CHUNK_DEFORM_DATA
+    case 0x0090: // W3D_CHUNK_AABTREE
+    case 0x0100: // W3D_CHUNK_HIERARCHY
+    case 0x0200: // W3D_CHUNK_ANIMATION
+    case 0x02C0: // W3D_CHUNK_MORPH_ANIMATION
+    case 0x02C2: // W3D_CHUNK_MORPH_CHANNEL
+    case 0x0300: // W3D_CHUNK_HMODEL
+    case 0x0400: // W3D_CHUNK_LODMODEL
+    case 0x0420: // W3D_CHUNK_COLLECTION
+    case 0x0460: // W3D_CHUNK_LIGHT
+    case 0x0500: // W3D_CHUNK_EMITTER
+    case 0x0600: // W3D_CHUNK_AGGREGATE
+    case 0x0700: // W3D_CHUNK_HLOD
+    case 0x0702: // W3D_CHUNK_HLOD_LOD_ARRAY
+    case 0x0706:  // W3D_CHUNK_HLOD_PROXY_ARRAY
+    case 0x0800: // W3D_CHUNK_LIGHTSCAPE
+    case 0x0900: // W3D_CHUNK_DAZZLE
+
         return true;
 
         // You can add more here if needed in the future:
