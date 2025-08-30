@@ -117,33 +117,11 @@ struct W3dMap3Struct {
     uint32_t FrameRate;
 };
 
-struct W3dHModelAuxDataStruct {
-    uint32_t Attributes;
-    uint32_t MeshCount;
-    uint32_t CollisionCount;
-    uint32_t SkinCount;
-    uint32_t ShadowCount;
-    uint32_t NullCount;
-    uint32_t FutureCounts[6];
-    uint32_t LODMin;
-    uint32_t LODMax;
-    uint32_t FutureUse[32];
-};
 
-struct W3dEmitterColorKeyframeStruct {
-    float        Time;
-    W3dRGBAStruct Color;
-};
 
-struct W3dEmitterOpacityKeyframeStruct {
-    float Time;
-    float Opacity;
-};
 
-struct W3dEmitterSizeKeyframeStruct {
-    float Time;
-    float Size;
-};
+
+
 #pragma pack(pop)
 
 inline std::vector<ChunkField> InterpretMeshHeader(const std::shared_ptr<ChunkItem>& chunk) {
@@ -235,7 +213,7 @@ inline std::vector<ChunkField> InterpretMaterials1(const std::shared_ptr<ChunkIt
         B.Name((pfx + ".PrimaryName").c_str(), m.PrimaryName);
         B.Name((pfx + ".SecondaryName").c_str(), m.SecondaryName);
         B.UInt32(pfx + ".RenderFlags", m.RenderFlags);
-        B.RGB(pfx + ".Color", m.Red, m.Green, m.Blue);
+        B.RGB8  (pfx + ".Color", m.Red, m.Green, m.Blue);
     }
     return fields;
 }
@@ -270,7 +248,7 @@ inline std::vector<ChunkField> InterpretSurrenderTriangles(const std::shared_ptr
         B.Vec3(pfx + ".Normal", t.Normal);
         B.UInt32(pfx + ".Attributes", t.Attributes);
         for (int j = 0; j < 3; ++j) {
-            B.RGB(pfx + ".Gouraud[" + std::to_string(j) + "]", t.Gouraud[j].Red, t.Gouraud[j].Green, t.Gouraud[j].Blue);
+            B.RGB(pfx + ".Gouraud[" + std::to_string(j) + "]", t.Gouraud[j].R, t.Gouraud[j].G, t.Gouraud[j].B);
         }
     }
     return fields;
@@ -295,7 +273,7 @@ inline std::vector<ChunkField> InterpretVertexColors(const std::shared_ptr<Chunk
     ChunkFieldBuilder B(fields);
     for (size_t i = 0; i < colors.size(); ++i) {
         const auto& c = colors[i];
-        B.RGB("VertexColor[" + std::to_string(i) + "]", c.Red, c.Green, c.Blue);
+        B.RGB("VertexColor[" + std::to_string(i) + "]", c.R, c.G, c.B);
     }
     return fields;
 }
@@ -352,7 +330,7 @@ inline std::vector<ChunkField> InterpretDamageColors(const std::shared_ptr<Chunk
         const auto& c = cols[i];
         std::string pfx = "DamageColor[" + std::to_string(i) + "]";
         B.UInt32(pfx + ".VertexIndex", c.VertexIndex);
-        B.RGB(pfx + ".NewColor", c.NewColor.Red, c.NewColor.Green, c.NewColor.Blue);
+        B.RGB(pfx + ".NewColor", c.NewColor.R, c.NewColor.G, c.NewColor.B);
     }
     return fields;
 }
@@ -377,7 +355,7 @@ inline std::vector<ChunkField> InterpretMaterials2(const std::shared_ptr<ChunkIt
         B.Name((pfx + ".PrimaryName").c_str(), m.PrimaryName);
         B.Name((pfx + ".SecondaryName").c_str(), m.SecondaryName);
         B.UInt32(pfx + ".RenderFlags", m.RenderFlags);
-        B.RGBA(pfx + ".Color", m.Red, m.Green, m.Blue, m.Alpha);
+        B.RGBA8(pfx + ".Color", m.Red, m.Green, m.Blue, m.Alpha);
         B.UInt16(pfx + ".PrimaryNumFrames", m.PrimaryNumFrames);
         B.UInt16(pfx + ".SecondaryNumFrames", m.SecondaryNumFrames);
     }
@@ -409,12 +387,12 @@ inline std::vector<ChunkField> InterpretMaterial3Info(const std::shared_ptr<Chun
     const auto& m = std::get<W3dMaterial3Struct>(v);
     ChunkFieldBuilder B(fields);
     B.UInt32("Material3Flags", m.Material3Flags);
-    B.RGB("DiffuseColor", m.DiffuseColor.Red, m.DiffuseColor.Green, m.DiffuseColor.Blue);
-    B.RGB("SpecularColor", m.SpecularColor.Red, m.SpecularColor.Green, m.SpecularColor.Blue);
-    B.RGB("EmissiveCoefficients", m.EmissiveCoefficients.Red, m.EmissiveCoefficients.Green, m.EmissiveCoefficients.Blue);
-    B.RGB("AmbientCoefficients", m.AmbientCoefficients.Red, m.AmbientCoefficients.Green, m.AmbientCoefficients.Blue);
-    B.RGB("DiffuseCoefficients", m.DiffuseCoefficients.Red, m.DiffuseCoefficients.Green, m.DiffuseCoefficients.Blue);
-    B.RGB("SpecularCoefficients", m.SpecularCoefficients.Red, m.SpecularCoefficients.Green, m.SpecularCoefficients.Blue);
+    B.RGB("DiffuseColor", m.DiffuseColor.R, m.DiffuseColor.G, m.DiffuseColor.B);
+    B.RGB("SpecularColor", m.SpecularColor.R, m.SpecularColor.G, m.SpecularColor.B);
+    B.RGB("EmissiveCoefficients", m.EmissiveCoefficients.R, m.EmissiveCoefficients.G, m.EmissiveCoefficients.B);
+    B.RGB("AmbientCoefficients", m.AmbientCoefficients.R, m.AmbientCoefficients.G, m.AmbientCoefficients.B);
+    B.RGB("DiffuseCoefficients", m.DiffuseCoefficients.R, m.DiffuseCoefficients.G, m.DiffuseCoefficients.B);
+    B.RGB("SpecularCoefficients", m.SpecularCoefficients.R, m.SpecularCoefficients.G, m.SpecularCoefficients.B);
     B.Float("Shininess", m.Shininess);
     B.Float("Opacity", m.Opacity);
     B.Float("Translucency", m.Translucency);

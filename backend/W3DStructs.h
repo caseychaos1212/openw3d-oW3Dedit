@@ -1332,6 +1332,23 @@ struct ChunkFieldBuilder {
 		Push(std::move(name), "RGBA", FormatUtils::FormatRGBA(int(r), int(g), int(b), int(a)));
 	}
 
+	void RGB8(std::string name, uint8_t r, uint8_t g, uint8_t b) {
+		std::ostringstream oss;
+		oss << static_cast<int>(r) << ' '
+			<< static_cast<int>(g) << ' '
+			<< static_cast<int>(b);
+		F.emplace_back(std::move(name), "rgb8", oss.str());
+	}
+
+	void RGBA8(std::string name, uint8_t r, uint8_t g, uint8_t b, uint8_t a) {
+		std::ostringstream oss;
+		oss << static_cast<int>(r) << ' '
+			<< static_cast<int>(g) << ' '
+			<< static_cast<int>(b) << ' '
+			<< static_cast<int>(a);
+		F.emplace_back(std::move(name), "rgbA8", oss.str());
+	}
+
 	void UInt32Array(const std::string& name, const uint32_t* arr, size_t count) {
 		std::ostringstream oss;
 		for (size_t i = 0; i < count; ++i) {

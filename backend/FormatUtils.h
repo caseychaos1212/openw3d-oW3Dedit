@@ -61,6 +61,7 @@ namespace FormatUtils {
 			+ std::to_string(b) + " " + std::to_string(a) + ")";
 	}
 
+
 	inline std::string FormatTexCoord(float u, float v) {
 		std::ostringstream oss;
 		oss << std::fixed << std::setprecision(6) << u << ' ' << v;

@@ -217,7 +217,7 @@ void MainWindow::handleTreeSelection() {
                 target->id == 0x0004 || target->id == 0x0005)) {
             // Intentionally empty
         }
-        // DATA node (0x03150809) – interpret based on parent wrapper and root (sphere/ring)
+        // DATA node (0x03150809) - interpret based on parent wrapper and root (sphere/ring)
         else if (target->id == 0x03150809) {
             const uint32_t wrapper = target->parent ? target->parent->id : 0; // 0x0002..0x0005
             const uint32_t root = (target->parent && target->parent->parent)
@@ -267,126 +267,177 @@ void MainWindow::handleTreeSelection() {
         }
 
         switch (target->id) {
-        case 0x0101: fields = InterpretHierarchyHeader(target); break;
-        case 0x0102: fields = InterpretPivots(target); break;
-        case 0x0103: fields = InterpretPivotFixups(target); break;
-        case 0x001F: fields = InterpretMeshHeader3(target); break;
-
-            // Only hit when not sphere/ring (pid != 0x0741/0x0742)
-        case 0x0002: { // VERTICES normally, but also SPHERE/RING COLOR wrapper
+        
+        case 0x0001: fields = InterpretMeshHeader(target); break;                 // OBSOLETE header
+     
+            // Only hit when not sphere/ring (pid != 0x0741/0x0742) 
+        case 0x0002: { // VERTICES normally, but also SPHERE/RING COLOR wrapper 
             uint32_t pid = target->parent ? target->parent->id : 0;
-            if (pid == 0x0741 || pid == 0x0742) break; // wrapper: let the 0x03150809 child show data
-            fields = InterpretVertices(target);
-            break;
+            if (pid == 0x0741 || pid == 0x0742) break; 
+            // wrapper: let the 0x03150809 child show data
+            fields = InterpretVertices(target); break; 
         }
+
         case 0x0003: { // NORMALS normally, but also SPHERE/RING ALPHA wrapper
             uint32_t pid = target->parent ? target->parent->id : 0;
-            if (pid == 0x0741 || pid == 0x0742) break; // wrapper
-            fields = InterpretVertexNormals(target);
-            break;
+            if (pid == 0x0741 || pid == 0x0742) break; // wrapper 
+            fields = InterpretVertexNormals(target); break;
         }
 
-        case 0x003B: fields = InterpretDCG(target); break;
-        case 0x00000020: fields = InterpretTriangles(target); break;
-        case 0x00000022: fields = InterpretVertexShadeIndices(target); break;
-        case 0x00000028: fields = InterpretMaterialInfo(target); break;
+        case 0x0004: { // SURRENDER NORMALS normally, but also SPHERE/RING SCALE wrapper
+            uint32_t pid = target->parent ? target->parent->id : 0;
+            if (pid == 0x0741 || pid == 0x0742) break; // wrapper
+            fields = InterpretSurrenderNormals(target); break;         // OBSOLETE
+        }
 
-        case 0x0282: fields = InterpretCompressedAnimationChannel(target, (flavor != 0xFFFF ? flavor : 0)); break;
-        case 0x0000002C: fields = InterpretVertexMaterialName(target); break;
-        case 0x0000002D: fields = InterpretVertexMaterialInfo(target); break;
+        case 0x0005: { // Texcoords normally, but also SPHERE/RING SCALE wrapper
+            uint32_t pid = target->parent ? target->parent->id : 0;
+            if (pid == 0x0741 || pid == 0x0742) break; // wrapper
+            fields = InterpretTexcoords(target); break;                  // OBSOLETE
+        }
 
-        case 0x0301: fields = InterpretHModelHeader(target); break;
-        case 0x0302: fields = InterpretNode(target); break;
-        case 0x0303: fields = InterpretCollisionNode(target); break;
-        case 0x0304: fields = InterpretSkinNode(target); break;
-
-        case 0x0283: fields = InterpretCompressedBitChannel(target); break;
+        case 0x0006: fields = InterpretMaterials1(target); break;                 // OBSOLETE
+        case 0x0007: fields = InterpretTrianglesO(target); break;                 // OBSOLETE
+        case 0x0008: fields = InterpretQuadranglesO(target); break;               // OBSOLETE
+        case 0x0009: fields = InterpretSurrenderTriangles(target); break;         // OBSOLETE
+        case 0x000A: fields = InterpretPovTriangles(target); break;               // OBSOLETE
+        case 0x000B: fields = InterpretPovQuadrangles(target); break;             // OBSOLETE
+        case 0x000C: fields = InterpretMeshUserText(target); break;
+        case 0x000D: fields = InterpretVertexColors(target); break;               // OBSOLETE
+        case 0x000E: fields = InterpretVertexInfluences(target); break;
+        case 0x000F: fields = InterpretDamage(target); break;                     // OBSOLETE wrapper
+        case 0x0010: fields = InterpretDamageHeader(target); break;               // OBSOLETE
+        case 0x0011: fields = InterpretDamageVertices(target); break;             // OBSOLETE
+        case 0x0012: fields = InterpretDamageColors(target); break;               // OBSOLETE
+        case 0x0013: fields = InterpretDamageMaterials(target); break;            // OBSOLETE
+        case 0x0014: fields = InterpretMaterials2(target); break;                 // OBSOLETE
+        case 0x0015: fields = InterpretMaterials3(target); break;                 // OBSOLETE
+        case 0x0016: fields = InterpretMaterial3(target); break;                  // OBSOLETE
+        case 0x0017: fields = InterpretMaterial3Name(target); break;              // OBSOLETE
+        case 0x0018: fields = InterpretMaterial3Info(target); break;              // OBSOLETE
+        case 0x0019: fields = InterpretMaterial3DcMap(target); break;             // OBSOLETE
+        case 0x001A: fields = InterpretMap3Filename(target); break;               // OBSOLETE
+        case 0x001B: fields = InterpretMap3Info(target); break;                   // OBSOLETE
+        case 0x001C: fields = InterpretMaterial3DiMap(target); break;             // OBSOLETE
+        case 0x001D: fields = InterpretMaterial3ScMap(target); break;             // OBSOLETE
+        case 0x001E: fields = InterpretMaterial3SiMap(target); break;             // OBSOLETE
+        case 0x001F: fields = InterpretMeshHeader3(target); break;
+        case 0x0020: fields = InterpretTriangles(target); break;
+        case 0x0021: fields = InterpretPerTriMaterials(target); break;            // OBSOLETE (per-tri material ids)
+        case 0x0022: fields = InterpretVertexShadeIndices(target); break;
+        case 0x0028: fields = InterpretMaterialInfo(target); break;
         case 0x0029: fields = InterpretShaders(target); break;
+        case 0x002C: fields = InterpretVertexMaterialName(target); break;
+        case 0x002D: fields = InterpretVertexMaterialInfo(target); break;
+        case 0x002E: fields = InterpretARG0(target); break;
+        case 0x002F: fields = InterpretARG1(target); break;
         case 0x0032: fields = InterpretTextureName(target); break;
         case 0x0033: fields = InterpretTextureInfo(target); break;
         case 0x0039: fields = InterpretVertexMaterialIDs(target); break;
         case 0x003A: fields = InterpretShaderIDs(target); break;
+        case 0x003B: fields = InterpretDCG(target); break;
+        case 0x003C: fields = InterpretDIG(target); break;
+        case 0x003E: fields = InterpretSCG(target); break;
+  //    case 0x003F: fields = InterpretShaderMaterialId(target); break;           // BFME2 optional (if you have one)
         case 0x0049: fields = InterpretTextureIDs(target); break;
         case 0x004A: fields = InterpretStageTexCoords(target); break;
+        case 0x004B: fields = InterpretPerFaceTexcoordIds(target); break;
         case 0x0058: fields = InterpretDeform(target); break;
         case 0x0059: fields = InterpretDeformSet(target); break;
         case 0x005A: fields = InterpretDeformKeyframes(target); break;
         case 0x005B: fields = InterpretDeformData(target); break;
-
+   //   case 0x0060: fields = InterpretTangents(target); break;                   // if implemented
+  //    case 0x0061: fields = InterpretBinormals(target); break;                  // if implemented
+        case 0x0080: fields = InterpretPS2Shaders(target); break;
         case 0x0091: fields = InterpretAABTreeHeader(target); break;
         case 0x0092: fields = InterpretAABTreePolyIndices(target); break;
-        case 0x0093: fields = InterpretAABTreeNodes(target); break;
-
+        case 0x0093: fields = InterpretAABTreeNodes(target); break;           
+    //  case 0x0100: fields = InterpretSoundRObjDefinition(target); break;
+        case 0x0101: fields = InterpretHierarchyHeader(target); break;
+        case 0x0102: fields = InterpretPivots(target); break;
+        case 0x0103: fields = InterpretPivotFixups(target); break;
+     // case 0x0104: fields = InterpretPivotUnknown(target); break;
+        case 0x0201: fields = InterpretAnimationHeader(target); break;
+        case 0x0202: fields = InterpretAnimationChannel(target); break;
+        case 0x0203: fields = InterpretBitChannel(target); break;
+        case 0x0281: fields = InterpretCompressedAnimationHeader(target); break;
+        case 0x0282: fields = InterpretCompressedAnimationChannel(target, (flavor != 0xFFFF ? flavor : 0)); break;
+        case 0x0283: fields = InterpretCompressedBitChannel(target); break;
+//      case 0x0284: fields = InterpretCompressedMotionChannel(target); break;
+        case 0x02C1: fields = InterpretMorphAnimHeader(target); break;
+        case 0x02C3: fields = InterpretMorphAnimPoseName(target); break;
+        case 0x02C4: fields = InterpretMorphAnimKeyData(target); break;
+        case 0x02C5: fields = InterpretMorphAnimPivotChannelData(target); break;
+        case 0x0301: fields = InterpretHModelHeader(target); break;
+        case 0x0302: fields = InterpretNode(target); break;
+        case 0x0303: fields = InterpretCollisionNode(target); break;
+        case 0x0304: fields = InterpretSkinNode(target); break;
+        case 0x0305: fields = InterpretHModelAuxData(target); break;
+        case 0x0306: fields = InterpretShadowNode(target); break;
+        case 0x0401: fields = InterpretLODModelHeader(target); break;
+        case 0x0402: fields = InterpretLOD(target); break;
+        case 0x0421: fields = InterpretCollectionHeader(target); break;
+        case 0x0422: fields = InterpretCollectionObjName(target); break;
+        case 0x0423: fields = InterpretPlaceHolder(target); break;
+        case 0x0424: fields = InterpretTransformNode(target); break;
+        case 0x0440: fields = InterpretPoints(target); break;
+        case 0x0461: fields = InterpretLightInfo(target); break;
+        case 0x0462: fields = InterpretSpotLightInfo(target); break;
+        case 0x0463: fields = InterpretNearAtten(target); break;
+        case 0x0464: fields = InterpretFarAtten(target); break;
+	//	case 0x0465: fields = InterpretSpotLightInfoTT(target); break;
+    //  case 0x0466: fields = InterpretLightPulse(target); break;
         case 0x0501: fields = InterpretEmitterHeader(target); break;
         case 0x0502: fields = InterpretEmitterUserData(target); break;
         case 0x0503: fields = InterpretEmitterInfo(target); break;
         case 0x0504: fields = InterpretEmitterInfoV2(target); break;
         case 0x0505: fields = InterpretEmitterProps(target); break;
+		case 0x0506: fields = InterpretEmitterColorKeyframe(target); break;
+		case 0x0507: fields = InterpretEmitterOpacityKeyframe(target); break;
+		case 0x0508: fields = InterpretEmitterSizeKeyframe(target); break;
+        case 0x0509: fields = InterpretEmitterLineProperties(target); break;
         case 0x050A: fields = InterpretEmitterRotationKeys(target); break;
         case 0x050B: fields = InterpretEmitterFrameKeys(target); break;
         case 0x050C: fields = InterpretEmitterBlurTimeKeyframes(target); break;
-        case 0x0509: fields = InterpretEmitterLineProperties(target); break;
-
+//      case 0x050D: fields = InterpretEmitterExtraInfo(target); break;
         case 0x0601: fields = InterpretAggregateHeader(target); break;
         case 0x0602: fields = InterpretAggregateInfo(target); break;
         case 0x0603: fields = InterpretTextureReplacerInfo(target); break;
         case 0x0604: fields = InterpretAggregateClassInfo(target); break;
-
         case 0x0701: fields = InterpretHLODHeader(target); break;
         case 0x0703: fields = InterpretHLODSubObjectArrayHeader(target); break;
         case 0x0704: fields = InterpretHLODSubObject_LodArray(target); break;
-
-        case 0x0201: fields = InterpretAnimationHeader(target); break;
-        case 0x0202: fields = InterpretAnimationChannel(target); break;
-        case 0x0203: fields = InterpretBitChannel(target); break;
-
-        case 0x0305: fields = InterpretHModelAuxData(target); break;
-        case 0x0281: fields = InterpretCompressedAnimationHeader(target); break;
-        case 0x000E: fields = InterpretVertexInfluences(target); break;
-
         case 0x0740: fields = InterpretBox(target); break;
-        case 0x000C: fields = InterpretMeshUserText(target); break;
-
-        case 0x0461: fields = InterpretLightInfo(target); break;
-        case 0x0462: fields = InterpretSpotLightInfo(target); break;
-        case 0x0463: fields = InterpretNearAtten(target); break;
-        case 0x0464: fields = InterpretFarAtten(target); break;
+        case 0x0750: fields = InterpretNullObject(target); break;
         case 0x0802: fields = InterpretLightTransform(target); break;
-
         case 0x0901: fields = InterpretDazzleName(target); break;
         case 0x0902: fields = InterpretDazzleTypeName(target); break;
-
         case 0x0A01: fields = InterpretSoundRObjHeader(target); break;
-        case 0x0100: fields = InterpretSoundRObjDefinition(target); break;
-
-        case 0x002E: fields = InterpretARG0(target); break;
-        case 0x002F: fields = InterpretARG1(target); break;
-        case 0x003C: fields = InterpretDIG(target); break;
-        case 0x003E: fields = InterpretSCG(target); break;
-        case 0x004B: fields = InterpretPerFaceTexcoordIds(target); break;
-
-        case 0x02C1: fields = InterpretMorphAnimHeader(target); break;
-        case 0x02C3: fields = InterpretMorphAnimPoseName(target); break;
-        case 0x02C4: fields = InterpretMorphAnimKeyData(target); break;
-        case 0x02C5: fields = InterpretMorphAnimPivotChannelData(target); break;
-
-        case 0x0306: fields = InterpretHModelNode(target); break;
-
-        case 0x0401: fields = InterpretLODModelHeader(target); break;
-        case 0x0402: fields = InterpretLOD(target); break;
-
-        case 0x0421: fields = InterpretCollectionHeader(target); break;
-        case 0x0422: fields = InterpretCollectionObjName(target); break;
-        case 0x0423: fields = InterpretPlaceHolder(target); break;
-        case 0x0424: fields = InterpretTransformNode(target); break;
-
-        case 0x0440: fields = InterpretPoints(target); break;
-
-        case 0x0750: fields = InterpretNullObject(target); break;
-
-        case 0x0080: fields = InterpretPS2Shaders(target); break;
-
-        default: break;
+    /*
+        case 0x0B01: fields = InterpretShdMeshName(target); break;
+		case 0x0B02: fields = InterpretShdMeshHeader(target); break;
+		case 0x0B03: fields = InterpretShdMeshUserText(target); break;
+		case 0x0B21: fields = InterpretShdSubMeshHeader(target); break;
+		case 0x0B40: fields = InterpretShdSubMeshShader(target); break;
+		case 0x0B41: fields = InterpretShdSubMeshShaderClassId(target); break;
+		case 0x0B42: fields = InterpretShdSubMeshShaderDef(target); break;
+		case 0x0B43: fields = InterpretShdSubMeshVertices(target); break;
+		case 0x0B44: fields = InterpretShdSubMeshVertexNormals(target); break;
+		case 0x0B45: fields = InterpretShdSubMeshTriangles(target); break;
+		case 0x0B46: fields = InterpretShdSubMeshVertexShadeIndices(target); break;
+		case 0x0B47: fields = InterpretShdSubMeshUV0(target); break;
+		case 0x0B48: fields = InterpretShdSubMeshUV1(target); break;
+		case 0x0B49: fields = InterpretShdSubMeshTangentBasisS(target); break;
+		case 0x0B4A: fields = InterpretShdSubMeshTangentBasisT(target); break;
+		case 0x0B4B: fields = InterpretShdSubMeshTangentBasisSXT(target); break;
+		case 0x0B4C: fields = InterpretShdSubMeshColor(target); break;
+		case 0x0B4D: fields = InterpretShdSubMeshVertexInfluences(target); break;
+		case 0x0C00: fields = InterpretSecVertices(target); break;
+		case 0x0C01: fields = InterpretSecVertexNormals(target); break;
+		case 0x0C02: fields = InterpretLightMapUV(target); break;
+            */
+        default:
+            break;
         }
     }
 
