@@ -370,7 +370,7 @@ inline std::vector<ChunkField> InterpretVertexMaterialInfo(const std::shared_ptr
     // PSX flags
     for (auto [mask, name] : VERTMAT_PSX_FLAGS) {
         B.Flag(attr, mask, name);
-        if (mask == 0x0010'0000) break; // NO_RT_LIGHTING early‐out
+        if (mask == 0x0010'0000) break; // NO_RT_LIGHTING early out
     }
 
     // finally the colors & floats

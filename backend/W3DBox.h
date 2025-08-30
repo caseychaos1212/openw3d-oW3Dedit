@@ -6,7 +6,7 @@
 #include <cstring>
 #include <iomanip>
 
-// TODO: Collision should be an attribute add on.
+
 inline std::vector<ChunkField> InterpretBox(const std::shared_ptr<ChunkItem>& chunk) {
     std::vector<ChunkField> fields;
     if (!chunk) return fields;
@@ -33,21 +33,21 @@ inline std::vector<ChunkField> InterpretBox(const std::shared_ptr<ChunkItem>& ch
     B.Flag(attr, static_cast<uint32_t>(BoxAttr::W3D_BOX_ATTRIBUTE_ALIGNED), "W3D_BOX_ATTRIBUTE_ALIGNED");
 
     // Collision type (masked + shifted equality)
- //   {
- //       const uint32_t mask = static_cast<uint32_t>(BoxAttr::W3D_BOX_ATTRIBUTE_COLLISION_TYPE_MASK);
- //       const uint32_t shift = static_cast<uint32_t>(BoxAttr::W3D_BOX_ATTRIBUTE_COLLISION_TYPE_SHIFT);
- //       const uint32_t type = (attr & mask) >> shift;
-//
- //       // Map the enumerated values after shift
- //       switch (type) {
- //       case  1: B.Push("CollisionType", "flag", "W3D_BOX_ATTRIBUTE_COLLISION_TYPE_PHYSICAL");   break;
-  //      case  2: B.Push("CollisionType", "flag", "W3D_BOX_ATTRIBUTE_COLLISION_TYPE_PROJECTILE"); break;
-  //      case  4: B.Push("CollisionType", "flag", "W3D_BOX_ATTRIBUTE_COLLISION_TYPE_VIS");        break;
-  //      case  8: B.Push("CollisionType", "flag", "W3D_BOX_ATTRIBUTE_COLLISION_TYPE_CAMERA");     break;
-  //      case 16: B.Push("CollisionType", "flag", "W3D_BOX_ATTRIBUTE_COLLISION_TYPE_VEHICLE");    break;
-   //     default: B.Push("CollisionType", "string", "Unknown");                                   break;
-  //      }
-  //  }
+    {
+        const uint32_t mask = static_cast<uint32_t>(BoxAttr::W3D_BOX_ATTRIBUTE_COLLISION_TYPE_MASK);
+        const uint32_t shift = static_cast<uint32_t>(BoxAttr::W3D_BOX_ATTRIBUTE_COLLISION_TYPE_SHIFT);
+       const uint32_t type = (attr & mask) >> shift;
+
+        // Map the enumerated values after shift
+        switch (type) {
+        case  1: B.Push("CollisionType", "flag", "W3D_BOX_ATTRIBUTE_COLLISION_TYPE_PHYSICAL");   break;
+        case  2: B.Push("CollisionType", "flag", "W3D_BOX_ATTRIBUTE_COLLISION_TYPE_PROJECTILE"); break;
+        case  4: B.Push("CollisionType", "flag", "W3D_BOX_ATTRIBUTE_COLLISION_TYPE_VIS");        break;
+        case  8: B.Push("CollisionType", "flag", "W3D_BOX_ATTRIBUTE_COLLISION_TYPE_CAMERA");     break;
+        case 16: B.Push("CollisionType", "flag", "W3D_BOX_ATTRIBUTE_COLLISION_TYPE_VEHICLE");    break;
+        default: B.Push("CollisionType", "string", "Unknown");                                   break;
+        }
+    }
 
     // Name (fixed-size, NUL-terminated)
     B.Name("Name", box.Name, 2 * W3D_NAME_LEN);

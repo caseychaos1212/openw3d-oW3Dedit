@@ -68,7 +68,7 @@ static inline void EmitVolumeRandomizer(ChunkFieldBuilder& B,
     B.Float(pfx + ".Value3", v.Value3);
 }
 
-//TODO: Missing shader destblend to alphatest on e_01_dfsmoke.w3d
+
 inline std::vector<ChunkField> InterpretEmitterInfoV2(const std::shared_ptr<ChunkItem>& chunk) {
     std::vector<ChunkField> fields; if (!chunk) return fields;
 
@@ -89,15 +89,25 @@ inline std::vector<ChunkField> InterpretEmitterInfoV2(const std::shared_ptr<Chun
     // Shader sub-struct
     B.DepthCompareField("Shader.DepthCompare", info.Shader.DepthCompare);
     B.DepthMaskField("Shader.DepthMask", info.Shader.DepthMask);
+	B.DestBlendField("Shader.DestBlend", info.Shader.DestBlend);
+	B.PriGradientField("Shader.PriGradient", info.Shader.PriGradient);
+	B.SecGradientField("Shader.SecGradient", info.Shader.SecGradient);
+	B.SrcBlendField("Shader.SrcBlend", info.Shader.SrcBlend);
+	B.TexturingField("Shader.Texturing", info.Shader.Texturing);
+	B.DetailColorFuncField("Shader.DetailColor", info.Shader.DetailColorFunc);
+	B.DetailAlphaFuncField("Shader.DetailAlpha", info.Shader.DetailAlphaFunc);
+	B.AlphaTestField("Shader.AlphaTest", info.Shader.AlphaTest);
+    
 
     B.UInt32("RenderMode", info.RenderMode);
     B.UInt32("FrameMode", info.FrameMode);
     return fields;
 }
 
-//TODO: Completely Mis labeling data.
+
 inline std::vector<ChunkField> InterpretEmitterProps(const std::shared_ptr<ChunkItem>& chunk) {
-    std::vector<ChunkField> fields; if (!chunk) return fields;
+    std::vector<ChunkField> fields;
+    if (!chunk) return fields;
 
     auto v = ParseChunkStruct<W3dEmitterPropertyStruct>(chunk);
     if (auto err = std::get_if<std::string>(&v)) {
@@ -131,9 +141,8 @@ inline std::vector<ChunkField> InterpretEmitterProps(const std::shared_ptr<Chunk
         float t; std::memcpy(&t, ptr + off, sizeof(float)); off += sizeof(float);
         W3dRGBAStruct c{}; std::memcpy(&c, ptr + off, sizeof(W3dRGBAStruct)); off += sizeof(W3dRGBAStruct);
 
-        const std::string pfx = "ColorKey[" + std::to_string(i) + "]";
-        B.Float(pfx + ".Time", t);
-        B.RGBA(pfx + ".Color", c.R, c.G, c.B, c.A);
+        B.Float("Time[" + std::to_string(i) + "]", t);
+        B.RGBA("Color[" + std::to_string(i) + "]", c.R, c.G, c.B, c.A);
     }
 
     // Opacity keyframes: [float time][float value]
@@ -143,9 +152,8 @@ inline std::vector<ChunkField> InterpretEmitterProps(const std::shared_ptr<Chunk
         std::memcpy(&t, ptr + off, sizeof(float)); off += sizeof(float);
         std::memcpy(&v, ptr + off, sizeof(float)); off += sizeof(float);
 
-        const std::string pfx = "OpacityKey[" + std::to_string(i) + "]";
-        B.Float(pfx + ".Time", t);
-        B.Float(pfx + ".Value", v);
+        B.Float("Time[" + std::to_string(i) + "]", t);
+        B.Float("Opacity[" + std::to_string(i) + "]", v);
     }
 
     // Size keyframes: [float time][float value]
@@ -155,13 +163,13 @@ inline std::vector<ChunkField> InterpretEmitterProps(const std::shared_ptr<Chunk
         std::memcpy(&t, ptr + off, sizeof(float)); off += sizeof(float);
         std::memcpy(&v, ptr + off, sizeof(float)); off += sizeof(float);
 
-        const std::string pfx = "SizeKey[" + std::to_string(i) + "]";
-        B.Float(pfx + ".Time", t);
-        B.Float(pfx + ".Value", v);
+        B.Float("Time[" + std::to_string(i) + "]", t);
+        B.Float("Size[" + std::to_string(i) + "]", v);
     }
 
     return fields;
 }
+
 //TODO: OBSOLETE
 inline std::vector<ChunkField> InterpretEmitterColorKeyframe(const std::shared_ptr<ChunkItem>& chunk) {
     std::vector<ChunkField> fields; if (!chunk) return fields;
@@ -280,7 +288,7 @@ inline std::vector<ChunkField> InterpretEmitterLineProperties(const std::shared_
 
     return fields;
 }
-//TODO: Doesn't match
+
 inline std::vector<ChunkField> InterpretEmitterRotationKeys(const std::shared_ptr<ChunkItem>& chunk) {
     std::vector<ChunkField> fields; if (!chunk) return fields;
 
@@ -291,28 +299,34 @@ inline std::vector<ChunkField> InterpretEmitterRotationKeys(const std::shared_pt
     }
     const auto& h = std::get<W3dEmitterRotationHeaderStruct>(v);
 
-    if (chunk->data.size() < sizeof(W3dEmitterRotationHeaderStruct)) {
+    constexpr size_t HDR = sizeof(W3dEmitterRotationHeaderStruct);
+    if (chunk->data.size() < HDR) {
         fields.emplace_back("error", "string", "Rotation header truncated");
         return fields;
     }
 
-    const size_t headerBytes = sizeof(W3dEmitterRotationHeaderStruct);
-    const size_t availableFloats = (chunk->data.size() - headerBytes) / sizeof(float);
-    const size_t count = std::min<size_t>(h.KeyframeCount, availableFloats);
+    // Total float pairs expected after the header
+    const size_t expected_pairs = static_cast<size_t>(h.KeyframeCount) + 1; // wdump behavior
+    const size_t avail_floats = (chunk->data.size() - HDR) / sizeof(float);
+    const size_t avail_pairs = avail_floats / 2; // each pair = 2 floats
+    const size_t pairs = std::min(expected_pairs, avail_pairs);
 
     ChunkFieldBuilder B(fields);
     B.UInt32("KeyframeCount", h.KeyframeCount);
-    B.Float("RandomVelocity", h.Random);
+    B.Float("Random", h.Random);
     B.Float("OrientationRandom", h.OrientationRandom);
 
-    const float* keys = reinterpret_cast<const float*>(chunk->data.data() + headerBytes);
-    for (size_t i = 0; i < count; ++i) {
-        B.Float("Keyframe[" + std::to_string(i) + "]", keys[i]);
+    const float* f = reinterpret_cast<const float*>(chunk->data.data() + HDR);
+    for (size_t i = 0; i < pairs; ++i) {
+        const float t = f[i * 2 + 0];
+        const float r = f[i * 2 + 1];
+        B.Float("Time[" + std::to_string(i) + "]", t);
+        B.Float("Rotation[" + std::to_string(i) + "]", r);
     }
+
     return fields;
 }
 
-//TODO: doesn't match
 inline std::vector<ChunkField> InterpretEmitterFrameKeys(const std::shared_ptr<ChunkItem>& chunk) {
     std::vector<ChunkField> fields; if (!chunk) return fields;
 
@@ -323,57 +337,73 @@ inline std::vector<ChunkField> InterpretEmitterFrameKeys(const std::shared_ptr<C
     }
     const auto& h = std::get<W3dEmitterFrameHeaderStruct>(v);
 
-    const size_t headerBytes = sizeof(W3dEmitterFrameHeaderStruct);
-    if (chunk->data.size() < headerBytes) {
+    constexpr size_t HDR = sizeof(W3dEmitterFrameHeaderStruct);
+    if (chunk->data.size() < HDR) {
         fields.emplace_back("error", "string", "Frame header truncated");
         return fields;
     }
 
-    const size_t available = (chunk->data.size() - headerBytes) / sizeof(W3dEmitterFrameKeyframeStruct);
-    const size_t count = std::min<size_t>(h.KeyframeCount, available);
+    const size_t expected_pairs = static_cast<size_t>(h.KeyframeCount) + 1; 
+    const size_t avail_pairs = (chunk->data.size() - HDR) / sizeof(W3dEmitterFrameKeyframeStruct);
+    const size_t pairs = std::min(expected_pairs, avail_pairs);
 
     ChunkFieldBuilder B(fields);
     B.UInt32("KeyframeCount", h.KeyframeCount);
     B.Float("Random", h.Random);
 
-    const auto* keys = reinterpret_cast<const W3dEmitterFrameKeyframeStruct*>(chunk->data.data() + headerBytes);
-    for (size_t i = 0; i < count; ++i) {
-        const std::string pfx = "Keyframe[" + std::to_string(i) + "]";
-        B.Float(pfx + ".Time", keys[i].Time);
-        B.Float(pfx + ".Frame", keys[i].Frame);
+    const auto* keys = reinterpret_cast<const W3dEmitterFrameKeyframeStruct*>(chunk->data.data() + HDR);
+    for (size_t i = 0; i < pairs; ++i) {
+        B.Float("Time[" + std::to_string(i) + "]", keys[i].Time);
+        B.Float("Frame[" + std::to_string(i) + "]", keys[i].Frame);
     }
+
+    if (pairs < expected_pairs) {
+        B.Push("warning", "string",
+            "Only " + std::to_string(pairs) + " pairs available; expected " +
+            std::to_string(expected_pairs));
+    }
+
     return fields;
 }
 
-//TODO: doesn't match
-inline std::vector<ChunkField> InterpretEmitterBlurTimeKeyframes(const std::shared_ptr<ChunkItem>& chunk) {
-    std::vector<ChunkField> fields; if (!chunk) return fields;
+
+inline std::vector<ChunkField> InterpretEmitterBlurTimeKeyframes(
+    const std::shared_ptr<ChunkItem>& chunk
+) {
+    std::vector<ChunkField> fields;
+    if (!chunk) return fields;
 
     auto v = ParseChunkStruct<W3dEmitterBlurTimeHeaderStruct>(chunk);
     if (auto err = std::get_if<std::string>(&v)) {
-        fields.emplace_back("error", "string", "Malformed EMITTER_BLUR_TIME_KEYFRAMES: " + *err);
+        fields.emplace_back("error", "string",
+            "Malformed EMITTER_BLUR_TIME_KEYFRAMES: " + *err);
         return fields;
     }
     const auto& h = std::get<W3dEmitterBlurTimeHeaderStruct>(v);
 
-    const size_t headerBytes = sizeof(W3dEmitterBlurTimeHeaderStruct);
-    if (chunk->data.size() < headerBytes) {
+    constexpr size_t HDR = sizeof(W3dEmitterBlurTimeHeaderStruct);
+    if (chunk->data.size() < HDR) {
         fields.emplace_back("error", "string", "BlurTime header truncated");
         return fields;
     }
 
-    const size_t available = (chunk->data.size() - headerBytes) / sizeof(W3dEmitterBlurTimeKeyframeStruct);
-    const size_t count = std::min<size_t>(h.KeyframeCount, available);
-    const auto* entries = reinterpret_cast<const W3dEmitterBlurTimeKeyframeStruct*>(chunk->data.data() + headerBytes);
+    // available entries in buffer
+    const size_t avail = (chunk->data.size() - HDR) / sizeof(W3dEmitterBlurTimeKeyframeStruct);
+    // rule: actual entries = KeyframeCount + 1
+    const size_t want = static_cast<size_t>(h.KeyframeCount) + 1;
+    const size_t count = std::min(want, avail);
+
+    const auto* keys =
+        reinterpret_cast<const W3dEmitterBlurTimeKeyframeStruct*>(chunk->data.data() + HDR);
 
     ChunkFieldBuilder B(fields);
     B.UInt32("KeyframeCount", h.KeyframeCount);
     B.Float("Random", h.Random);
 
     for (size_t i = 0; i < count; ++i) {
-        const std::string pfx = "Keyframe[" + std::to_string(i) + "]";
-        B.Float(pfx + ".Time", entries[i].Time);
-        B.Float(pfx + ".BlurTime", entries[i].BlurTime);
+        B.Float("Time[" + std::to_string(i) + "]", keys[i].Time);
+        B.Float("BlurTime[" + std::to_string(i) + "]", keys[i].BlurTime);
     }
     return fields;
 }
+

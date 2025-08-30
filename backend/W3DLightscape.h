@@ -2,7 +2,7 @@
 #include "W3DStructs.h"
 #include <vector>
 
-//TODO: Find Example
+
 inline std::vector<ChunkField> InterpretLightTransform(const std::shared_ptr<ChunkItem>& chunk) {
     std::vector<ChunkField> fields;
     if (!chunk || chunk->data.size() < sizeof(W3dLightTransformStruct)) {

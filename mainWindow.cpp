@@ -52,7 +52,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     UpdateRecentFilesMenu();
     // create the menu & action
     auto batchMenu = menuBar()->addMenu(tr("Batch Tools"));
-    auto exportChunksAct = new QAction(tr("Export Chunk List…"), this);
+    auto exportChunksAct = new QAction(tr("Export Chunk List..."), this);
     batchMenu->addAction(exportChunksAct);
     connect(exportChunksAct, &QAction::triggered,
         this, &MainWindow::on_actionExportChunkList_triggered);
@@ -195,7 +195,7 @@ void MainWindow::handleTreeSelection() {
             || target->parent->id == SOUND_RENDER_DEF_EXT))
     {
         // debug log:
-        std::cout << "DEBUG: firing InterpretSoundRObjDefinition – "
+        std::cout << "DEBUG: firing InterpretSoundRObjDefinition  "
             << "chunkId=0x" << std::hex << target->id
             << " parentId=0x" << target->parent->id
             << std::dec << "\n";
@@ -210,7 +210,7 @@ void MainWindow::handleTreeSelection() {
         && target->parent->parent
         && target->parent->parent->parent)
     {
-        auto wrapperId = target->parent->parent->id;           // usually 0x0002–0x0005
+        auto wrapperId = target->parent->parent->id;           // usually 0x0002 0x0005
         auto headerId = target->parent->parent->parent->id;    // sphere vs ring
         
         std::cout << "Dispatch micro: channel=0x"
@@ -348,7 +348,7 @@ void MainWindow::handleTreeSelection() {
         case 0x000E: fields = InterpretVertexInfluences(target); break;
         case 0x0740: fields = InterpretBox(target); break;
         case 0x000C: fields = InterpretMeshUserText(target); break;
-       // case 0x00000004: fields = InterpretRingChannel(target); break;
+        case 0x00000004: fields = InterpretRingChannel(target); break;
         case 0x00000005: fields = InterpretSphereChannel(target); break;
         {
             uint32_t pid = target->parent ? target->parent->id : 0;
@@ -492,8 +492,12 @@ static void recursePrint(const std::shared_ptr<ChunkItem>& c,
     if (c->id == MICRO_ID && c->parent && c->parent->id == CHANNEL_WRAPPER)
         return;
 
-    // 2) Skip children of the SOUND_RENDER_DEF node
-    if (c->parent && c->parent->id == SOUND_RENDER_DEF)
+    // 2) Skip children of the SOUND_RENDER_DEF node only when it sits under
+    //    a SOUNDROBJ definition or extended definition
+    if (c->parent && c->parent->id == SOUND_RENDER_DEF &&
+        c->parent->parent &&
+        (c->parent->parent->id == SOUNDROBJ_DEFINITION ||
+            c->parent->parent->id == SOUND_RENDER_DEF_EXT))
         return;
 
     // 3) Print "0x######## NAME"
@@ -523,7 +527,7 @@ void MainWindow::on_actionExportChunkList_triggered()
     // 2) pick output file
     QString outPath = QFileDialog::getSaveFileName(
         this,
-        tr("Save Chunk List As…"),
+        tr("Save Chunk List As..."),
         QString(),
         tr("Text Files (*.txt);;All Files (*)")
     );
@@ -540,7 +544,7 @@ void MainWindow::on_actionExportChunkList_triggered()
 
     // 4) iterate .w3d files
     QDir dir(srcDir);
-    auto w3dFiles = dir.entryList(QStringList{ "*.w3d" },
+    auto w3dFiles = dir.entryList(QStringList{ "*.w3d", "*.wlt" },
         QDir::Files | QDir::NoSymLinks);
     for (auto& fn : w3dFiles) {
         QString full = dir.absoluteFilePath(fn);

@@ -138,7 +138,7 @@ bool ChunkData::loadFromFile(const std::string& filename) {
 
 bool ChunkData::parseChunk(std::istream& stream, std::shared_ptr<ChunkItem>& parent) {
     static constexpr uint32_t
-        DATA_WRAPPER = 0x03150809, // legacy “data wrapper”
+        DATA_WRAPPER = 0x03150809, // legacy data wrapper
         SOUNDROBJ_DEF = 0x0A02,
         SOUND_RENDER_DEF = 0x0100,
         SOUND_RENDER_DEF_EXT = 0x0200,
@@ -148,14 +148,14 @@ bool ChunkData::parseChunk(std::istream& stream, std::shared_ptr<ChunkItem>& par
     while (stream && stream.peek() != EOF) {
         auto pos = stream.tellg();
 
-        // 1) decide micro‐mode (1b ID + 1b len).  This has *nothing* to do with the MSB of the length word.
+        // 1) decide micro mode (1b ID + 1b len).  This has *nothing* to do with the MSB of the length word.
         bool microMode = false;
         if (parent) {
-            // data‐wrapper always micro‐mode
+            // data wrapper always micro mode
             if (parent->id == DATA_WRAPPER) {
                 microMode = true;
             }
-            // under SOUNDROBJ_DEF → SOUND_RENDER_DEF or EXT
+            // under SOUNDROBJ_DEF  SOUND_RENDER_DEF or EXT
             else if (parent->id == SOUND_RENDER_DEF &&
                 parent->parent &&
                 (parent->parent->id == SOUNDROBJ_DEF ||
@@ -163,17 +163,17 @@ bool ChunkData::parseChunk(std::istream& stream, std::shared_ptr<ChunkItem>& par
             {
                 microMode = true;
             }
-            // sphere/ring channels are also micro‐mode
+            // sphere/ring channels are also micro mode
             else if ((parent->id == SPHERE_DEF || parent->id == RING_DEF)) {
                 // peek next byte (but don't consume it here)
-                // we know valid micro‐IDs are 2..5 for sphere/ring
+                // we know valid micro IDs are 2..5 for sphere/ring
                 int peek = stream.peek();
                 if (peek >= 2 && peek <= 5) microMode = true;
             }
         }
 
         if (microMode) {
-            // need at least 2 bytes for micro‐ID + micro‐length
+            // need at least 2 bytes for micro ID + micro length
             if (stream.rdbuf()->in_avail() < 2) break;
             uint8_t mid, mlen;
             stream.read(reinterpret_cast<char*>(&mid), 1);
@@ -197,13 +197,13 @@ bool ChunkData::parseChunk(std::istream& stream, std::shared_ptr<ChunkItem>& par
             continue;
         }
 
-        // 2) otherwise it's a normal 4‑byte ID + 4‑byte length + payload
+        // 2) otherwise it's a normal 4 byte ID + 4 byte length + payload
         if (stream.rdbuf()->in_avail() < 8) break;
         auto child = std::make_shared<ChunkItem>();
         child->id = readUint32(stream);
 
         uint32_t rawLen = readUint32(stream);
-        // MSB here *only* means “this chunk *may* contain sub‑chunks”
+        // MSB here *only* means this chunk *may* contain subchunks
         child->hasSubChunks = (rawLen & 0x80000000u) != 0;
         child->length = rawLen & 0x7FFFFFFFu;
 

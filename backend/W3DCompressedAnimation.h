@@ -50,102 +50,93 @@ inline const char* CompressedChannelTypeName(uint8_t flags) {
     };
     return (flags < 8) ? k[flags] : nullptr;
 }
-//TODO: TIMECODED GETTING TRUNCATED and FIND DELTA EXAMPLE
+
 // Timecoded vs AdaptiveDelta channel 
-inline std::vector<ChunkField> InterpretCompressedAnimationChannel(const std::shared_ptr<ChunkItem>& chunk,
+inline std::vector<ChunkField>
+InterpretCompressedAnimationChannel(const std::shared_ptr<ChunkItem>& chunk,
     uint16_t flavor /*0=timecoded, 1=adaptive*/) {
     std::vector<ChunkField> fields;
     if (!chunk) return fields;
-
     const auto& buf = chunk->data;
     const size_t n = buf.size();
+    const uint8_t* p = buf.data();
+
+    auto rd_u32 = [&](size_t off) { uint32_t v; std::memcpy(&v, p + off, 4); return v; };
+    auto rd_u16 = [&](size_t off) { uint16_t v; std::memcpy(&v, p + off, 2); return v; };
+    auto rd_f32 = [&](size_t off) { float v;    std::memcpy(&v, p + off, 4); return v; };
+
     ChunkFieldBuilder B(fields);
 
     if (flavor == 0) {
-        // ---- Timecoded ----------------------------------------------------
-        if (n < sizeof(W3dTimeCodedAnimChannelStruct)) {
+        // ---- Timecoded (NumTimeCodes u32, Pivot u16, VectorLen u8, Flags u8, Data[0] u32...) ----
+        if (n < 8 + 4) { // need header (8) + first Data word
             fields.emplace_back("error", "string", "Too small for TimeCodedAnimChannel");
             return fields;
         }
-        W3dTimeCodedAnimChannelStruct hdr{};
-        std::memcpy(&hdr, buf.data(), sizeof(hdr));
 
-        // Payload words (uint32) after the header (header contains Data[1])
-        const size_t headerBytes = sizeof(W3dTimeCodedAnimChannelStruct);
-        const size_t availWords = (n - headerBytes) / sizeof(uint32_t) + 1; // include Data[0] in header
-        const uint32_t declared = hdr.NumTimeCodes;
-        const size_t actualWords = std::min<size_t>(declared, availWords);
+        const uint32_t numTimeCodes = rd_u32(0);
+        const uint16_t pivot = rd_u16(4);
+        const uint8_t  vecLen = p[6];
+        const uint8_t  flags = p[7];
+        const size_t   data_off = 8;                // Data[0] is here
+        const size_t   words = (n - data_off) / 4; 
 
-        // Copy payload to owned storage
-        std::vector<uint32_t> codes(actualWords);
-        codes[0] = hdr.Data[0];
-        if (actualWords > 1) {
-            const auto* tail = reinterpret_cast<const uint32_t*>(buf.data() + headerBytes);
-            std::memcpy(codes.data() + 1, tail, (actualWords - 1) * sizeof(uint32_t));
-        }
-
-        // Emit header
-        B.UInt32("NumTimeCodes", hdr.NumTimeCodes);
-        B.UInt16("Pivot", hdr.Pivot);
-        B.UInt8("VectorLen", hdr.VectorLen);
-        if (const char* nm = CompressedChannelTypeName(hdr.Flags)) {
+        // header
+        B.UInt32("NumTimeCodes", numTimeCodes);
+        B.UInt16("Pivot", pivot);
+        B.UInt8("VectorLen", vecLen);
+        if (const char* nm = CompressedChannelTypeName(flags)) {
             B.Push("ChannelType", "string", nm);
         }
         else {
-            B.Push("ChannelType", "string", "Unknown(" + std::to_string(hdr.Flags) + ")");
+            B.Push("ChannelType", "string", "Unknown(" + std::to_string(flags) + ")");
         }
+  //      if (words != numTimeCodes) {
+ //           B.Push("note", "string",
+ //               "Header declares " + std::to_string(numTimeCodes) +
+ //               " timecodes; buffer contains " + std::to_string(words));
+  //      }
 
-        // Truncation warning
-        if (actualWords < hdr.NumTimeCodes) {
-            B.Push("warning", "string",
-                "Buffer holds only " + std::to_string(actualWords) +
-                " timecodes; header declares " + std::to_string(hdr.NumTimeCodes));
-        }
-
-        // Emit data
-        for (size_t i = 0; i < actualWords; ++i) {
-            B.Int32("Data[" + std::to_string(i) + "]", static_cast<int32_t>(codes[i]));
+   //     )
+        const auto* w = reinterpret_cast<const uint32_t*>(p + data_off);
+        for (size_t i = 0; i < words; ++i) {
+            B.UInt32("Data[" + std::to_string(i) + "]", w[i]);
         }
         return fields;
     }
 
-    // ---- Adaptive Delta ---------------------------------------------------
-    if (n < sizeof(W3dAdaptiveDeltaAnimChannelStruct)) {
+    // ---- Adaptive Delta (NumFrames u32, Pivot u16, VectorLen u8, Flags u8, Scale f32, Data[0] u32...) ----
+    if (n < 12 + 4) { // need header (12) + first Data word
         fields.emplace_back("error", "string", "Too small for AdaptiveDeltaAnimChannel");
         return fields;
     }
-    W3dAdaptiveDeltaAnimChannelStruct hdr{};
-    std::memcpy(&hdr, buf.data(), sizeof(hdr));
 
-    const size_t headerBytes = sizeof(W3dAdaptiveDeltaAnimChannelStruct);
-    const size_t availWords = (n - headerBytes) / sizeof(uint32_t) + 1; // include Data[0]
-    // Some files don’t carry a declared count for deltas; we trust the buffer.
-    const size_t actualWords = availWords;
+    const uint32_t numFrames = rd_u32(0);
+    const uint16_t pivot = rd_u16(4);
+    const uint8_t  vecLen = p[6];
+    const uint8_t  flags = p[7];
+    const float    scale = rd_f32(8);
+    const size_t   data_off = 12;                       // Data[0] starts here
+    const size_t   words = (n - data_off) / 4;       
 
-    std::vector<uint32_t> words(actualWords);
-    words[0] = hdr.Data[0];
-    if (actualWords > 1) {
-        const auto* tail = reinterpret_cast<const uint32_t*>(buf.data() + headerBytes);
-        std::memcpy(words.data() + 1, tail, (actualWords - 1) * sizeof(uint32_t));
-    }
-
-    B.UInt32("NumFrames", hdr.NumFrames);
-    B.UInt16("Pivot", hdr.Pivot);
-    B.UInt8("VectorLen", hdr.VectorLen);
-    if (const char* nm = CompressedChannelTypeName(hdr.Flags)) {
+    B.UInt32("NumFrames", numFrames);
+    B.UInt16("Pivot", pivot);
+    B.UInt8("VectorLen", vecLen);
+    if (const char* nm = CompressedChannelTypeName(flags)) {
         B.Push("ChannelType", "string", nm);
     }
     else {
-        B.Push("ChannelType", "string", "Unknown(" + std::to_string(hdr.Flags) + ")");
+        B.Push("ChannelType", "string", "Unknown(" + std::to_string(flags) + ")");
     }
-    B.Float("Scale", hdr.Scale);
+    B.Float("Scale", scale);
 
-    for (size_t i = 0; i < actualWords; ++i) {
-        B.Int32("Data[" + std::to_string(i) + "]", static_cast<int32_t>(words[i]));
+    const auto* w = reinterpret_cast<const uint32_t*>(p + data_off);
+    for (size_t i = 0; i < words; ++i) {
+        B.UInt32("Data[" + std::to_string(i) + "]", w[i]);
     }
     return fields;
 }
-//TODO: DATA SHOULD NOT BE SIGNED INT???
+
 // Compressed Bit Channel (timecoded bit events)
 // Fixed header with Data[0] present -> use offsetof to size payload safely
 inline std::vector<ChunkField> InterpretCompressedBitChannel(const std::shared_ptr<ChunkItem>& chunk) {
@@ -193,7 +184,7 @@ inline std::vector<ChunkField> InterpretCompressedBitChannel(const std::shared_p
     }
 
     for (size_t i = 0; i < actualWords; ++i) {
-        B.Int32("Data[" + std::to_string(i) + "]", static_cast<int32_t>(words[i]));
+        B.UInt32("Data[" + std::to_string(i) + "]", static_cast<uint32_t>(words[i]));
     }
 
     return fields;

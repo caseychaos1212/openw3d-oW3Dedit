@@ -189,7 +189,7 @@ inline std::vector<ChunkField> InterpretRingHeader(const std::shared_ptr<ChunkIt
     B.Vec3("DefaultColor", s.DefaultColor);
     B.Float("DefaultAlpha", s.DefaultAlpha);
 
-    // Vector2 helpers aren’t in the builder; output as 2 fields for clarity
+    // Vector2 helpers aren't in the builder; output as 2 fields for clarity
     B.Float("DefaultInnerScale.U", s.DefaultInnerScale.x);
     B.Float("DefaultInnerScale.V", s.DefaultInnerScale.y);
     B.Float("DefaultOuterScale.U", s.DefaultOuterScale.x);
@@ -213,7 +213,7 @@ inline std::vector<ChunkField> InterpretRingHeader(const std::shared_ptr<ChunkIt
 inline std::vector<ChunkField> InterpretRingChannel(const std::shared_ptr<ChunkItem>& chunk) {
     std::vector<ChunkField> F;
 
-    // Expect the usual VARIABLES wrapper you’re using elsewhere.
+    // Expect the usual VARIABLES wrapper you're using elsewhere.
     auto span = OpenVariablesWrapper(chunk, "RING channel");
     if (!span) return F;
 
@@ -262,7 +262,7 @@ inline std::vector<ChunkField> InterpretRingChannel(const std::shared_ptr<ChunkI
                 const std::string base =
                     (id == 0x04 ? "InnerScaleChannel[" : "OuterScaleChannel[")
                     + std::to_string(idx) + "]";
-                // You don’t have Vec2 in the builder, so write components:
+                // You don't have Vec2 in the builder, so write components:
                 B.Float(base + ".Value.U", key->U);
                 B.Float(base + ".Value.V", key->V);
                 B.Float(base + ".Time", key->Time);
@@ -270,7 +270,7 @@ inline std::vector<ChunkField> InterpretRingChannel(const std::shared_ptr<ChunkI
             break;
         }
         default:
-            // Unknown micro-chunk – skip it
+            // Unknown micro-chunk  skip it
             break;
         }
 

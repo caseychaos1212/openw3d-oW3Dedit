@@ -73,7 +73,7 @@ inline std::vector<ChunkField> InterpretTransformNode(const std::shared_ptr<Chun
 
     return fields;
 }
-//TODO: FIND EXAMPLE
+
 inline std::vector<ChunkField> InterpretPlaceHolder(const std::shared_ptr<ChunkItem>& chunk) {
     std::vector<ChunkField> fields;
     if (!chunk) return fields;
@@ -91,7 +91,7 @@ inline std::vector<ChunkField> InterpretPlaceHolder(const std::shared_ptr<ChunkI
     if (nameLen > available) nameLen = static_cast<uint32_t>(available);
 
     ChunkFieldBuilder B(fields);
-    B.UInt32("Version", h.version);
+    B.Version("Version", h.version);
 
     for (int row = 0; row < 4; ++row) {
         B.Push("Transform[" + std::to_string(row) + "]",

@@ -812,7 +812,7 @@ inline std::vector<ChunkField> InterpretAABTreeNodes(const std::shared_ptr<Chunk
     const size_t stride = 32;
 
     if (chunk->data.size() % stride != 0) {
-        fields.push_back({ "Error", "string", "Node size mismatch — expected 32-byte aligned data" });
+        fields.push_back({ "Error", "string", "Node size mismatch  expected 32-byte aligned data" });
         return fields;
     }
 
@@ -2619,8 +2619,8 @@ inline std::vector<ChunkField> InterpretLightInfo(
         fields.push_back({ "Attributes.CastShadows", "flag", "W3D_LIGHT_ATTRIBUTE_CAST_SHADOWS" });
     }
 
-    // 2) Ambient / Diffuse / Specular (0–255)
-    // one row per channel, value as “(R G B)”
+    // 2) Ambient / Diffuse / Specular (0 255)
+    // one row per channel, value as (R G B)
     auto emitRGB = [&](const char* name, uint8_t r, uint8_t g, uint8_t b) {
         // build a single value string "(R G B)"
         std::string val = "("
@@ -3114,7 +3114,7 @@ inline std::vector<ChunkField> InterpretPerFaceTexcoordIds(
     const auto& data = chunk->data;
     size_t len = data.size();
 
-    // Each Vector3i is 3×4 bytes = 12 bytes
+    // Each Vector3i is 3*4 bytes = 12 bytes
     if (len % 12 != 0) {
         fields.push_back({
             "error", "string",
@@ -3367,7 +3367,7 @@ inline std::vector<ChunkField> InterpretLOD(
     const uint8_t* ptr = chunk->data.data();
     size_t offset = 0;
 
-    // 1) RenderObjName (2×W3D_NAME_LEN chars)
+    // 1) RenderObjName (2*W3D_NAME_LEN chars)
     std::string name(reinterpret_cast<const char*>(ptr + offset), 2 * 16);
     // trim trailing nulls or spaces
     while (!name.empty() && (name.back() == '\0' || std::isspace((unsigned char)name.back()))) {
@@ -3467,9 +3467,9 @@ inline std::vector<ChunkField> InterpretPlaceHolder(
     size_t len = data.size();
 
     // We need at least:
-    //  • 4 bytes version
-    //  • 4*3*4 = 48 bytes for the 4×3 float matrix
-    //  • 4 bytes name_len
+    //  4 bytes version
+    //  4*3*4 = 48 bytes for the 4*3 float matrix
+    //  4 bytes name_len
     if (len < 4 + 48 + 4) {
         fields.push_back({ "error", "string",
             "Unexpected COLLECTION_PLACEHOLDER size: " + std::to_string(len) });
@@ -3752,7 +3752,7 @@ inline std::vector<ChunkField> InterpretEmitterLineProperties(
     if (flags & 0x00000002) names.push_back("FreezeRandom");
     if (flags & 0x00000004) names.push_back("DisableSorting");
     if (flags & 0x00000008) names.push_back("EndCaps");
-    // texture map mode is bits 24–31
+    // texture map mode is bits 24 31
     uint32_t mode = (flags & 0xFF000000) >> 24;
     switch (mode) {
     case 0: names.push_back("UniformWidthTextureMap"); break;

@@ -73,7 +73,7 @@ inline std::vector<ChunkField> InterpretSoundRObjDefinition(
         return fields;
     }
 
-    // Main CHUNKID_VARIABLES block (0x0100) — individual micro-IDs
+    // Main CHUNKID_VARIABLES block (0x0100) - individual micro-IDs
     for (const auto& child : chunk->children) {
         switch (child->id) {
         case 0x03: { float v{}; if (ReadFloat(child, v)) B.Float("m_Priority", v); break; }

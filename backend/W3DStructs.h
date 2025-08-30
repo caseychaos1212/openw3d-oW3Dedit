@@ -317,7 +317,7 @@ constexpr std::array<std::pair<uint32_t, std::string_view>, 4> VERTMAT_BASIC_FLA
 	{0x00000008, "W3DVERTMAT_DEPTH_CUE_TO_ALPHA"},
 } };
 
-// Stage‑mapping comes in nibbles at 0xF00 and 0xF000
+// Stage-mapping comes in nibbles at 0xF00 and 0xF000
 constexpr std::array<std::pair<uint8_t, std::string_view>, 6> VERTMAT_STAGE_MAPPING = { {
 	{0, "W3DVERTMAT_STAGE?_MAPPING_UV"},
 	{1, "W3DVERTMAT_STAGE?_MAPPING_ENVIRONMENT"},
@@ -359,7 +359,7 @@ struct W3dRGBStruct {
 		R = r; G = g; B = b;
 	}
 
-	// normalized‑float setter (expects [0,1])
+	// normalized-float setter (expects [0,1])
 	void Set(float r, float g, float b) noexcept {
 		// clamp to [0,1], then scale to [0,255]
 		R = static_cast<uint8_t>(std::clamp(r, 0.0f, 1.0f) * 255.0f);
@@ -395,7 +395,7 @@ struct W3dRGBStruct {
 	}
 };
 
-// free‐function aliases if you liked `+` and `*` returning new:
+// free-function aliases if you liked `+` and `*` returning new:
 inline W3dRGBStruct operator+(W3dRGBStruct a, const W3dRGBStruct& b) noexcept { return a += b; }
 inline W3dRGBStruct operator*(W3dRGBStruct a, const W3dRGBStruct& b) noexcept { return a *= b; }
 
@@ -581,7 +581,7 @@ struct W3dMeshDeform
 	uint32_t					SetCount;
 	uint32_t					AlphaPasses;
  // uint32_t					reserved[3];
-	// any trailing bytes (usually 3×4 reserved) are ignored
+	// any trailing bytes (usually 3*4 reserved) are ignored
 };
 //
 // Deform set information.  Each set is made up of a series
@@ -1131,7 +1131,7 @@ struct SimpleQuat {
 	float x{ 0 }, y{ 0 }, z{ 0 }, w{ 1 };
 };
 
-//-- the alpha‐vector per‐sphere
+//-- the alpha-vector per-sphere
 struct AlphaVectorStruct {
 	SimpleQuat angle;     // default (0,0,0,1)
 	float      intensity{ 1.0f };
@@ -1163,19 +1163,19 @@ struct W3dSphereStruct
 	//
 };
 
-//–– keyframe for color and scale channels (Vec3 + time)
+//--- keyframe for color and scale channels (Vec3 + time)
 struct W3dSphereVec3Key {
 	W3dVectorStruct  Value;  // X, Y, Z
 	float            Time;   // normalized [0..1]
 };
 
-//–– keyframe for alpha channel (scalar + time)
+//--- keyframe for alpha channel (scalar + time)
 struct W3dSphereAlphaKey {
 	float Value;  // alpha
 	float Time;   // normalized [0..1]
 };
 
-//–– keyframe for the vector channel (quat + magnitude + time)
+//--- keyframe for the vector channel (quat + magnitude + time)
 struct W3dSphereVectorKey {
 	SimpleQuat Quat;      // rotation part
 	float      Magnitude; // vector intensity
@@ -1188,7 +1188,7 @@ struct Vector2 {
 	constexpr Vector2() noexcept = default;
 	constexpr Vector2(float _x, float _y) noexcept : x(_x), y(_y) {}
 
-	// array‑style access
+	// array-style access
 	float& operator[](size_t i)       noexcept { return (i == 0 ? x : y); }
 	const float& operator[](size_t i) const noexcept { return (i == 0 ? x : y); }
 
@@ -1248,13 +1248,13 @@ struct W3dRingStruct
 	// variable set of keyframes for each channel
 };
 
-//–– keyframe for color and scale channels (Vec3 + time)
+//-- keyframe for color and scale channels (Vec3 + time)
 struct W3dRingVec3Key {
 	W3dVectorStruct  Value;  // X, Y, Z
 	float            Time;   // normalized [0..1]
 };
 
-//–– keyframe for alpha channel (scalar + time)
+//-- keyframe for alpha channel (scalar + time)
 struct W3dRingAlphaKey {
 	float Value;  // alpha
 	float Time;   // normalized [0..1]

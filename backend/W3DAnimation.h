@@ -81,7 +81,7 @@ inline std::vector<ChunkField> InterpretAnimationChannel(const std::shared_ptr<C
 
     // Gather all floats into a vector<float>
     std::vector<float> values(valueCount);
-    // First float is inside the header’s Data[0]
+    // First float is inside the headers Data[0]
     values[0] = hdr.Data[0];
     if (valueCount > 1) {
         const auto* tail = reinterpret_cast<const float*>(buf.data() + headerBytes);
