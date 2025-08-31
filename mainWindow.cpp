@@ -243,6 +243,26 @@ void MainWindow::handleTreeSelection() {
                 }
             }
         }
+        // --- SHADER MESH: wrappers & VARIABLES (0x16490430) ---
+        if (target->id == 0x0B41) {                      // SHDSUBMESH_SHADER_CLASSID
+            fields = InterpretShdSubMeshShaderClassId(target);
+        }
+        else if (target->id == 0x0B42) {                 // SHDSUBMESH_SHADER_DEF (wrapper)
+            /* wrapper – show nothing here; data lives in its 0x16490430 child */
+        }
+        else if (target->id == 0x16490430 &&             // VARIABLES under SHADER_DEF
+            target->parent && target->parent->id == 0x0B42 &&
+            target->parent->parent && target->parent->parent->id == 0x0B40)
+        {
+            fields = InterpretShdSubMeshShaderDefVariables(target);
+        }
+        // (Optional: some assets also use 0x16490450; treat it the same.)
+        else if (target->id == 0x16490450 &&             // alternate VARIABLES id seen in the wild
+            target->parent && target->parent->id == 0x0B42)
+        {
+            fields = InterpretShdSubMeshShaderDefVariables50(target);
+        
+        }
     }
 
     // --- Generic dispatch (only if still empty) ---
@@ -311,11 +331,11 @@ void MainWindow::handleTreeSelection() {
         case 0x0012: fields = InterpretDamageColors(target); break;               // OBSOLETE
         case 0x0013: fields = InterpretDamageMaterials(target); break;            // OBSOLETE
         case 0x0014: fields = InterpretMaterials2(target); break;                 // OBSOLETE
-        case 0x0015: fields = InterpretMaterials3(target); break;                 // OBSOLETE
-        case 0x0016: fields = InterpretMaterial3(target); break;                  // OBSOLETE
+      //  case 0x0015: fields = InterpretMaterials3(target); break;                 // OBSOLETE
+      //  case 0x0016: fields = InterpretMaterial3(target); break;                  // OBSOLETE
         case 0x0017: fields = InterpretMaterial3Name(target); break;              // OBSOLETE
         case 0x0018: fields = InterpretMaterial3Info(target); break;              // OBSOLETE
-        case 0x0019: fields = InterpretMaterial3DcMap(target); break;             // OBSOLETE
+      // case 0x0019: fields = InterpretMaterial3DcMap(target); break;             // OBSOLETE
         case 0x001A: fields = InterpretMap3Filename(target); break;               // OBSOLETE
         case 0x001B: fields = InterpretMap3Info(target); break;                   // OBSOLETE
         case 0x001C: fields = InterpretMaterial3DiMap(target); break;             // OBSOLETE
@@ -413,14 +433,13 @@ void MainWindow::handleTreeSelection() {
         case 0x0901: fields = InterpretDazzleName(target); break;
         case 0x0902: fields = InterpretDazzleTypeName(target); break;
         case 0x0A01: fields = InterpretSoundRObjHeader(target); break;
-    /*
         case 0x0B01: fields = InterpretShdMeshName(target); break;
 		case 0x0B02: fields = InterpretShdMeshHeader(target); break;
 		case 0x0B03: fields = InterpretShdMeshUserText(target); break;
 		case 0x0B21: fields = InterpretShdSubMeshHeader(target); break;
-		case 0x0B40: fields = InterpretShdSubMeshShader(target); break;
+//		case 0x0B40: fields = InterpretShdSubMeshShader(target); break;
 		case 0x0B41: fields = InterpretShdSubMeshShaderClassId(target); break;
-		case 0x0B42: fields = InterpretShdSubMeshShaderDef(target); break;
+//		case 0x0B42: fields = InterpretShdSubMeshShaderDef(target); break;
 		case 0x0B43: fields = InterpretShdSubMeshVertices(target); break;
 		case 0x0B44: fields = InterpretShdSubMeshVertexNormals(target); break;
 		case 0x0B45: fields = InterpretShdSubMeshTriangles(target); break;
@@ -432,10 +451,10 @@ void MainWindow::handleTreeSelection() {
 		case 0x0B4B: fields = InterpretShdSubMeshTangentBasisSXT(target); break;
 		case 0x0B4C: fields = InterpretShdSubMeshColor(target); break;
 		case 0x0B4D: fields = InterpretShdSubMeshVertexInfluences(target); break;
-		case 0x0C00: fields = InterpretSecVertices(target); break;
-		case 0x0C01: fields = InterpretSecVertexNormals(target); break;
-		case 0x0C02: fields = InterpretLightMapUV(target); break;
-            */
+	//	case 0x0C00: fields = InterpretSecVertices(target); break;
+	//	case 0x0C01: fields = InterpretSecVertexNormals(target); break;
+	//	case 0x0C02: fields = InterpretLightMapUV(target); break;
+          
         default:
             break;
         }
@@ -591,7 +610,7 @@ void MainWindow::on_actionExportChunkList_triggered()
 
     // 4) iterate .w3d files
     QDir dir(srcDir);
-    auto w3dFiles = dir.entryList(QStringList{ "*.w3d", "*.wlt" },
+    auto w3dFiles = dir.entryList(QStringList{ "*.w3d", "*.W3D", "*.wlt" },
         QDir::Files | QDir::NoSymLinks);
     for (auto& fn : w3dFiles) {
         QString full = dir.absoluteFilePath(fn);

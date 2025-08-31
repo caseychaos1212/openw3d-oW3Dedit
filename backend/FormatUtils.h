@@ -1,5 +1,6 @@
 #pragma once
 
+
 namespace FormatUtils {
 
 	inline std::string FormatVersion(uint32_t ver) {
@@ -80,4 +81,6 @@ namespace FormatUtils {
 		return oss.str();
 	}
 
-}
+	
+} 
+

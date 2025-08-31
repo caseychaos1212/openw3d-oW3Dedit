@@ -1274,6 +1274,141 @@ struct W3dSoundRObjHeaderStruct
 	uint32_t				Padding[8];
 };
 
+// Structure for W3D_CHUNK_SHDMESH_HEADER
+struct W3dShdMeshHeaderStruct {
+	uint32_t        Version;
+	uint32_t        MeshFlags;
+	uint32_t        NumTriangles;
+	uint32_t        NumVertices;
+	uint32_t        NumSubMeshes;
+	uint32_t        FutureCounts[5];
+	W3dVectorStruct BoxMin;
+	W3dVectorStruct BoxMax;
+	W3dVectorStruct SphCenter;
+	float           SphRadius;
+};
+
+// --- SubMesh level ----------------------------------------------------------
+
+struct W3dShdSubMeshHeaderStruct {
+	uint32_t        NumTriangles;
+	uint32_t        NumVertices;
+	uint32_t        FutureCounts[2];
+	W3dVectorStruct BoxMin;
+	W3dVectorStruct BoxMax;
+	W3dVectorStruct SphCenter;
+	float           SphRadius;
+};
+
+struct W3dShdSubMeshShaderClassIdStruct { uint32_t ShaderClass; };
+
+struct W3dShdSubMeshShaderDefStruct { uint32_t ShaderDefinition; };
+
+struct W3dMeshHeader1 {
+	uint32_t Version;
+	char MeshName[16];
+	uint32_t Attributes;
+	uint32_t NumTriangles;
+	uint32_t NumQuads;
+	uint32_t NumSrTris;
+	uint32_t NumPovQuads;
+	uint32_t NumVertices;
+	uint32_t NumNormals;
+	uint32_t NumSrNormals;
+	uint32_t NumTexCoords;
+	uint32_t NumMaterials;
+	uint32_t NumVertColors;
+	uint32_t NumVertInfluences;
+	uint32_t NumDamageStages;
+	uint32_t FutureCounts[8];
+	float    LODMin;
+	float    LODMax;
+	W3dVectorStruct Min;
+	W3dVectorStruct Max;
+	W3dVectorStruct SphCenter;
+	float    SphRadius;
+	W3dVectorStruct Translation;
+	float    Rotation[9];
+	W3dVectorStruct MassCenter;
+	float    Inertia[9];
+	float    Volume;
+	char     HierarchyTreeName[16];
+	char     HierarchyModelName[16];
+	uint32_t FutureUse[24];
+};
+
+struct W3dMaterial1Struct {
+	char     MaterialName[16];
+	char     PrimaryName[16];
+	char     SecondaryName[16];
+	uint32_t RenderFlags;
+	uint8_t  Red;
+	uint8_t  Green;
+	uint8_t  Blue;
+	uint8_t  Pad;
+};
+
+struct W3dSurrenderTriStruct {
+	uint32_t          VIndex[3];
+	W3dTexCoordStruct TexCoord[3];
+	uint32_t          MaterialIDx;
+	W3dVectorStruct   Normal;
+	uint32_t          Attributes;
+	W3dRGBStruct      Gouraud[3];
+};
+
+struct W3dDamageHeaderStruct {
+	uint32_t NumDamageMaterials;
+	uint32_t NumDamageVerts;
+	uint32_t NumDamageColors;
+	uint32_t DamageIndex;
+	uint32_t FutureUse[4];
+};
+
+struct W3dMeshDamageVertexStruct {
+	uint32_t        VertexIndex;
+	W3dVectorStruct NewVertex;
+};
+
+struct W3dMeshDamageColorStruct {
+	uint32_t     VertexIndex;
+	W3dRGBStruct NewColor;
+};
+
+struct W3dMaterial2Struct {
+	char     MaterialName[16];
+	char     PrimaryName[16];
+	char     SecondaryName[16];
+	uint32_t RenderFlags;
+	uint8_t  Red;
+	uint8_t  Green;
+	uint8_t  Blue;
+	uint8_t  Alpha;
+	uint16_t PrimaryNumFrames;
+	uint16_t SecondaryNumFrames;
+	char     Padding[12];
+};
+
+struct W3dMaterial3Struct {
+	uint32_t     Material3Flags;
+	W3dRGBStruct DiffuseColor;
+	W3dRGBStruct SpecularColor;
+	W3dRGBStruct EmissiveCoefficients;
+	W3dRGBStruct AmbientCoefficients;
+	W3dRGBStruct DiffuseCoefficients;
+	W3dRGBStruct SpecularCoefficients;
+	float        Shininess;
+	float        Opacity;
+	float        Translucency;
+	float        FogCoeff;
+};
+
+struct W3dMap3Struct {
+	uint16_t MappingType;
+	uint16_t FrameCount;
+	uint32_t FrameRate;
+};
+
 // A tiny fluent helper to build up a vector<ChunkField>
 struct ChunkFieldBuilder {
 	std::vector<ChunkField>& F;
@@ -1307,6 +1442,7 @@ struct ChunkFieldBuilder {
 		size_t realLen = strnlen(dataPtr, scanLen);
 		Push(std::move(fieldName), "string", std::string(dataPtr, realLen));
 	}
+
 
 	void UInt8(std::string name, uint8_t v) {
 		Push(std::move(name), "uint8", std::to_string(v));

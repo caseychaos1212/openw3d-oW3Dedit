@@ -11,118 +11,6 @@ inline std::vector<ChunkField> ObsoleteStub(const char* name) {
     return { { "info", "string", std::string("OBSOLETE: ") + name + " (no structure)" } };
 }
 
-#pragma pack(push,1)
-struct W3dMeshHeader1 {
-    uint32_t Version;
-    char MeshName[16];
-    uint32_t Attributes;
-    uint32_t NumTriangles;
-    uint32_t NumQuads;
-    uint32_t NumSrTris;
-    uint32_t NumPovQuads;
-    uint32_t NumVertices;
-    uint32_t NumNormals;
-    uint32_t NumSrNormals;
-    uint32_t NumTexCoords;
-    uint32_t NumMaterials;
-    uint32_t NumVertColors;
-    uint32_t NumVertInfluences;
-    uint32_t NumDamageStages;
-    uint32_t FutureCounts[8];
-    float    LODMin;
-    float    LODMax;
-    W3dVectorStruct Min;
-    W3dVectorStruct Max;
-    W3dVectorStruct SphCenter;
-    float    SphRadius;
-    W3dVectorStruct Translation;
-    float    Rotation[9];
-    W3dVectorStruct MassCenter;
-    float    Inertia[9];
-    float    Volume;
-    char     HierarchyTreeName[16];
-    char     HierarchyModelName[16];
-    uint32_t FutureUse[24];
-};
-
-struct W3dMaterial1Struct {
-    char     MaterialName[16];
-    char     PrimaryName[16];
-    char     SecondaryName[16];
-    uint32_t RenderFlags;
-    uint8_t  Red;
-    uint8_t  Green;
-    uint8_t  Blue;
-    uint8_t  Pad;
-};
-
-struct W3dSurrenderTriStruct {
-    uint32_t          VIndex[3];
-    W3dTexCoordStruct TexCoord[3];
-    uint32_t          MaterialIDx;
-    W3dVectorStruct   Normal;
-    uint32_t          Attributes;
-    W3dRGBStruct      Gouraud[3];
-};
-
-struct W3dDamageHeaderStruct {
-    uint32_t NumDamageMaterials;
-    uint32_t NumDamageVerts;
-    uint32_t NumDamageColors;
-    uint32_t DamageIndex;
-    uint32_t FutureUse[4];
-};
-
-struct W3dMeshDamageVertexStruct {
-    uint32_t        VertexIndex;
-    W3dVectorStruct NewVertex;
-};
-
-struct W3dMeshDamageColorStruct {
-    uint32_t     VertexIndex;
-    W3dRGBStruct NewColor;
-};
-
-struct W3dMaterial2Struct {
-    char     MaterialName[16];
-    char     PrimaryName[16];
-    char     SecondaryName[16];
-    uint32_t RenderFlags;
-    uint8_t  Red;
-    uint8_t  Green;
-    uint8_t  Blue;
-    uint8_t  Alpha;
-    uint16_t PrimaryNumFrames;
-    uint16_t SecondaryNumFrames;
-    char     Padding[12];
-};
-
-struct W3dMaterial3Struct {
-    uint32_t     Material3Flags;
-    W3dRGBStruct DiffuseColor;
-    W3dRGBStruct SpecularColor;
-    W3dRGBStruct EmissiveCoefficients;
-    W3dRGBStruct AmbientCoefficients;
-    W3dRGBStruct DiffuseCoefficients;
-    W3dRGBStruct SpecularCoefficients;
-    float        Shininess;
-    float        Opacity;
-    float        Translucency;
-    float        FogCoeff;
-};
-
-struct W3dMap3Struct {
-    uint16_t MappingType;
-    uint16_t FrameCount;
-    uint32_t FrameRate;
-};
-
-
-
-
-
-
-#pragma pack(pop)
 
 inline std::vector<ChunkField> InterpretMeshHeader(const std::shared_ptr<ChunkItem>& chunk) {
     std::vector<ChunkField> fields; if (!chunk) return fields;
@@ -226,6 +114,8 @@ inline std::vector<ChunkField> InterpretQuadranglesO(const std::shared_ptr<Chunk
     return ObsoleteStub("O_W3D_CHUNK_QUADRANGLES");
 }
 
+
+//TODO: FIX
 inline std::vector<ChunkField> InterpretSurrenderTriangles(const std::shared_ptr<ChunkItem>& chunk) {
     std::vector<ChunkField> fields; if (!chunk) return fields;
     auto parsed = ParseChunkArray<W3dSurrenderTriStruct>(chunk);
@@ -338,6 +228,7 @@ inline std::vector<ChunkField> InterpretDamageColors(const std::shared_ptr<Chunk
 inline std::vector<ChunkField> InterpretDamageMaterials(const std::shared_ptr<ChunkItem>&) {
     return ObsoleteStub("W3D_CHUNK_DAMAGE_MATERIALS");
 }
+
 
 inline std::vector<ChunkField> InterpretMaterials2(const std::shared_ptr<ChunkItem>& chunk) {
     std::vector<ChunkField> fields; if (!chunk) return fields;

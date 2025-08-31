@@ -25,6 +25,7 @@
 #include "W3DPrimatives.h"
 #include "W3DSoundRenderObj.h"
 #include "W3DObsolete.h"
+#include "W3DShdMesh.h"
 
 
 

@@ -17,6 +17,8 @@ inline bool IsForcedWrapper(uint32_t id, uint32_t parent = 0)
 {
     switch (id) {
     case 0x0000: // W3D_CHUNK_MESH
+    case 0x0015: // W3D_CHUNK_MATERIALS3
+	case 0x0016: // W3D_CHUNK_MATERIAL3
     case 0x0023: // W3D_CHUNK_PRELIT_UNLIT
     case 0x0024: // W3D_CHUNK_PRELIT_VERTEX
     case 0x0025: // W3D_CHUNK_LIGHTMAP_MULTI_PASS
@@ -25,6 +27,7 @@ inline bool IsForcedWrapper(uint32_t id, uint32_t parent = 0)
     case 0x002B: // W3D_CHUNK_VERTEX_MATERIAL
     case 0x0030: //W3D_CHUNK_TEXTURES
     case 0x0031: // W3D_CHUNK_TEXTURE
+    case 0x0038: // W3D_CHUNK_MATERIAL_PASS
     case 0x0048: // W3D_CHUNK_TEXTURE_STAGE
     case 0x0058: // W3D_CHUNK_DEFORM
     case 0x0059: // W3D_CHUNK_DEFORM_SET
@@ -33,6 +36,7 @@ inline bool IsForcedWrapper(uint32_t id, uint32_t parent = 0)
     case 0x0090: // W3D_CHUNK_AABTREE
     case 0x0100: // W3D_CHUNK_HIERARCHY
     case 0x0200: // W3D_CHUNK_ANIMATION
+	case 0x0280: // W3D_CHUNK_COMPRESSED_ANIMATION
     case 0x02C0: // W3D_CHUNK_MORPH_ANIMATION
     case 0x02C2: // W3D_CHUNK_MORPH_CHANNEL
     case 0x0300: // W3D_CHUNK_HMODEL
@@ -44,14 +48,19 @@ inline bool IsForcedWrapper(uint32_t id, uint32_t parent = 0)
     case 0x0700: // W3D_CHUNK_HLOD
     case 0x0702: // W3D_CHUNK_HLOD_LOD_ARRAY
     case 0x0706:  // W3D_CHUNK_HLOD_PROXY_ARRAY
+	case 0x0707: // W3D_CHUNK_HLOD_LIGHT_ARRAY
     case 0x0800: // W3D_CHUNK_LIGHTSCAPE
+	case 0x0801: // W3D_CHUNK_LIGHTSCAPE_LIGHT
     case 0x0900: // W3D_CHUNK_DAZZLE
+	case 0x0A00: // W3D_CHUNK_SOUNDROBJ
+    case 0x0B01: // W3D_CHUNK_SHDMESH
+    case 0x0B20: // W3D_CHUNK_SHDSUBMESH
+    case 0x0B40: // W3D_CHUNK_SHDSUBMESH_SHADER
+
 
         return true;
 
-        // You can add more here if needed in the future:
-        // case 0x0030: /* W3D_CHUNK_TEXTURES */ return true;
-        // case 0x0029: /* W3D_CHUNK_SHADERS  */ return true;
+
 
     default:
         (void)parent; // parent available if you later need parent-sensitive overrides

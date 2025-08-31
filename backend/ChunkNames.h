@@ -232,6 +232,8 @@ inline std::string GetChunkName(uint32_t id, uint32_t parentId = 0) {
         { 0x0C00, "W3D_CHUNK_SECONDARY_VERTICES" },   // BFMEII: aka VERTICES_COPY
         { 0x0C01, "W3D_CHUNK_SECONDARY_VERTEX_NORMALS" }, // BFMEII: aka VERTEX_NORMALS_COPY
         { 0x0C02, "W3D_CHUNK_LIGHTMAP_UV" },          // BFMEII
+        { 0x16490430, "W3D_CHUNK_SHDDEF_CLASS_VARS" },   // base vars: Name, SurfaceType
+        { 0x16490450, "W3D_CHUNK_SHDDEF_PARAM_VARS" },   // per-shader params: TextureName, Colors, Bumpiness
     };
 
     auto it = chunkNames.find(id);

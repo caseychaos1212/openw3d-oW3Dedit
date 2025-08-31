@@ -6,7 +6,7 @@
 #include <cstring>
 #include <iomanip>
 
-
+// TODO: Collision types need a look at
 inline std::vector<ChunkField> InterpretBox(const std::shared_ptr<ChunkItem>& chunk) {
     std::vector<ChunkField> fields;
     if (!chunk) return fields;
