@@ -53,6 +53,11 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
         lastDirectory = QDir::homePath();
     UpdateRecentFilesMenu();
     // create the menu & action
+    QMenu* viewMenu = menuBar()->addMenu("&View");
+    QAction* expandAllAction = viewMenu->addAction("Expand All");
+    QAction* collapseAllAction = viewMenu->addAction("Collapse All");
+    connect(expandAllAction, &QAction::triggered, treeWidget, &QTreeWidget::expandAll);
+    connect(collapseAllAction, &QAction::triggered, treeWidget, &QTreeWidget::collapseAll);
     auto batchMenu = menuBar()->addMenu(tr("Batch Tools"));
     auto exportChunksAct = new QAction(tr("Export Chunk List..."), this);
     batchMenu->addAction(exportChunksAct);
@@ -143,7 +148,7 @@ void MainWindow::populateTree() {
         addChildren(item, chunk);
     }
 
-    treeWidget->expandAll();
+    treeWidget->collapseAll();
     connect(treeWidget, &QTreeWidget::itemSelectionChanged, this, &MainWindow::handleTreeSelection);
 
 }
