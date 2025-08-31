@@ -104,3 +104,7 @@ inline std::vector<ChunkField> InterpretPivotFixups(const std::shared_ptr<ChunkI
     return fields;
 }
 
+
+inline std::vector<ChunkField> InterpretPivotUnknown(const std::shared_ptr<ChunkItem>&) {
+    return Undefined("W3D_CHUNK_PIVOT_UNKNOWN1");
+}

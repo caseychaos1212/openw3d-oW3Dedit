@@ -248,7 +248,7 @@ void MainWindow::handleTreeSelection() {
             fields = InterpretShdSubMeshShaderClassId(target);
         }
         else if (target->id == 0x0B42) {                 // SHDSUBMESH_SHADER_DEF (wrapper)
-            /* wrapper – show nothing here; data lives in its 0x16490430 child */
+            /* wrapper - show nothing here; data lives in its 0x16490430 child */
         }
         else if (target->id == 0x16490430 &&             // VARIABLES under SHADER_DEF
             target->parent && target->parent->id == 0x0B42 &&
@@ -358,16 +358,18 @@ void MainWindow::handleTreeSelection() {
         case 0x003B: fields = InterpretDCG(target); break;
         case 0x003C: fields = InterpretDIG(target); break;
         case 0x003E: fields = InterpretSCG(target); break;
-  //    case 0x003F: fields = InterpretShaderMaterialId(target); break;           // BFME2 optional (if you have one)
+        case 0x003F: fields = InterpretShaderMaterialId(target); break;           // BFME2 optional (if you have one)
         case 0x0049: fields = InterpretTextureIDs(target); break;
         case 0x004A: fields = InterpretStageTexCoords(target); break;
         case 0x004B: fields = InterpretPerFaceTexcoordIds(target); break;
+        case 0x0052: fields = InterpretShaderMaterialHeader(target); break;       // BFME2
+        case 0x0053: fields = InterpretShaderMaterialProperty(target); break;     // BFME2
         case 0x0058: fields = InterpretDeform(target); break;
         case 0x0059: fields = InterpretDeformSet(target); break;
         case 0x005A: fields = InterpretDeformKeyframes(target); break;
         case 0x005B: fields = InterpretDeformData(target); break;
-   //   case 0x0060: fields = InterpretTangents(target); break;                   // if implemented
-  //    case 0x0061: fields = InterpretBinormals(target); break;                  // if implemented
+        case 0x0060: fields = InterpretTangents(target); break;                   // if implemented
+        case 0x0061: fields = InterpretBinormals(target); break;                  // if implemented
         case 0x0080: fields = InterpretPS2Shaders(target); break;
         case 0x0091: fields = InterpretAABTreeHeader(target); break;
         case 0x0092: fields = InterpretAABTreePolyIndices(target); break;
@@ -376,14 +378,14 @@ void MainWindow::handleTreeSelection() {
         case 0x0101: fields = InterpretHierarchyHeader(target); break;
         case 0x0102: fields = InterpretPivots(target); break;
         case 0x0103: fields = InterpretPivotFixups(target); break;
-     // case 0x0104: fields = InterpretPivotUnknown(target); break;
+        case 0x0104: fields = InterpretPivotUnknown(target); break;
         case 0x0201: fields = InterpretAnimationHeader(target); break;
         case 0x0202: fields = InterpretAnimationChannel(target); break;
         case 0x0203: fields = InterpretBitChannel(target); break;
         case 0x0281: fields = InterpretCompressedAnimationHeader(target); break;
         case 0x0282: fields = InterpretCompressedAnimationChannel(target, (flavor != 0xFFFF ? flavor : 0)); break;
         case 0x0283: fields = InterpretCompressedBitChannel(target); break;
-//      case 0x0284: fields = InterpretCompressedMotionChannel(target); break;
+        case 0x0284: fields = InterpretCompressedMotionChannel(target); break;
         case 0x02C1: fields = InterpretMorphAnimHeader(target); break;
         case 0x02C3: fields = InterpretMorphAnimPoseName(target); break;
         case 0x02C4: fields = InterpretMorphAnimKeyData(target); break;
@@ -405,8 +407,8 @@ void MainWindow::handleTreeSelection() {
         case 0x0462: fields = InterpretSpotLightInfo(target); break;
         case 0x0463: fields = InterpretNearAtten(target); break;
         case 0x0464: fields = InterpretFarAtten(target); break;
-	//	case 0x0465: fields = InterpretSpotLightInfoTT(target); break;
-    //  case 0x0466: fields = InterpretLightPulse(target); break;
+		case 0x0465: fields = InterpretSpotLightInfoTT(target); break;
+        case 0x0466: fields = InterpretLightPulse(target); break;
         case 0x0501: fields = InterpretEmitterHeader(target); break;
         case 0x0502: fields = InterpretEmitterUserData(target); break;
         case 0x0503: fields = InterpretEmitterInfo(target); break;
@@ -419,7 +421,7 @@ void MainWindow::handleTreeSelection() {
         case 0x050A: fields = InterpretEmitterRotationKeys(target); break;
         case 0x050B: fields = InterpretEmitterFrameKeys(target); break;
         case 0x050C: fields = InterpretEmitterBlurTimeKeyframes(target); break;
-//      case 0x050D: fields = InterpretEmitterExtraInfo(target); break;
+        case 0x050D: fields = InterpretEmitterExtraInfo(target); break;
         case 0x0601: fields = InterpretAggregateHeader(target); break;
         case 0x0602: fields = InterpretAggregateInfo(target); break;
         case 0x0603: fields = InterpretTextureReplacerInfo(target); break;
@@ -451,9 +453,9 @@ void MainWindow::handleTreeSelection() {
 		case 0x0B4B: fields = InterpretShdSubMeshTangentBasisSXT(target); break;
 		case 0x0B4C: fields = InterpretShdSubMeshColor(target); break;
 		case 0x0B4D: fields = InterpretShdSubMeshVertexInfluences(target); break;
-	//	case 0x0C00: fields = InterpretSecVertices(target); break;
-	//	case 0x0C01: fields = InterpretSecVertexNormals(target); break;
-	//	case 0x0C02: fields = InterpretLightMapUV(target); break;
+		case 0x0C00: fields = InterpretSecondaryVertices(target); break;
+		case 0x0C01: fields = InterpretSecondaryVertexNormals(target); break;
+		case 0x0C02: fields = InterpretLightMapUV(target); break;
           
         default:
             break;

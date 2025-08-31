@@ -886,6 +886,23 @@ struct W3dLightAttenuationStruct
 	float				End;
 };
 
+struct W3dSpotLightTTStruct
+{
+	float				SpotOuterAngle;
+	float				SpotInnerAngle;
+};
+
+struct W3dLightPulseTTStruct
+{
+	float MinIntensity;
+	float MaxIntensity;
+	float IntensityTime;
+	float IntensityTimeRandom;
+	float IntensityAdjust;
+	char IntensityStopsAtMax;
+	char IntensityStopsAtMin;
+};
+
 struct W3dEmitterHeaderStruct
 {
 	uint32_t				Version;
@@ -1021,6 +1038,12 @@ struct W3dEmitterBlurTimeKeyframeStruct
 {
 	float			Time;
 	float			BlurTime;
+};
+
+struct W3dEmitterExtraInfoStruct
+{
+	float			FutureStartTime;
+	uint32_t		Padding[9];	
 };
 
 struct W3dAggregateHeaderStruct
@@ -1409,6 +1432,23 @@ struct W3dMap3Struct {
 	uint32_t FrameRate;
 };
 
+struct W3dShaderMaterialHeaderStruct {
+	uint8_t Version;
+	char ShaderName[32];
+	uint8_t Technique;
+	uint8_t Padding[3];
+};
+
+enum class ShaderMaterialFlag : uint32_t {
+	CONSTANT_TYPE_TEXTURE = 0x1,
+	CONSTANT_TYPE_FLOAT1 = 0x2,
+	CONSTANT_TYPE_FLOAT2 = 0x3,
+	CONSTANT_TYPE_FLOAT3 = 0x4,
+	CONSTANT_TYPE_FLOAT4 = 0x5,
+	CONSTANT_TYPE_INT = 0x6,
+	CONSTANT_TYPE_BOOL = 0x7,
+};
+
 // A tiny fluent helper to build up a vector<ChunkField>
 struct ChunkFieldBuilder {
 	std::vector<ChunkField>& F;
@@ -1604,3 +1644,7 @@ struct ChunkFieldBuilder {
 		}
 	}
 };
+
+inline std::vector<ChunkField> Undefined(const char* name) {
+	return { { "info", "string", std::string("Undefined: ") + name + " (no structure)" } };
+}

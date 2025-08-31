@@ -193,6 +193,98 @@ inline std::vector<ChunkField> InterpretVertexNormals(const std::shared_ptr<Chun
     return fields;
 }
 
+inline std::vector<ChunkField> InterpretTangents(const std::shared_ptr<ChunkItem>& chunk) {
+    std::vector<ChunkField> fields;
+    if (!chunk) return fields;
+
+    auto parsed = ParseChunkArray<W3dVectorStruct>(chunk);
+    if (auto err = std::get_if<std::string>(&parsed)) {
+        fields.emplace_back("error", "string", "Malformed TANGENTS chunk: " + *err);
+        return fields;
+    }
+
+    const auto& data = std::get<std::vector<W3dVectorStruct>>(parsed);
+
+    ChunkFieldBuilder B(fields);
+    for (size_t i = 0; i < data.size(); ++i) {
+        B.Vec3(
+            "Tangent[" + std::to_string(i) + "]",
+            data[i]
+        );
+    }
+
+    return fields;
+}
+
+inline std::vector<ChunkField> InterpretBinormals(const std::shared_ptr<ChunkItem>& chunk) {
+    std::vector<ChunkField> fields;
+    if (!chunk) return fields;
+
+    auto parsed = ParseChunkArray<W3dVectorStruct>(chunk);
+    if (auto err = std::get_if<std::string>(&parsed)) {
+        fields.emplace_back("error", "string", "Malformed BINORMALS chunk: " + *err);
+        return fields;
+    }
+
+    const auto& data = std::get<std::vector<W3dVectorStruct>>(parsed);
+
+    ChunkFieldBuilder B(fields);
+    for (size_t i = 0; i < data.size(); ++i) {
+        B.Vec3(
+            "Binormal[" + std::to_string(i) + "]",
+            data[i]
+        );
+    }
+
+    return fields;
+}
+
+inline std::vector<ChunkField> InterpretSecondaryVertices(const std::shared_ptr<ChunkItem>& chunk) {
+    std::vector<ChunkField> fields;
+    if (!chunk) return fields;
+
+    auto parsed = ParseChunkArray<W3dVectorStruct>(chunk);
+    if (auto err = std::get_if<std::string>(&parsed)) {
+        fields.emplace_back("error", "string", "Malformed SECONDARY_VERTICES chunk: " + *err);
+        return fields;
+    }
+
+    const auto& data = std::get<std::vector<W3dVectorStruct>>(parsed);
+
+    ChunkFieldBuilder B(fields);
+    for (size_t i = 0; i < data.size(); ++i) {
+        B.Vec3(
+            "SecondaryVertex[" + std::to_string(i) + "]",
+            data[i]
+        );
+    }
+
+    return fields;
+}
+
+inline std::vector<ChunkField> InterpretSecondaryVertexNormals(const std::shared_ptr<ChunkItem>& chunk) {
+    std::vector<ChunkField> fields;
+    if (!chunk) return fields;
+
+    auto parsed = ParseChunkArray<W3dVectorStruct>(chunk);
+    if (auto err = std::get_if<std::string>(&parsed)) {
+        fields.emplace_back("error", "string", "Malformed SECONDARY_VERTEX_NORMALS chunk: " + *err);
+        return fields;
+    }
+
+    const auto& data = std::get<std::vector<W3dVectorStruct>>(parsed);
+
+    ChunkFieldBuilder B(fields);
+    for (size_t i = 0; i < data.size(); ++i) {
+        B.Vec3(
+            "SecondaryNormal[" + std::to_string(i) + "]",
+            data[i]
+        );
+    }
+
+    return fields;
+}
+
 
 
 //leaving trailing ...
@@ -635,6 +727,28 @@ inline std::vector<ChunkField> InterpretShaderIDs(
     return fields;
 }
 
+inline std::vector<ChunkField> InterpretShaderMaterialId(
+    const std::shared_ptr<ChunkItem>& chunk
+) {
+    std::vector<ChunkField> fields;
+    if (!chunk) return fields;
+
+    auto parsed = ParseChunkArray<uint32_t>(chunk);
+    if (auto err = std::get_if<std::string>(&parsed)) {
+        fields.emplace_back("error", "string",
+            "Malformed Shader_Material_ID chunk: " + *err);
+        return fields;
+    }
+
+    const auto& data = std::get<std::vector<uint32_t>>(parsed);
+
+    ChunkFieldBuilder B(fields);
+    for (size_t i = 0; i < data.size(); ++i) {
+        B.UInt32("Face[" + std::to_string(i) + "] FX Shader Index", static_cast<uint32_t>(data[i]));
+    }
+    return fields;
+}
+
 inline std::vector<ChunkField> InterpretDCG(const std::shared_ptr<ChunkItem>& chunk) {
     std::vector<ChunkField> fields;
     if (!chunk) return fields;
@@ -760,6 +874,81 @@ inline std::vector<ChunkField> InterpretPerFaceTexcoordIds(const std::shared_ptr
         B.Vec3i(
             "Face[" + std::to_string(i) + "].UVIndices", data[i]);
     }
+
+    return fields;
+}
+
+inline std::vector<ChunkField> InterpretShaderMaterialHeader(
+    const std::shared_ptr<ChunkItem>& chunk
+) {
+    std::vector<ChunkField> fields;
+    if (!chunk) return fields;
+
+    auto parsed = ParseChunkStruct<W3dShaderMaterialHeaderStruct>(chunk);
+    if (auto err = std::get_if<std::string>(&parsed)) {
+        fields.emplace_back("error", "string",
+            "Malformed Shader_Material_Header chunk: " + *err);
+        return fields;
+    }
+
+    const auto& data = std::get<W3dShaderMaterialHeaderStruct>(parsed);
+
+    ChunkFieldBuilder B(fields);
+    B.UInt8("Version", data.Version);
+    B.Name("ShaderName", data.ShaderName, 32);
+    B.UInt8("Technique", data.Technique);
+    B.UInt8("Padding[0]", data.Padding[0]);
+    B.UInt8("Padding[1]", data.Padding[1]);
+    B.UInt8("Padding[2]", data.Padding[2]);
+
+    return fields;
+}
+
+inline std::vector<ChunkField> InterpretShaderMaterialProperty(
+    const std::shared_ptr<ChunkItem>& chunk
+) {
+    std::vector<ChunkField> fields;
+    if (!chunk) return fields;
+
+    const auto& buf = chunk->data;
+    if (buf.size() < 8) {
+        fields.emplace_back("error", "string",
+            "Malformed Shader_Material_Property chunk: size < 8");
+        return fields;
+    }
+
+    uint32_t type = *reinterpret_cast<const uint32_t*>(buf.data());
+    uint32_t nameLen = *reinterpret_cast<const uint32_t*>(buf.data() + 4);
+    if (buf.size() < 8 + nameLen) {
+        fields.emplace_back("error", "string",
+            "Malformed Shader_Material_Property chunk: NameLength exceeds data size");
+        return fields;
+    }
+
+    std::string name(reinterpret_cast<const char*>(buf.data() + 8), nameLen);
+
+    ChunkFieldBuilder B(fields);
+    B.UInt32("Type", type);
+    switch (static_cast<ShaderMaterialFlag>(type)) {
+    case ShaderMaterialFlag::CONSTANT_TYPE_TEXTURE:
+        B.Push("Type", "flag", "CONSTANT_TYPE_TEXTURE"); break;
+    case ShaderMaterialFlag::CONSTANT_TYPE_FLOAT1:
+        B.Push("Type", "flag", "CONSTANT_TYPE_FLOAT1"); break;
+    case ShaderMaterialFlag::CONSTANT_TYPE_FLOAT2:
+        B.Push("Type", "flag", "CONSTANT_TYPE_FLOAT2"); break;
+    case ShaderMaterialFlag::CONSTANT_TYPE_FLOAT3:
+        B.Push("Type", "flag", "CONSTANT_TYPE_FLOAT3"); break;
+    case ShaderMaterialFlag::CONSTANT_TYPE_FLOAT4:
+        B.Push("Type", "flag", "CONSTANT_TYPE_FLOAT4"); break;
+    case ShaderMaterialFlag::CONSTANT_TYPE_INT:
+        B.Push("Type", "flag", "CONSTANT_TYPE_INT"); break;
+    case ShaderMaterialFlag::CONSTANT_TYPE_BOOL:
+        B.Push("Type", "flag", "CONSTANT_TYPE_BOOL"); break;
+    default:
+        break;
+    }
+    B.UInt32("NameLength", nameLen);
+    B.Push("ConstantName", "string", name);
 
     return fields;
 }
@@ -998,6 +1187,11 @@ inline std::vector<ChunkField> InterpretAABTreeNodes(const std::shared_ptr<Chunk
     return fields;
 }
 
+
+
+inline std::vector<ChunkField> InterpretLightMapUV(const std::shared_ptr<ChunkItem>&) {
+    return Undefined("InterpretLightMapUV");
+}
 
 
 

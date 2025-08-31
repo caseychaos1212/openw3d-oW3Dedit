@@ -376,7 +376,7 @@ InterpretShdSubMeshShaderDefVariables50(const std::shared_ptr<ChunkItem>& chunk)
             break;
 
         default:
-            // Unknown micro-var: show its id and length so we don’t hide data
+            // Unknown micro-var: show its id and length so we don't hide data
             B.Push("UnknownVar[" + std::to_string(id) + "]", "bytes",
                 std::to_string(size));
             break;

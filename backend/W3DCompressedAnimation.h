@@ -189,3 +189,131 @@ inline std::vector<ChunkField> InterpretCompressedBitChannel(const std::shared_p
 
     return fields;
 }
+
+// BFME2: Compressed Motion Channel (header = 8 bytes)
+inline std::vector<ChunkField>
+InterpretCompressedMotionChannel(const std::shared_ptr<ChunkItem>& chunk)
+{
+    std::vector<ChunkField> fields;
+    if (!chunk) return fields;
+
+    const auto& buf = chunk->data;
+    if (buf.size() < 8) {
+        fields.emplace_back("error", "string", "Too small for MotionChannel header (need 8 bytes)");
+        return fields;
+    }
+
+    // Header layout
+    const uint8_t  Zero = buf[0];
+    const uint8_t  Flavor = buf[1]; // 0=TIMECODED, 1=ADAPTIVE_DELTA_4, 2=ADAPTIVE_DELTA_8
+    const uint8_t  VectorLen = buf[2];
+    const uint8_t  Flags = buf[3];
+    const uint16_t NumTimeCodes = *reinterpret_cast<const uint16_t*>(&buf[4]);
+    const uint16_t Pivot = *reinterpret_cast<const uint16_t*>(&buf[6]);
+
+    ChunkFieldBuilder B(fields);
+    B.UInt8("Zero", Zero);
+    // Flavor name
+    const char* flavorName = nullptr;
+    switch (Flavor) {
+    case 0: flavorName = "TIMECODED"; break;
+    case 1: flavorName = "ADAPTIVE_DELTA_4"; break;
+    case 2: flavorName = "ADAPTIVE_DELTA_8"; break;
+    default: break;
+    }
+    B.Push("Flavor", "string", flavorName ? flavorName : ("Unknown(" + std::to_string(Flavor) + ")"));
+    B.UInt8("VectorLen", VectorLen);
+
+    // Channel type name (re-uses your helper from elsewhere)
+    if (const char* nm = CompressedChannelTypeName(Flags)) {
+        B.Push("ChannelType", "string", nm);
+    }
+    else {
+        B.Push("ChannelType", "string", "Unknown(" + std::to_string(Flags) + ")");
+    }
+
+    // wdump prints NumTimeCodes as Int32; we keep it as 16-bit but show both for clarity if you like:
+    B.UInt16("NumTimeCodes", NumTimeCodes);
+    B.UInt16("Pivot", Pivot);
+
+    const size_t N = buf.size();
+    const size_t HDR = 8;
+
+    if (Flavor == 0) {
+        // -------- Timecoded -------------------------------------------------
+        // keyframes: NumTimeCodes * uint16 immediately after header
+        const size_t keyBytes = static_cast<size_t>(NumTimeCodes) * 2;
+        if (HDR + keyBytes > N) {
+            B.Push("warning", "string", "Truncated before keyframes");
+            return fields;
+        }
+
+        // Emit keyframes
+        const auto* key16 = reinterpret_cast<const uint16_t*>(buf.data() + HDR);
+        for (uint32_t i = 0; i < NumTimeCodes; ++i) {
+            B.UInt16("KeyFrames[" + std::to_string(i) + "]", key16[i]);
+        }
+
+        // Values (uint32): VectorLen * NumTimeCodes words after keyframes (+2 pad if NumTimeCodes is odd)
+        size_t pos = HDR + keyBytes;
+        if (NumTimeCodes & 1) {
+            if (pos + 2 > N) {
+                B.Push("warning", "string", "Missing 2-byte pad after odd keyframe count");
+                return fields;
+            }
+            pos += 2;
+        }
+
+        const size_t neededWords = static_cast<size_t>(VectorLen) * static_cast<size_t>(NumTimeCodes);
+        const size_t availWords = (pos <= N) ? ((N - pos) / 4) : 0;
+        const size_t words = std::min(neededWords, availWords);
+
+        if (words < neededWords) {
+            B.Push("warning", "string",
+                "Buffer holds only " + std::to_string(words) +
+                " data words; expected " + std::to_string(neededWords));
+        }
+
+        const auto* w = reinterpret_cast<const uint32_t*>(buf.data() + pos);
+        for (size_t i = 0; i < words; ++i) {
+            B.UInt32("Data[" + std::to_string(i) + "]", w[i]);
+        }
+        return fields;
+    }
+
+    // -------- Adaptive Delta (Flavor 1 or 2) -------------------------------
+    // Layout:
+    //   float Scale;
+    //   float Initial[VectorLen];
+    //   uint32 Data[ ... rest ... ]
+    if (N < HDR + 4) {
+        B.Push("warning", "string", "Truncated before Scale");
+        return fields;
+    }
+    float scale = 0.0f;
+    std::memcpy(&scale, buf.data() + HDR, 4);
+    B.Float("Scale", scale);
+
+    const size_t initBytes = static_cast<size_t>(VectorLen) * 4;
+    const size_t initStart = HDR + 4;
+    if (initStart + initBytes > N) {
+        B.Push("warning", "string", "Truncated before Initial[]");
+        return fields;
+    }
+
+    const float* init = reinterpret_cast<const float*>(buf.data() + initStart);
+    for (uint32_t i = 0; i < VectorLen; ++i) {
+        B.Float("Initial[" + std::to_string(i) + "]", init[i]);
+    }
+
+    const size_t dataStart = initStart + initBytes;
+    if (dataStart > N) return fields;
+    const size_t dataWords = (N - dataStart) / 4;
+
+    const auto* w = reinterpret_cast<const uint32_t*>(buf.data() + dataStart);
+    for (size_t i = 0; i < dataWords; ++i) {
+        B.UInt32("Data[" + std::to_string(i) + "]", w[i]);
+    }
+
+    return fields;
+}

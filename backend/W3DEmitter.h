@@ -407,3 +407,20 @@ inline std::vector<ChunkField> InterpretEmitterBlurTimeKeyframes(
     return fields;
 }
 
+
+inline std::vector<ChunkField> InterpretEmitterExtraInfo(const std::shared_ptr<ChunkItem>& chunk) {
+    std::vector<ChunkField> fields; if (!chunk) return fields;
+
+    auto v = ParseChunkStruct<W3dEmitterExtraInfoStruct>(chunk);
+    if (auto err = std::get_if<std::string>(&v)) {
+        fields.emplace_back("error", "string", "Malformed EXTRA_INFO: " + *err);
+        return fields;
+    }
+    const auto& info = std::get<W3dEmitterExtraInfoStruct>(v);
+
+    ChunkFieldBuilder B(fields);
+    
+    B.Float("FutureStartTime", info.FutureStartTime);
+
+    return fields;
+}

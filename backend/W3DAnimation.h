@@ -199,3 +199,4 @@ inline std::vector<ChunkField> InterpretBitChannel(const std::shared_ptr<ChunkIt
 
     return fields;
 }
+
