@@ -70,6 +70,8 @@ inline bool IsForcedWrapper(uint32_t id, uint32_t parent = 0)
 
 
 bool ChunkData::loadFromFile(const std::string& filename) {
+    // Ensure previous data does not persist between loads
+    clear();
     std::ifstream file(filename, std::ios::binary);
     if (!file) {
         std::cerr << "Failed to open file: " << filename << "\n";

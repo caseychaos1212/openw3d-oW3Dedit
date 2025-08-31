@@ -49,6 +49,8 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     recentFilesPath = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation) + "/recent_files.txt";
     recentFilesMenu = fileMenu->addMenu("Open Recent");
     LoadRecentFiles();
+    if (lastDirectory.isEmpty())
+        lastDirectory = QDir::homePath();
     UpdateRecentFilesMenu();
     // create the menu & action
     auto batchMenu = menuBar()->addMenu(tr("Batch Tools"));
@@ -62,7 +64,8 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
 void MainWindow::openFile(const QString& path) {
     QString filePath = path;
     if (filePath.isEmpty()) {
-        filePath = QFileDialog::getOpenFileName(this, "Open W3D File", "", "W3D Files (*.w3d);;All Files (*)");
+        QString startDir = lastDirectory.isEmpty() ? QDir::homePath() : lastDirectory;
+        filePath = QFileDialog::getOpenFileName(this, "Open W3D File", startDir, "W3D Files (*.w3d);;All Files (*)");
         if (filePath.isEmpty()) return;
     }
 
@@ -73,8 +76,9 @@ void MainWindow::openFile(const QString& path) {
 
     ClearChunkTree();
     populateTree();
-
-    AddRecentFile(filePath);  
+    AddRecentFile(filePath);
+    lastDirectory = QFileInfo(filePath).absolutePath();
+     
 }
 
 
@@ -491,7 +495,11 @@ void MainWindow::LoadRecentFiles() {
         }
         file.close();
     }
+    if (!recentFiles.isEmpty())
+        lastDirectory = QFileInfo(recentFiles.first()).absolutePath();
 }
+
+
 
 void MainWindow::SaveRecentFiles() {
     QDir().mkpath(QFileInfo(recentFilesPath).path());

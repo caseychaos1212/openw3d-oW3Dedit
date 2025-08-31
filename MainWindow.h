@@ -3,7 +3,7 @@
 #include <QMainWindow>
 #include <memory>
 #include "backend/ChunkData.h"
-
+#include <QString>
 
 class QTreeWidget;
 class QTableWidget;
@@ -37,5 +37,6 @@ private:
     QString recentFilesPath;
     QStringList recentFiles;
     QMenu* recentFilesMenu = nullptr;
+    QString lastDirectory;
 };
 
