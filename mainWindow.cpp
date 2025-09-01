@@ -46,7 +46,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     splitter->addWidget(treeWidget);
     splitter->addWidget(tableWidget);
     setCentralWidget(splitter);
-    setWindowTitle("oW3D Dump Qt");
+    setWindowTitle("oW3DEdit");
     recentFilesPath = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation) + "/recent_files.txt";
     recentFilesMenu = fileMenu->addMenu("Open Recent");
     LoadRecentFiles();
