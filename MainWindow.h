@@ -28,6 +28,8 @@ private slots:
     void AddRecentFile(const QString& path);
     void OpenRecentFile();  // will be connected to recent file actions
     void on_actionExportChunkList_triggered();
+    void exportJson();
+    void importJson();
 private:
     void populateTree();
 

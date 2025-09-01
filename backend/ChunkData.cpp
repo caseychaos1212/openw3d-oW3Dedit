@@ -3,9 +3,54 @@
 #include <iostream>
 #include <memory>
 #include <vector>
+#include <QJsonDocument>
+#include <QJsonArray>
+#include <QByteArray>
 #include "ChunkData.h"
 #include "ChunkNames.h"
 
+QJsonObject ChunkItem::toJson() const {
+    QJsonObject obj;
+    obj["id"] = static_cast<int>(id);
+    obj["length"] = static_cast<int>(length);
+    obj["hasSubChunks"] = hasSubChunks;
+    if (!typeName.empty())
+        obj["typeName"] = QString::fromStdString(typeName);
+    if (!children.empty()) {
+        QJsonArray arr;
+        for (const auto& c : children)
+            arr.append(c->toJson());
+        obj["children"] = arr;
+    }
+    else if (!data.empty()) {
+        obj["data"] = QString(QByteArray(reinterpret_cast<const char*>(data.data()),
+            static_cast<int>(data.size())).toBase64());
+    }
+    return obj;
+}
+
+std::shared_ptr<ChunkItem> ChunkItem::fromJson(const QJsonObject& obj, ChunkItem* parent) {
+    auto item = std::make_shared<ChunkItem>();
+    item->id = obj["id"].toInt();
+    item->length = obj["length"].toInt();
+    item->hasSubChunks = obj["hasSubChunks"].toBool();
+    item->typeName = obj.value("typeName").toString().toStdString();
+    item->parent = parent;
+    if (obj.contains("data")) {
+        QByteArray ba = QByteArray::fromBase64(obj.value("data").toString().toUtf8());
+        item->data.assign(ba.begin(), ba.end());
+    }
+    if (obj.contains("children")) {
+        QJsonArray arr = obj.value("children").toArray();
+        for (const auto& v : arr) {
+            if (v.isObject()) {
+                auto child = fromJson(v.toObject(), item.get());
+                item->children.push_back(child);
+            }
+        }
+    }
+    return item;
+}
 
 static bool readUint32(std::istream& stream, uint32_t& value) {
     value = 0;
@@ -244,4 +289,74 @@ bool ChunkData::parseChunk(std::istream& stream, std::shared_ptr<ChunkItem>& par
 
 void ChunkData::clear() {
     chunks.clear();
+}
+
+static void writeChunkStream(std::ostream& stream, const std::shared_ptr<ChunkItem>& chunk, ChunkItem* parent = nullptr) {
+    bool microMode = false;
+    if (parent) {
+        constexpr uint32_t DATA_WRAPPER = 0x03150809;
+        constexpr uint32_t SOUNDROBJ_DEF = 0x0A02;
+        constexpr uint32_t SOUND_RENDER_DEF = 0x0100;
+        constexpr uint32_t SOUND_RENDER_DEF_EXT = 0x0200;
+        if (parent->id == DATA_WRAPPER)
+            microMode = true;
+        else if (parent->id == SOUND_RENDER_DEF && parent->parent &&
+            (parent->parent->id == SOUNDROBJ_DEF || parent->parent->id == SOUND_RENDER_DEF_EXT))
+            microMode = true;
+    }
+
+    if (microMode) {
+        uint8_t mid = static_cast<uint8_t>(chunk->id);
+        uint8_t mlen = static_cast<uint8_t>(chunk->data.size());
+        stream.write(reinterpret_cast<char*>(&mid), 1);
+        stream.write(reinterpret_cast<char*>(&mlen), 1);
+        if (!chunk->data.empty())
+            stream.write(reinterpret_cast<const char*>(chunk->data.data()), chunk->data.size());
+        return;
+    }
+
+    std::vector<uint8_t> payload;
+    if (!chunk->children.empty()) {
+        std::ostringstream buffer;
+        for (const auto& c : chunk->children)
+            writeChunkStream(buffer, c, chunk.get());
+        std::string buf = buffer.str();
+        payload.assign(buf.begin(), buf.end());
+    }
+    else {
+        payload = chunk->data;
+    }
+
+    uint32_t rawLen = static_cast<uint32_t>(payload.size()) |
+        (chunk->hasSubChunks ? 0x80000000u : 0);
+    stream.write(reinterpret_cast<const char*>(&chunk->id), sizeof(chunk->id));
+    stream.write(reinterpret_cast<const char*>(&rawLen), sizeof(rawLen));
+    if (!payload.empty())
+        stream.write(reinterpret_cast<const char*>(payload.data()), payload.size());
+}
+
+QJsonDocument ChunkData::toJson() const {
+    QJsonArray arr;
+    for (const auto& c : chunks)
+        arr.append(c->toJson());
+    return QJsonDocument(arr);
+}
+
+bool ChunkData::fromJson(const QJsonDocument& doc) {
+    if (!doc.isArray()) return false;
+    clear();
+    for (const auto& v : doc.array()) {
+        if (v.isObject()) {
+            chunks.push_back(ChunkItem::fromJson(v.toObject()));
+        }
+    }
+    return true;
+}
+
+bool ChunkData::saveToFile(const std::string& filename) const {
+    std::ofstream out(filename, std::ios::binary);
+    if (!out) return false;
+    for (const auto& c : chunks)
+        writeChunkStream(out, c);
+    return true;
 }

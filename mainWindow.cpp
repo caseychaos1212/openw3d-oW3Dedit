@@ -19,6 +19,8 @@
 #include <QFileInfo>
 #include "backend/W3DMesh.h"
 #include <map>
+#include <QJsonDocument>
+#include <QJsonParseError>
 
 Q_DECLARE_METATYPE(void*)
 
@@ -30,6 +32,10 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     connect(openAction, &QAction::triggered, this, [this]() {
         openFile("");
         });
+    QAction* exportJsonAct = fileMenu->addAction("Export to JSON...");
+    connect(exportJsonAct, &QAction::triggered, this, &MainWindow::exportJson);
+    QAction* importJsonAct = fileMenu->addAction("Import from JSON...");
+    connect(importJsonAct, &QAction::triggered, this, &MainWindow::importJson);
 
 
     auto* splitter = new QSplitter(this);
@@ -662,3 +668,43 @@ void MainWindow::on_actionExportChunkList_triggered()
 }
 
 
+void MainWindow::exportJson() {
+    QString path = QFileDialog::getSaveFileName(this, tr("Export to JSON"), lastDirectory, tr("JSON Files (*.json);;All Files (*)"));
+    if (path.isEmpty()) return;
+    QJsonDocument doc = chunkData->toJson();
+    QFile file(path);
+    if (!file.open(QIODevice::WriteOnly)) {
+        QMessageBox::warning(this, tr("Error"), tr("Cannot write JSON file."));
+        return;
+    }
+    file.write(doc.toJson(QJsonDocument::Indented));
+    file.close();
+}
+
+void MainWindow::importJson() {
+    QString path = QFileDialog::getOpenFileName(this, tr("Import from JSON"), lastDirectory, tr("JSON Files (*.json);;All Files (*)"));
+    if (path.isEmpty()) return;
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly)) {
+        QMessageBox::warning(this, tr("Error"), tr("Cannot open JSON file."));
+        return;
+    }
+    QJsonParseError err;
+    QJsonDocument doc = QJsonDocument::fromJson(file.readAll(), &err);
+    file.close();
+    if (err.error != QJsonParseError::NoError || !chunkData->fromJson(doc)) {
+        QMessageBox::warning(this, tr("Error"), tr("Invalid JSON content."));
+        return;
+    }
+    ClearChunkTree();
+    populateTree();
+    if (QMessageBox::question(this, tr("Rebuild"), tr("Save rebuilt W3D file?"),
+        QMessageBox::Yes | QMessageBox::No) == QMessageBox::Yes) {
+        QString out = QFileDialog::getSaveFileName(this, tr("Save W3D File"), lastDirectory, tr("W3D Files (*.w3d);;All Files (*)"));
+        if (!out.isEmpty()) {
+            if (!chunkData->saveToFile(out.toStdString())) {
+                QMessageBox::warning(this, tr("Error"), tr("Failed to save W3D file."));
+            }
+        }
+    }
+}
