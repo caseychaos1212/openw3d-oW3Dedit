@@ -18,6 +18,7 @@
 #include <QDir>
 #include <QFileInfo>
 #include "backend/W3DMesh.h"
+#include <map>
 
 Q_DECLARE_METATYPE(void*)
 
@@ -567,7 +568,8 @@ void MainWindow::OpenRecentFile() {
 
 static void recursePrint(const std::shared_ptr<ChunkItem>& c,
     int depth,
-    QTextStream& out)
+    QTextStream& out,
+    std::map<uint32_t, int>& counts)
 {
     // 1) Skip raw micro chunks under the channel wrapper
     if (c->id == MICRO_ID && c->parent && c->parent->id == CHANNEL_WRAPPER)
@@ -581,7 +583,10 @@ static void recursePrint(const std::shared_ptr<ChunkItem>& c,
             c->parent->parent->id == SOUND_RENDER_DEF_EXT))
         return;
 
-    // 3) Print "0x######## NAME"
+    // 3) Count this chunk
+    ++counts[c->id];
+
+    // 4) Print "0x######## NAME"
     out
         << QString(depth * 2, ' ')
         << QString("0x%1 ").arg(c->id, 8, 16, QChar('0')).toUpper()
@@ -590,7 +595,7 @@ static void recursePrint(const std::shared_ptr<ChunkItem>& c,
 
     // Recurse
     for (auto& ch : c->children) {
-        recursePrint(ch, depth + 1, out);
+        recursePrint(ch, depth + 1, out, counts);
     }
 }
 
@@ -623,7 +628,8 @@ void MainWindow::on_actionExportChunkList_triggered()
     }
     QTextStream txt(&file);
 
-    // 4) iterate .w3d files
+    // 4) iterate .w3d files and collect counts
+    std::map<uint32_t, int> counts;
     QDir dir(srcDir);
     auto w3dFiles = dir.entryList(QStringList{ "*.w3d", "*.W3D", "*.wlt" },
         QDir::Files | QDir::NoSymLinks);
@@ -638,9 +644,16 @@ void MainWindow::on_actionExportChunkList_triggered()
         }
         // for each top chunk, recurse
         for (auto& top : cd.getChunks()) {
-            recursePrint(top, 1, /* std::ostream& */ txt);
+            recursePrint(top, 1, txt, counts);
         }
         txt << "\n";
+    }
+    // 5) Output totals
+    txt << "=== Chunk Type Totals ===\n";
+    for (const auto& [id, count] : counts) {
+        txt << QString("0x%1 ").arg(id, 8, 16, QChar('0')).toUpper()
+            << QString::fromStdString(LabelForChunk(id, nullptr))
+            << ": " << count << "\n";
     }
 
     file.close();

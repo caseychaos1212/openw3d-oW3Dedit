@@ -3,7 +3,7 @@
 #include <vector>
 
 // SOUND RENDER OBJECTS
-//TODO: Broken
+
 inline std::vector<ChunkField> InterpretSoundRObjHeader(
     const std::shared_ptr<ChunkItem>& chunk
 ) {

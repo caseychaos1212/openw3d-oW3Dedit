@@ -251,7 +251,7 @@ enum : uint32_t {
     W3D_ELINE_UNIFORM_LENGTH_TEXTURE_MAP = 0x01u << W3D_ELINE_TEXTURE_MAP_MODE_OFFSET,
     W3D_ELINE_TILED_TEXTURE_MAP = 0x02u << W3D_ELINE_TEXTURE_MAP_MODE_OFFSET,
 };
-//TODO: Find Example
+
 inline std::vector<ChunkField> InterpretEmitterLineProperties(const std::shared_ptr<ChunkItem>& chunk) {
     std::vector<ChunkField> fields; if (!chunk) return fields;
 

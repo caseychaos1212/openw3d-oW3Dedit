@@ -6,7 +6,7 @@
 #include <cstring>
 #include <iomanip>
 
-// TODO: Collision types need a look at
+
 inline std::vector<ChunkField> InterpretBox(const std::shared_ptr<ChunkItem>& chunk) {
     std::vector<ChunkField> fields;
     if (!chunk) return fields;
@@ -32,22 +32,33 @@ inline std::vector<ChunkField> InterpretBox(const std::shared_ptr<ChunkItem>& ch
     B.Flag(attr, static_cast<uint32_t>(BoxAttr::W3D_BOX_ATTRIBUTE_ORIENTED), "W3D_BOX_ATTRIBUTE_ORIENTED");
     B.Flag(attr, static_cast<uint32_t>(BoxAttr::W3D_BOX_ATTRIBUTE_ALIGNED), "W3D_BOX_ATTRIBUTE_ALIGNED");
 
-    // Collision type (masked + shifted equality)
+    // Collision type (masked + shifted bitmask)
     {
         const uint32_t mask = static_cast<uint32_t>(BoxAttr::W3D_BOX_ATTRIBUTE_COLLISION_TYPE_MASK);
         const uint32_t shift = static_cast<uint32_t>(BoxAttr::W3D_BOX_ATTRIBUTE_COLLISION_TYPE_SHIFT);
-       const uint32_t type = (attr & mask) >> shift;
+        const uint32_t type = (attr & mask) >> shift;
 
-        // Map the enumerated values after shift
-        switch (type) {
-        case  1: B.Push("CollisionType", "flag", "W3D_BOX_ATTRIBUTE_COLLISION_TYPE_PHYSICAL");   break;
-        case  2: B.Push("CollisionType", "flag", "W3D_BOX_ATTRIBUTE_COLLISION_TYPE_PROJECTILE"); break;
-        case  4: B.Push("CollisionType", "flag", "W3D_BOX_ATTRIBUTE_COLLISION_TYPE_VIS");        break;
-        case  8: B.Push("CollisionType", "flag", "W3D_BOX_ATTRIBUTE_COLLISION_TYPE_CAMERA");     break;
-        case 16: B.Push("CollisionType", "flag", "W3D_BOX_ATTRIBUTE_COLLISION_TYPE_VEHICLE");    break;
-        default: B.Push("CollisionType", "string", "Unknown");                                   break;
+        // Emit the raw post-shift value for reference
+        B.UInt32("CollisionTypeMask", type);
+
+        // Bitwise decomposition (multiple may apply)
+        if (type & 0x01) B.Push("CollisionType", "flag", "W3D_BOX_ATTRIBUTE_COLLISION_TYPE_PHYSICAL");
+        if (type & 0x02) B.Push("CollisionType", "flag", "W3D_BOX_ATTRIBUTE_COLLISION_TYPE_PROJECTILE");
+        if (type & 0x04) B.Push("CollisionType", "flag", "W3D_BOX_ATTRIBUTE_COLLISION_TYPE_VIS");
+        if (type & 0x08) B.Push("CollisionType", "flag", "W3D_BOX_ATTRIBUTE_COLLISION_TYPE_CAMERA");
+        if (type & 0x10) B.Push("CollisionType", "flag", "W3D_BOX_ATTRIBUTE_COLLISION_TYPE_VEHICLE");
+
+        // If any unknown bits are set, surface them explicitly
+        if (type & ~0x1Fu) {
+            B.Push("CollisionType.UnknownBits", "hex", ToHex(type & ~0x1Fu));
+        }
+
+        // If no known bits matched at all, note it
+        if ((type & 0x1Fu) == 0) {
+            B.Push("CollisionType", "string", "None");
         }
     }
+
 
     // Name (fixed-size, NUL-terminated)
     B.Name("Name", box.Name, 2 * W3D_NAME_LEN);

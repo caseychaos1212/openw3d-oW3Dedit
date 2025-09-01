@@ -1,4 +1,4 @@
-#pragma once
+//#pragma once
 #include "W3DStructs.h"
 #include <vector>
 
@@ -63,7 +63,7 @@ inline std::vector<ChunkField> InterpretSpotLightInfo(const std::shared_ptr<Chun
     return fields;
 }
 
-//TODO: Find Example
+//TODO: Either this is never used or I'm unable to parse it.
 inline std::vector<ChunkField> InterpretNearAtten(const std::shared_ptr<ChunkItem>& chunk) {
     std::vector<ChunkField> fields;
     if (!chunk) return fields;
@@ -99,7 +99,7 @@ inline std::vector<ChunkField> InterpretFarAtten(const std::shared_ptr<ChunkItem
     return fields;
 }
 
-
+//TODO: Check w3dhub assets for examples
 inline std::vector<ChunkField> InterpretSpotLightInfoTT(const std::shared_ptr<ChunkItem>& chunk) {
     std::vector<ChunkField> fields;
     if (!chunk) return fields;
@@ -117,6 +117,7 @@ inline std::vector<ChunkField> InterpretSpotLightInfoTT(const std::shared_ptr<Ch
     return fields;
 }
 
+//TODO: Check w3dhub assets for examples
 inline std::vector<ChunkField> InterpretLightPulse(const std::shared_ptr<ChunkItem>& chunk) {
     std::vector<ChunkField> fields;
     if (!chunk) return fields;

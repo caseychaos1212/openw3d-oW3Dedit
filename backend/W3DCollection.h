@@ -34,7 +34,7 @@ inline std::vector<ChunkField> InterpretCollectionObjName(const std::shared_ptr<
         2 * W3D_NAME_LEN);
     return fields;
 }
-//TODO: FIND EXAMPLE
+//TODO: Either this is never used or I'm unable to parse it.
 inline std::vector<ChunkField> InterpretTransformNode(const std::shared_ptr<ChunkItem>& chunk) {
     std::vector<ChunkField> fields;
     if (!chunk) return fields;

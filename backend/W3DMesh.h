@@ -436,36 +436,40 @@ inline std::vector<ChunkField> InterpretVertexMaterialInfo(const std::shared_ptr
         return fields;
     }
     const auto& data = std::get<W3dVertexMaterialStruct>(buff);
-    
+
     ChunkFieldBuilder B(fields);
 
-    uint32_t attr = data.Attributes;
-    
+    const uint32_t attr = data.Attributes;
 
-    // basic flags
+    // Raw attributes first (handy for debugging)
+    B.UInt32("Material.Attributes", attr);
+
+    // Basic low-bit flags
     for (auto [mask, name] : VERTMAT_BASIC_FLAGS) {
         B.Flag(attr, mask, name);
     }
 
-    // stage mappings (4-bit indices at shifts 8 and 12)
-    for (int stage = 0; stage < 2; ++stage) {
-        uint32_t shift = 8 + 4 * stage;
-        uint8_t idx = (attr >> shift) & 0xF;
-        if (idx < VERTMAT_STAGE_MAPPING.size()) {
-            std::string s(VERTMAT_STAGE_MAPPING[idx].second);     // make a string
-            if (auto pos = s.find('?'); pos != std::string::npos)  // swap '?' for stage index
-                s[pos] = char('0' + stage);
-            B.Push("Material.Attributes", "flag", std::move(s));
-        }
-    }
-    B.UInt32("Material.Attributes", attr);
-    // PSX flags
-    for (auto [mask, name] : VERTMAT_PSX_FLAGS) {
-        B.Flag(attr, mask, name);
-        if (mask == 0x0010'0000) break; // NO_RT_LIGHTING early out
+    // Stage mappings are full bytes now:
+    {
+        uint8_t s0 = ExtractStageMapping(attr, /*stage*/0);
+        uint8_t s1 = ExtractStageMapping(attr, /*stage*/1);
+
+        B.UInt8("Material.Stage0Mapping.Code", s0);
+        B.Push("Material.Stage0Mapping.Name", "flag", StageMappingName(s0, 0));
+
+        B.UInt8("Material.Stage1Mapping.Code", s1);
+        B.Push("Material.Stage1Mapping.Name", "flag", StageMappingName(s1, 1));
     }
 
-    // finally the colors & floats
+    // (Optional) PSX transparency flags:
+    // These collide with Stage0’s mapping byte; only decode if you KNOW you’re on that platform/asset.
+    // if (attr & 0x00F00000u) {
+    //     for (auto [mask, name] : VERTMAT_PSX_FLAGS) {
+    //         B.Flag(attr, mask, name);
+    //     }
+    // }
+
+    // Colors & floats
     B.RGB("Material.Ambient", data.Ambient.R, data.Ambient.G, data.Ambient.B);
     B.RGB("Material.Diffuse", data.Diffuse.R, data.Diffuse.G, data.Diffuse.B);
     B.RGB("Material.Specular", data.Specular.R, data.Specular.G, data.Specular.B);
@@ -476,6 +480,7 @@ inline std::vector<ChunkField> InterpretVertexMaterialInfo(const std::shared_ptr
 
     return fields;
 }
+
 
 
 inline std::vector<ChunkField> InterpretShaders(const std::shared_ptr<ChunkItem>& chunk) {
@@ -767,7 +772,7 @@ inline std::vector<ChunkField> InterpretDCG(const std::shared_ptr<ChunkItem>& ch
     }
     return fields;
 }
-//TODO: Find Example
+//TODO: Either this is never used or I'm unable to parse it.
 inline std::vector<ChunkField> InterpretDIG(const std::shared_ptr<ChunkItem>& chunk) {
     std::vector<ChunkField> fields;
     if (!chunk) return fields;
@@ -786,7 +791,7 @@ inline std::vector<ChunkField> InterpretDIG(const std::shared_ptr<ChunkItem>& ch
     }
     return fields;
 }
-//TODO: Find Example
+//TODO: Either this is never used or I'm unable to parse it.
 inline std::vector<ChunkField> InterpretSCG(const std::shared_ptr<ChunkItem>& chunk) {
     std::vector<ChunkField> fields;
     if (!chunk) return fields;
@@ -854,7 +859,7 @@ inline std::vector<ChunkField> InterpretStageTexCoords(const std::shared_ptr<Chu
     return fields;
 }
 
-//TODO: Find Example
+//TODO: Either this is never used or I'm unable to parse it.
 inline std::vector<ChunkField> InterpretPerFaceTexcoordIds(const std::shared_ptr<ChunkItem>& chunk) {
     std::vector<ChunkField> fields;
     if (!chunk) return fields;
@@ -878,6 +883,7 @@ inline std::vector<ChunkField> InterpretPerFaceTexcoordIds(const std::shared_ptr
     return fields;
 }
 
+
 inline std::vector<ChunkField> InterpretShaderMaterialHeader(
     const std::shared_ptr<ChunkItem>& chunk
 ) {
@@ -897,11 +903,27 @@ inline std::vector<ChunkField> InterpretShaderMaterialHeader(
     B.UInt8("Version", data.Version);
     B.Name("ShaderName", data.ShaderName, 32);
     B.UInt8("Technique", data.Technique);
-    B.UInt8("Padding[0]", data.Padding[0]);
-    B.UInt8("Padding[1]", data.Padding[1]);
-    B.UInt8("Padding[2]", data.Padding[2]);
+  //  B.UInt8("Padding[0]", data.Padding[0]);
+  //  B.UInt8("Padding[1]", data.Padding[1]);
+  //  B.UInt8("Padding[2]", data.Padding[2]);
 
     return fields;
+}
+
+
+inline uint32_t ReadLEU32(const uint8_t* p) {
+    uint32_t v; std::memcpy(&v, p, 4); return v;
+}
+inline float ReadLEF32(const uint8_t* p) {
+    float f; std::memcpy(&f, p, 4); return f;
+}
+inline std::string CleanCString(const char* p, size_t maxlen) {
+    // Respect first NUL and strip trailing control bytes (defensive)
+    size_t n = 0;
+    while (n < maxlen && p[n] != '\0') ++n;
+    std::string s(p, p + n);
+    while (!s.empty() && static_cast<unsigned char>(s.back()) < 0x20) s.pop_back();
+    return s;
 }
 
 inline std::vector<ChunkField> InterpretShaderMaterialProperty(
@@ -913,47 +935,105 @@ inline std::vector<ChunkField> InterpretShaderMaterialProperty(
     const auto& buf = chunk->data;
     if (buf.size() < 8) {
         fields.emplace_back("error", "string",
-            "Malformed Shader_Material_Property chunk: size < 8");
+            "Malformed FX_SHADER_CONSTANT: size < 8");
         return fields;
     }
 
-    uint32_t type = *reinterpret_cast<const uint32_t*>(buf.data());
-    uint32_t nameLen = *reinterpret_cast<const uint32_t*>(buf.data() + 4);
-    if (buf.size() < 8 + nameLen) {
+    const uint8_t* base = buf.data();
+    uint32_t type = ReadLEU32(base + 0);
+    uint32_t nameLen = ReadLEU32(base + 4);
+
+    if (buf.size() < 8ull + nameLen) {
         fields.emplace_back("error", "string",
-            "Malformed Shader_Material_Property chunk: NameLength exceeds data size");
+            "Malformed FX_SHADER_CONSTANT: nameLen exceeds chunk size");
         return fields;
     }
 
-    std::string name(reinterpret_cast<const char*>(buf.data() + 8), nameLen);
+    // Read constant name as C-string (trim at first NUL)
+    std::string name = CleanCString(reinterpret_cast<const char*>(base + 8), nameLen);
 
     ChunkFieldBuilder B(fields);
     B.UInt32("Type", type);
     switch (static_cast<ShaderMaterialFlag>(type)) {
-    case ShaderMaterialFlag::CONSTANT_TYPE_TEXTURE:
-        B.Push("Type", "flag", "CONSTANT_TYPE_TEXTURE"); break;
-    case ShaderMaterialFlag::CONSTANT_TYPE_FLOAT1:
-        B.Push("Type", "flag", "CONSTANT_TYPE_FLOAT1"); break;
-    case ShaderMaterialFlag::CONSTANT_TYPE_FLOAT2:
-        B.Push("Type", "flag", "CONSTANT_TYPE_FLOAT2"); break;
-    case ShaderMaterialFlag::CONSTANT_TYPE_FLOAT3:
-        B.Push("Type", "flag", "CONSTANT_TYPE_FLOAT3"); break;
-    case ShaderMaterialFlag::CONSTANT_TYPE_FLOAT4:
-        B.Push("Type", "flag", "CONSTANT_TYPE_FLOAT4"); break;
-    case ShaderMaterialFlag::CONSTANT_TYPE_INT:
-        B.Push("Type", "flag", "CONSTANT_TYPE_INT"); break;
-    case ShaderMaterialFlag::CONSTANT_TYPE_BOOL:
-        B.Push("Type", "flag", "CONSTANT_TYPE_BOOL"); break;
-    default:
-        break;
+    case ShaderMaterialFlag::CONSTANT_TYPE_TEXTURE: B.Push("TypeName", "flag", "CONSTANT_TYPE_TEXTURE"); break;
+    case ShaderMaterialFlag::CONSTANT_TYPE_FLOAT1:  B.Push("TypeName", "flag", "CONSTANT_TYPE_FLOAT1");  break;
+    case ShaderMaterialFlag::CONSTANT_TYPE_FLOAT2:  B.Push("TypeName", "flag", "CONSTANT_TYPE_FLOAT2");  break;
+    case ShaderMaterialFlag::CONSTANT_TYPE_FLOAT3:  B.Push("TypeName", "flag", "CONSTANT_TYPE_FLOAT3");  break;
+    case ShaderMaterialFlag::CONSTANT_TYPE_FLOAT4:  B.Push("TypeName", "flag", "CONSTANT_TYPE_FLOAT4");  break;
+    case ShaderMaterialFlag::CONSTANT_TYPE_INT:     B.Push("TypeName", "flag", "CONSTANT_TYPE_INT");     break;
+    case ShaderMaterialFlag::CONSTANT_TYPE_BOOL:    B.Push("TypeName", "flag", "CONSTANT_TYPE_BOOL");    break;
+    default: break;
     }
     B.UInt32("NameLength", nameLen);
     B.Push("ConstantName", "string", name);
 
+    size_t pos = 8 + static_cast<size_t>(nameLen);
+
+    // Parse payload like wdump
+    switch (static_cast<ShaderMaterialFlag>(type)) {
+    case ShaderMaterialFlag::CONSTANT_TYPE_TEXTURE: {
+        if (buf.size() < pos + 4) {
+            B.Push("error", "string", "Truncated: missing texture length");
+            break;
+        }
+        uint32_t texLen = ReadLEU32(base + pos);
+        pos += 4;
+        if (buf.size() < pos + texLen) {
+            B.Push("error", "string", "Truncated: texture length exceeds chunk");
+            break;
+        }
+        std::string tex = CleanCString(reinterpret_cast<const char*>(base + pos), texLen);
+        B.UInt32("TextureLength", texLen);
+        B.Push("Texture", "string", tex);
+        break;
+    }
+
+    case ShaderMaterialFlag::CONSTANT_TYPE_FLOAT1:
+    case ShaderMaterialFlag::CONSTANT_TYPE_FLOAT2:
+    case ShaderMaterialFlag::CONSTANT_TYPE_FLOAT3:
+    case ShaderMaterialFlag::CONSTANT_TYPE_FLOAT4: {
+        int count = static_cast<int>(type) - 1; // matches wdump
+        size_t need = static_cast<size_t>(count) * 4;
+        if (buf.size() < pos + need) {
+            B.Push("error", "string", "Truncated: not enough float payload");
+            break;
+        }
+        for (int i = 0; i < count; ++i) {
+            float f = ReadLEF32(base + pos + i * 4);
+            B.Float("Floats[" + std::to_string(i) + "]", f);
+        }
+        break;
+    }
+
+    case ShaderMaterialFlag::CONSTANT_TYPE_INT: {
+        if (buf.size() < pos + 4) {
+            B.Push("error", "string", "Truncated: missing int payload");
+            break;
+        }
+        uint32_t v = ReadLEU32(base + pos);
+        B.UInt32("Int", v);
+        break;
+    }
+
+    case ShaderMaterialFlag::CONSTANT_TYPE_BOOL: {
+        if (buf.size() < pos + 1) {
+            B.Push("error", "string", "Truncated: missing bool payload");
+            break;
+        }
+        uint8_t v = *(base + pos);
+        B.UInt8("Bool", v);
+        break;
+    }
+
+    default:
+        B.Push("note", "string", "Unknown constant type; payload not parsed");
+        break;
+    }
+
     return fields;
 }
 
-//TODO: Find Example
+
 inline std::vector<ChunkField> InterpretDeform(
     const std::shared_ptr<ChunkItem>& chunk
 ) {
@@ -977,7 +1057,7 @@ inline std::vector<ChunkField> InterpretDeform(
     return fields;
 }
 
-//TODO: Find Example
+//TODO: Either this is never used or I'm unable to parse it.
 inline std::vector<ChunkField> InterpretDeformSet(const std::shared_ptr<ChunkItem>& chunk) {
     std::vector<ChunkField> fields;
     if (!chunk) return fields;
@@ -1004,7 +1084,7 @@ inline std::vector<ChunkField> InterpretDeformSet(const std::shared_ptr<ChunkIte
     return fields;
 }
 
-//TODO: Find Example
+//TODO: Either this is never used or I'm unable to parse it.
 inline std::vector<ChunkField> InterpretDeformKeyframes(const std::shared_ptr<ChunkItem>& chunk) {
     std::vector<ChunkField> fields;
     if (!chunk) return fields;
@@ -1031,7 +1111,7 @@ inline std::vector<ChunkField> InterpretDeformKeyframes(const std::shared_ptr<Ch
     return fields;
 }
 
-//TODO: Find Example
+//TODO: Either this is never used or I'm unable to parse it.
 inline std::vector<ChunkField> InterpretDeformData(const std::shared_ptr<ChunkItem>& chunk) {
     std::vector<ChunkField> fields;
     if (!chunk) return fields;
@@ -1058,7 +1138,7 @@ inline std::vector<ChunkField> InterpretDeformData(const std::shared_ptr<ChunkIt
 
     return fields;
 }
-//TODO: Find Example
+
 inline std::vector<ChunkField> InterpretPS2Shaders(const std::shared_ptr<ChunkItem>& chunk) {
     std::vector<ChunkField> fields;
     if (!chunk) return fields;
@@ -1188,7 +1268,7 @@ inline std::vector<ChunkField> InterpretAABTreeNodes(const std::shared_ptr<Chunk
 }
 
 
-
+//TODO: Either this is never used or I'm unable to parse it.
 inline std::vector<ChunkField> InterpretLightMapUV(const std::shared_ptr<ChunkItem>&) {
     return Undefined("InterpretLightMapUV");
 }

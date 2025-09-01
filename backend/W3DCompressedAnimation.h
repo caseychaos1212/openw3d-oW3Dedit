@@ -189,7 +189,7 @@ inline std::vector<ChunkField> InterpretCompressedBitChannel(const std::shared_p
 
     return fields;
 }
-
+//TODO: Add definition for channel 15
 // BFME2: Compressed Motion Channel (header = 8 bytes)
 inline std::vector<ChunkField>
 InterpretCompressedMotionChannel(const std::shared_ptr<ChunkItem>& chunk)

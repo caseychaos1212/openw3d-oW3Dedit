@@ -115,7 +115,7 @@ inline std::vector<ChunkField> InterpretQuadranglesO(const std::shared_ptr<Chunk
 }
 
 
-//TODO: FIX
+
 inline std::vector<ChunkField> InterpretSurrenderTriangles(const std::shared_ptr<ChunkItem>& chunk) {
     std::vector<ChunkField> fields; if (!chunk) return fields;
     auto parsed = ParseChunkArray<W3dSurrenderTriStruct>(chunk);

@@ -7,10 +7,10 @@
 #include "ChunkNames.h"
 
 
-static uint32_t readUint32(std::istream& stream) {
-    uint32_t value = 0;
+static bool readUint32(std::istream& stream, uint32_t& value) {
+    value = 0;
     stream.read(reinterpret_cast<char*>(&value), sizeof(value));
-    return value;
+    return static_cast<bool>(stream);
 }
 
 inline bool IsForcedWrapper(uint32_t id, uint32_t parent = 0)
@@ -85,15 +85,16 @@ bool ChunkData::loadFromFile(const std::string& filename) {
     std::cout << "Opening file: " << filename << "\n"
         << "File size: " << fileSize << "\n";
 
-    while (file.tellg() < fileSize) {
+    while (file && file.tellg() < fileSize) {
         auto chunk = std::make_shared<ChunkItem>();
         std::streampos startPos = file.tellg();
 
         // 1 read ID
-        chunk->id = readUint32(file);
+        if (!readUint32(file, chunk->id)) break;
 
         // 2 read raw length word  split out hasSubChunks bit
-        uint32_t rawLen = readUint32(file);
+        uint32_t rawLen = 0;
+        if (!readUint32(file, rawLen)) break;
         chunk->hasSubChunks = (rawLen & 0x80000000u) != 0;
         chunk->length = rawLen & 0x7FFFFFFFu;
 
@@ -115,7 +116,7 @@ bool ChunkData::loadFromFile(const std::string& filename) {
         // 4 read the payload
         chunk->data.resize(chunk->length);
         file.read(reinterpret_cast<char*>(chunk->data.data()), chunk->length);
-
+        if (!file) break;
         std::cout << "Top level chunk: 0x"
             << std::hex << chunk->id
             << std::dec << "  size=" << chunk->length
@@ -205,9 +206,10 @@ bool ChunkData::parseChunk(std::istream& stream, std::shared_ptr<ChunkItem>& par
         // 2) otherwise it's a normal 4 byte ID + 4 byte length + payload
         if (stream.rdbuf()->in_avail() < 8) break;
         auto child = std::make_shared<ChunkItem>();
-        child->id = readUint32(stream);
+        if (!readUint32(stream, child->id)) break;
 
-        uint32_t rawLen = readUint32(stream);
+        uint32_t rawLen = 0;
+        if (!readUint32(stream, rawLen)) break;
         // MSB here *only* means this chunk *may* contain subchunks
         child->hasSubChunks = (rawLen & 0x80000000u) != 0;
         child->length = rawLen & 0x7FFFFFFFu;
@@ -222,7 +224,7 @@ bool ChunkData::parseChunk(std::istream& stream, std::shared_ptr<ChunkItem>& par
         // read the payload
         child->data.resize(child->length);
         stream.read(reinterpret_cast<char*>(child->data.data()), child->length);
-
+        if (!stream) break;
         child->parent = parent.get();
         parent->children.push_back(child);
 

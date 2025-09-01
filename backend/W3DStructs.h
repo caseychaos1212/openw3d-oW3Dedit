@@ -238,11 +238,11 @@ ENUM_TO_STRING(DestBlend,
 	"Src Alpha", "One Minus Src Alpha", "Src Color Prefog")
 
 enum class PriGradient : uint8_t {
-	DISABLE, MODULATE, ADD, BUMPENVMAP, MAX
+	DISABLE, MODULATE, ADD, BUMPENVMAP, BUMPENVMAPLUMINANCE, MODULATE2X, MAX
 };
 
 ENUM_TO_STRING(PriGradient,
-	"Disable", "Modulate", "Add", "Bump-Environment")
+	"Disable", "Modulate", "Add", "Bump-Environment", "Bump-Environment-Luminance", "Double - Modulate")
 
 enum class SecGradient : uint8_t {
 	DISABLE, ENABLE, MAX
@@ -266,11 +266,11 @@ ENUM_TO_STRING(Texturing,
 	"Disable", "Enable")
 
 enum class DetailColorFunc : uint8_t {
-	DISABLE, DETAIL, SCALE, INVSCALE, ADD, SUB, SUBR, BLEND, DETAILBLEND, MAX
+	DISABLE, DETAIL, SCALE, INVSCALE, ADD, SUB, SUBR, BLEND, DETAILBLEND, ADDSIGNED, ADDSINGED2X, SCALE2X, MODALPHAADDCOLOR, MAX
 };
 
 ENUM_TO_STRING(DetailColorFunc,
-	"Disable", "Detail", "Scale", "InvScale", "Add", "Sub", "SubR", "Blend", "DetailBlend")
+	"Disable", "Detail", "Scale", "InvScale", "Add", "Sub", "SubR", "Blend", "DetailBlend", "AddSigned", "AddSigned-Double", "Scale-Double", "ModAlphaAddColor")
 
 enum class DetailAlphaFunc : uint8_t {
 	DISABLE, DETAIL, SCALE, INVSCALE, MAX
@@ -309,23 +309,68 @@ struct W3dShaderStruct
 	uint8_t						pad[1];
 };
 
-// each of these masks lives in the low bits of Attributes
+// ----------Basic per - bit flags(low bits) ----------
 constexpr std::array<std::pair<uint32_t, std::string_view>, 4> VERTMAT_BASIC_FLAGS = { {
-	{0x00000001, "W3DVERTMAT_USE_DEPTH_CUE"},
-	{0x00000002, "W3DVERTMAT_ARGB_EMISSIVE_ONLY"},
-	{0x00000004, "W3DVERTMAT_COPY_SPECULAR_TO_DIFFUSE"},
-	{0x00000008, "W3DVERTMAT_DEPTH_CUE_TO_ALPHA"},
+	{0x00000001u, "W3DVERTMAT_USE_DEPTH_CUE"},
+	{0x00000002u, "W3DVERTMAT_ARGB_EMISSIVE_ONLY"},
+	{0x00000004u, "W3DVERTMAT_COPY_SPECULAR_TO_DIFFUSE"},
+	{0x00000008u, "W3DVERTMAT_DEPTH_CUE_TO_ALPHA"},
 } };
 
-// Stage-mapping comes in nibbles at 0xF00 and 0xF000
-constexpr std::array<std::pair<uint8_t, std::string_view>, 6> VERTMAT_STAGE_MAPPING = { {
-	{0, "W3DVERTMAT_STAGE?_MAPPING_UV"},
-	{1, "W3DVERTMAT_STAGE?_MAPPING_ENVIRONMENT"},
-	{2, "W3DVERTMAT_STAGE?_MAPPING_CHEAP_ENVIRONMENT"},
-	{3, "W3DVERTMAT_STAGE?_MAPPING_SCREEN"},
-	{4, "W3DVERTMAT_STAGE?_MAPPING_LINEAR_OFFSET"},
-	{5, "W3DVERTMAT_STAGE?_MAPPING_SILHOUETTE"},
+// ---------- Stage mapping locations ----------
+constexpr uint32_t VERTMAT_STAGE0_MAPPING_MASK = 0x00FF0000u;
+constexpr uint32_t VERTMAT_STAGE1_MAPPING_MASK = 0x0000FF00u;
+constexpr uint32_t VERTMAT_STAGE0_MAPPING_SHIFT = 16u;
+constexpr uint32_t VERTMAT_STAGE1_MAPPING_SHIFT = 8u;
+
+// Full mapping code table used by BOTH stages.
+// We keep the “?” placeholder and substitute 0/1 at decode time.
+constexpr std::array<std::pair<uint8_t, std::string_view>, 0x15> VERTMAT_STAGE_MAPPING_CODES = { {
+	{0x00, "W3DVERTMAT_STAGE?_MAPPING_UV"},
+	{0x01, "W3DVERTMAT_STAGE?_MAPPING_ENVIRONMENT"},
+	{0x02, "W3DVERTMAT_STAGE?_MAPPING_CHEAP_ENVIRONMENT"},
+	{0x03, "W3DVERTMAT_STAGE?_MAPPING_SCREEN"},
+	{0x04, "W3DVERTMAT_STAGE?_MAPPING_LINEAR_OFFSET"},
+	{0x05, "W3DVERTMAT_STAGE?_MAPPING_SILHOUETTE"},
+	{0x06, "W3DVERTMAT_STAGE?_MAPPING_SCALE"},
+	{0x07, "W3DVERTMAT_STAGE?_MAPPING_GRID"},
+	{0x08, "W3DVERTMAT_STAGE?_MAPPING_ROTATE"},
+	{0x09, "W3DVERTMAT_STAGE?_MAPPING_SINE_LINEAR_OFFSET"},
+	{0x0A, "W3DVERTMAT_STAGE?_MAPPING_STEP_LINEAR_OFFSET"},
+	{0x0B, "W3DVERTMAT_STAGE?_MAPPING_ZIGZAG_LINEAR_OFFSET"},
+	{0x0C, "W3DVERTMAT_STAGE?_MAPPING_WS_CLASSIC_ENV"},
+	{0x0D, "W3DVERTMAT_STAGE?_MAPPING_WS_ENVIRONMENT"},
+	{0x0E, "W3DVERTMAT_STAGE?_MAPPING_GRID_CLASSIC_ENV"},
+	{0x0F, "W3DVERTMAT_STAGE?_MAPPING_GRID_ENVIRONMENT"},
+	{0x10, "W3DVERTMAT_STAGE?_MAPPING_RANDOM"},
+	{0x11, "W3DVERTMAT_STAGE?_MAPPING_EDGE"},
+	{0x12, "W3DVERTMAT_STAGE?_MAPPING_BUMPENV"},
+	{0x13, "W3DVERTMAT_STAGE?_MAPPING_GRID_WS_CLASSIC_ENV"},
+	{0x14, "W3DVERTMAT_STAGE?_MAPPING_GRID_WS_ENVIRONMENT"},
 } };
+
+// Return mapping string with ? -> 0 or 1. If unknown, returns "Unknown(0xNN)".
+inline std::string StageMappingName(uint8_t code, int stage /*0 or 1*/) {
+	for (auto&& [k, name] : VERTMAT_STAGE_MAPPING_CODES) {
+		if (k == code) {
+			std::string s{ name };
+			// replace first '?' with '0' or '1'
+			if (auto pos = s.find('?'); pos != std::string::npos) {
+				s[pos] = (stage == 0 ? '0' : '1');
+			}
+			return s;
+		}
+	}
+	char buf[32];
+	std::snprintf(buf, sizeof(buf), "Unknown(0x%02X)", code);
+	return std::string(buf);
+}
+
+// Extract mapping code for a given stage (0 or 1) from Attributes.
+inline uint8_t ExtractStageMapping(uint32_t attributes, int stage /*0 or 1*/) {
+	if (stage == 0) return static_cast<uint8_t>((attributes & VERTMAT_STAGE0_MAPPING_MASK) >> VERTMAT_STAGE0_MAPPING_SHIFT);
+	return static_cast<uint8_t>((attributes & VERTMAT_STAGE1_MAPPING_MASK) >> VERTMAT_STAGE1_MAPPING_SHIFT);
+}
 
 // PSX transparency bits at 0x00F00000
 constexpr std::array<std::pair<uint32_t, std::string_view>, 6> VERTMAT_PSX_FLAGS = { {

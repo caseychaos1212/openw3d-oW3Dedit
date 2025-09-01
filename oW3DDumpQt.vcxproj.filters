@@ -96,6 +96,12 @@
     <ClInclude Include="backend\W3DStructs.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="backend\W3DObsolete.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="backend\W3DShdMesh.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <Filter Include="Header Files">

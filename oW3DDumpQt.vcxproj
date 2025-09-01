@@ -329,8 +329,10 @@
     <ClInclude Include="backend\W3DMesh.h" />
     <ClInclude Include="backend\W3DMorphAnimation.h" />
     <ClInclude Include="backend\W3DNullObject.h" />
+    <ClInclude Include="backend\W3DObsolete.h" />
     <ClInclude Include="backend\W3DPoints.h" />
     <ClInclude Include="backend\W3DPrimatives.h" />
+    <ClInclude Include="backend\W3DShdMesh.h" />
     <ClInclude Include="backend\W3DSoundRenderObj.h" />
     <ClInclude Include="backend\W3DStructs.h" />
     <ClInclude Include="C:\Users\admin\source\repos\openw3d-oW3Dedit\MainWindow.h" />

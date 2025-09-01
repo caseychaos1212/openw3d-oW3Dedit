@@ -475,6 +475,8 @@ inline std::vector<ChunkField> InterpretShdSubMeshUV0(const std::shared_ptr<Chun
     return fields;
 }
 
+
+//TODO: confirm UV1 is actually used in SHD meshes
 inline std::vector<ChunkField> InterpretShdSubMeshUV1(const std::shared_ptr<ChunkItem>& chunk) {
     std::vector<ChunkField> fields;
     if (!chunk) return fields;
@@ -539,6 +541,7 @@ inline std::vector<ChunkField> InterpretShdSubMeshTangentBasisSXT(const std::sha
     return fields;
 }
 
+//TODO: confirm ShdSubMeshColor is actually used in SHD meshes
 inline std::vector<ChunkField> InterpretShdSubMeshColor(const std::shared_ptr<ChunkItem>& chunk) {
     std::vector<ChunkField> fields;
     if (!chunk) return fields;
@@ -555,7 +558,7 @@ inline std::vector<ChunkField> InterpretShdSubMeshColor(const std::shared_ptr<Ch
     }
     return fields;
 }
-
+//TODO: confirm ShdSubMeshColor is actually used in SHD meshes
 inline std::vector<ChunkField> InterpretShdSubMeshVertexInfluences(const std::shared_ptr<ChunkItem>& chunk) {
     std::vector<ChunkField> fields;
     if (!chunk) return fields;

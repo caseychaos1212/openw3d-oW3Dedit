@@ -2,7 +2,7 @@
 #include "W3DStructs.h"
 #include <vector>
 
-//TODO: Find Example
+//TODO: Either this is never used or I'm unable to parse it.
 inline std::vector<ChunkField> InterpretNullObject(const std::shared_ptr<ChunkItem>& chunk) {
     std::vector<ChunkField> fields;
     if (!chunk) return fields;
