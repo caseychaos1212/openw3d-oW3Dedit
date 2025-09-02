@@ -163,7 +163,81 @@ QJsonObject ChunkJson::toJson(const ChunkItem& item) {
             }
             break;
         }
-
+        case 0x000C: {
+            const char* text = reinterpret_cast<const char*>(item.data.data());
+            dataObj["MESH_USER_TEXT"] = QString::fromUtf8(text, strnlen(text, item.data.size()));
+            break;
+        }
+        case 0x000D: {
+            if (item.data.size() % sizeof(W3dRGBStruct) == 0) {
+                int count = item.data.size() / sizeof(W3dRGBStruct);
+                QJsonArray arr;
+                for (int i = 0; i < count; ++i) {
+                    const auto* c = reinterpret_cast<const W3dRGBStruct*>(item.data.data()) + i;
+                    arr.append(QJsonArray{ int(c->R), int(c->G), int(c->B) });
+                }
+                dataObj["VERTEX_COLORS"] = arr;
+            }
+            break;
+        }
+        case 0x000E: {
+            if (item.data.size() % sizeof(W3dVertInfStruct) == 0) {
+                int count = item.data.size() / sizeof(W3dVertInfStruct);
+                QJsonArray arr;
+                for (int i = 0; i < count; ++i) {
+                    const auto* v = reinterpret_cast<const W3dVertInfStruct*>(item.data.data()) + i;
+                    QJsonObject vo;
+                    vo["BONEIDX"] = QJsonArray{ int(v->BoneIdx[0]), int(v->BoneIdx[1]) };
+                    vo["WEIGHT"] = QJsonArray{ int(v->Weight[0]), int(v->Weight[1]) };
+                    arr.append(vo);
+                }
+                dataObj["VERTEX_INFLUENCES"] = arr;
+            }
+            break;
+        }
+        case 0x0010: {
+            if (item.data.size() >= sizeof(W3dDamageHeaderStruct)) {
+                const auto* h = reinterpret_cast<const W3dDamageHeaderStruct*>(item.data.data());
+                dataObj["NUMDAMAGEMATERIALS"] = static_cast<int>(h->NumDamageMaterials);
+                dataObj["NUMDAMAGEVERTS"] = static_cast<int>(h->NumDamageVerts);
+                dataObj["NUMDAMAGECOLORS"] = static_cast<int>(h->NumDamageColors);
+                dataObj["DAMAGEINDEX"] = static_cast<int>(h->DamageIndex);
+                QJsonArray fu;
+                for (int i = 0; i < 4; ++i) fu.append(static_cast<int>(h->FutureUse[i]));
+                dataObj["FUTUREUSE"] = fu;
+            }
+            break;
+        }
+        case 0x0011: {
+            if (item.data.size() % sizeof(W3dMeshDamageVertexStruct) == 0) {
+                int count = item.data.size() / sizeof(W3dMeshDamageVertexStruct);
+                QJsonArray arr;
+                for (int i = 0; i < count; ++i) {
+                    const auto* v = reinterpret_cast<const W3dMeshDamageVertexStruct*>(item.data.data()) + i;
+                    QJsonObject vo;
+                    vo["VERTEXINDEX"] = static_cast<int>(v->VertexIndex);
+                    vo["NEWVERTEX"] = QJsonArray{ v->NewVertex.X, v->NewVertex.Y, v->NewVertex.Z };
+                    arr.append(vo);
+                }
+                dataObj["DAMAGE_VERTICES"] = arr;
+            }
+            break;
+        }
+        case 0x0012: {
+            if (item.data.size() % sizeof(W3dMeshDamageColorStruct) == 0) {
+                int count = item.data.size() / sizeof(W3dMeshDamageColorStruct);
+                QJsonArray arr;
+                for (int i = 0; i < count; ++i) {
+                    const auto* c = reinterpret_cast<const W3dMeshDamageColorStruct*>(item.data.data()) + i;
+                    QJsonObject co;
+                    co["VERTEXINDEX"] = static_cast<int>(c->VertexIndex);
+                    co["NEWCOLOR"] = QJsonArray{ int(c->NewColor.R), int(c->NewColor.G), int(c->NewColor.B) };
+                    arr.append(co);
+                }
+                dataObj["DAMAGE_COLORS"] = arr;
+            }
+            break;
+        }
 
         
         
@@ -439,6 +513,94 @@ std::shared_ptr<ChunkItem> ChunkJson::fromJson(const QJsonObject& obj, ChunkItem
             item->length = tris.size() * sizeof(W3dSurrenderTriStruct);
             item->data.resize(item->length);
             std::memcpy(item->data.data(), tris.data(), item->length);
+            break;
+        }
+        case 0x000C: {
+            QByteArray txt = dataObj.value("MESH_USER_TEXT").toString().toUtf8();
+            item->length = txt.size() + 1;
+            item->data.resize(item->length);
+            std::memcpy(item->data.data(), txt.constData(), txt.size());
+            item->data[txt.size()] = 0;
+            break;
+        }
+        case 0x000D: {
+            QJsonArray arr = dataObj.value("VERTEX_COLORS").toArray();
+            std::vector<W3dRGBStruct> cols(arr.size());
+            for (int i = 0; i < arr.size(); ++i) {
+                QJsonArray c = arr[i].toArray();
+                if (c.size() >= 3) {
+                    cols[i].R = c[0].toInt();
+                    cols[i].G = c[1].toInt();
+                    cols[i].B = c[2].toInt();
+                }
+            }
+            item->length = cols.size() * sizeof(W3dRGBStruct);
+            item->data.resize(item->length);
+            std::memcpy(item->data.data(), cols.data(), item->length);
+            break;
+        }
+        case 0x000E: {
+            QJsonArray arr = dataObj.value("VERTEX_INFLUENCES").toArray();
+            std::vector<W3dVertInfStruct> inf(arr.size());
+            for (int i = 0; i < arr.size(); ++i) {
+                QJsonObject o = arr[i].toObject();
+                QJsonArray bi = o.value("BONEIDX").toArray();
+                QJsonArray wt = o.value("WEIGHT").toArray();
+                for (int j = 0; j < 2 && j < bi.size(); ++j) inf[i].BoneIdx[j] = bi[j].toInt();
+                for (int j = 0; j < 2 && j < wt.size(); ++j) inf[i].Weight[j] = wt[j].toInt();
+            }
+            item->length = inf.size() * sizeof(W3dVertInfStruct);
+            item->data.resize(item->length);
+            std::memcpy(item->data.data(), inf.data(), item->length);
+            break;
+        }
+        case 0x0010: {
+            W3dDamageHeaderStruct h{};
+            h.NumDamageMaterials = dataObj.value("NUMDAMAGEMATERIALS").toInt();
+            h.NumDamageVerts = dataObj.value("NUMDAMAGEVERTS").toInt();
+            h.NumDamageColors = dataObj.value("NUMDAMAGECOLORS").toInt();
+            h.DamageIndex = dataObj.value("DAMAGEINDEX").toInt();
+            QJsonArray fu = dataObj.value("FUTUREUSE").toArray();
+            for (int i = 0; i < 4 && i < fu.size(); ++i) h.FutureUse[i] = fu[i].toInt();
+            item->length = sizeof(W3dDamageHeaderStruct);
+            item->data.resize(item->length);
+            std::memcpy(item->data.data(), &h, sizeof(h));
+            break;
+        }
+        case 0x0011: {
+            QJsonArray arr = dataObj.value("DAMAGE_VERTICES").toArray();
+            std::vector<W3dMeshDamageVertexStruct> verts(arr.size());
+            for (int i = 0; i < arr.size(); ++i) {
+                QJsonObject v = arr[i].toObject();
+                verts[i].VertexIndex = v.value("VERTEXINDEX").toInt();
+                QJsonArray nv = v.value("NEWVERTEX").toArray();
+                if (nv.size() >= 3) {
+                    verts[i].NewVertex.X = nv[0].toDouble();
+                    verts[i].NewVertex.Y = nv[1].toDouble();
+                    verts[i].NewVertex.Z = nv[2].toDouble();
+                }
+            }
+            item->length = verts.size() * sizeof(W3dMeshDamageVertexStruct);
+            item->data.resize(item->length);
+            std::memcpy(item->data.data(), verts.data(), item->length);
+            break;
+        }
+        case 0x0012: {
+            QJsonArray arr = dataObj.value("DAMAGE_COLORS").toArray();
+            std::vector<W3dMeshDamageColorStruct> cols(arr.size());
+            for (int i = 0; i < arr.size(); ++i) {
+                QJsonObject c = arr[i].toObject();
+                cols[i].VertexIndex = c.value("VERTEXINDEX").toInt();
+                QJsonArray nc = c.value("NEWCOLOR").toArray();
+                if (nc.size() >= 3) {
+                    cols[i].NewColor.R = nc[0].toInt();
+                    cols[i].NewColor.G = nc[1].toInt();
+                    cols[i].NewColor.B = nc[2].toInt();
+                }
+            }
+            item->length = cols.size() * sizeof(W3dMeshDamageColorStruct);
+            item->data.resize(item->length);
+            std::memcpy(item->data.data(), cols.data(), item->length);
             break;
         }
         case 0x0101: {
