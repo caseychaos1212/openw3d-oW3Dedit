@@ -4,8 +4,7 @@
 #include <vector>
 #include <string>
 #include <memory>
-#include <QJsonObject>
-#include <QJsonArray>
+
 
 class ChunkItem {
 public:
@@ -19,6 +18,5 @@ public:
 
     ChunkItem() = default;
 
-    QJsonObject toJson() const;
-    static std::shared_ptr<ChunkItem> fromJson(const QJsonObject& obj, ChunkItem* parent = nullptr);
+
 };
