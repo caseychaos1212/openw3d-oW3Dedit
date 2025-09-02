@@ -238,6 +238,122 @@ QJsonObject ChunkJson::toJson(const ChunkItem& item) {
             }
             break;
         }
+        case 0x0014: {
+            if (item.data.size() % sizeof(W3dMaterial2Struct) == 0) {
+                int count = item.data.size() / sizeof(W3dMaterial2Struct);
+                QJsonArray arr;
+                for (int i = 0; i < count; ++i) {
+                    const auto* m = reinterpret_cast<const W3dMaterial2Struct*>(item.data.data()) + i;
+                    QJsonObject mo;
+                    mo["MATERIALNAME"] = QString::fromUtf8(m->MaterialName, strnlen(m->MaterialName, 16));
+                    mo["PRIMARYNAME"] = QString::fromUtf8(m->PrimaryName, strnlen(m->PrimaryName, 16));
+                    mo["SECONDARYNAME"] = QString::fromUtf8(m->SecondaryName, strnlen(m->SecondaryName, 16));
+                    mo["RENDERFLAGS"] = static_cast<int>(m->RenderFlags);
+                    mo["COLOR"] = QJsonArray{ int(m->Red), int(m->Green), int(m->Blue), int(m->Alpha) };
+                    mo["PRIMARYNUMFRAMES"] = static_cast<int>(m->PrimaryNumFrames);
+                    mo["SECONDARYNUMFRAMES"] = static_cast<int>(m->SecondaryNumFrames);
+                    arr.append(mo);
+                }
+                dataObj["MATERIALS2"] = arr;
+            }
+            break;
+        }
+
+        case 0x0017: {
+            const char* text = reinterpret_cast<const char*>(item.data.data());
+            dataObj["MATERIAL3_NAME"] = QString::fromUtf8(text, strnlen(text, item.data.size()));
+            break;
+        }
+
+        case 0x0018: {
+            if (item.data.size() >= sizeof(W3dMaterial3Struct)) {
+                const auto* m = reinterpret_cast<const W3dMaterial3Struct*>(item.data.data());
+                dataObj["MATERIAL3FLAGS"] = static_cast<int>(m->Material3Flags);
+                dataObj["DIFFUSECOLOR"] = QJsonArray{ int(m->DiffuseColor.R), int(m->DiffuseColor.G), int(m->DiffuseColor.B) };
+                dataObj["SPECULARCOLOR"] = QJsonArray{ int(m->SpecularColor.R), int(m->SpecularColor.G), int(m->SpecularColor.B) };
+                dataObj["EMISSIVECOEFFICIENTS"] = QJsonArray{ int(m->EmissiveCoefficients.R), int(m->EmissiveCoefficients.G), int(m->EmissiveCoefficients.B) };
+                dataObj["AMBIENTCOEFFICIENTS"] = QJsonArray{ int(m->AmbientCoefficients.R), int(m->AmbientCoefficients.G), int(m->AmbientCoefficients.B) };
+                dataObj["DIFFUSECOEFFICIENTS"] = QJsonArray{ int(m->DiffuseCoefficients.R), int(m->DiffuseCoefficients.G), int(m->DiffuseCoefficients.B) };
+                dataObj["SPECULARCOEFFICIENTS"] = QJsonArray{ int(m->SpecularCoefficients.R), int(m->SpecularCoefficients.G), int(m->SpecularCoefficients.B) };
+                dataObj["SHININESS"] = m->Shininess;
+                dataObj["OPACITY"] = m->Opacity;
+                dataObj["TRANSLUCENCY"] = m->Translucency;
+                dataObj["FOGCOEFF"] = m->FogCoeff;
+            }
+            break;
+        }
+
+        case 0x001A: {
+            const char* text = reinterpret_cast<const char*>(item.data.data());
+            dataObj["MAP3_FILENAME"] = QString::fromUtf8(text, strnlen(text, item.data.size()));
+            break;
+        }
+
+        case 0x001B: {
+            if (item.data.size() >= sizeof(W3dMap3Struct)) {
+                const auto* m = reinterpret_cast<const W3dMap3Struct*>(item.data.data());
+                dataObj["MAPPINGTYPE"] = static_cast<int>(m->MappingType);
+                dataObj["FRAMECOUNT"] = static_cast<int>(m->FrameCount);
+                dataObj["FRAMERATE"] = static_cast<int>(m->FrameRate);
+            }
+            break;
+        }
+
+        case 0x001F: {
+            if (item.data.size() >= sizeof(W3dMeshHeader3Struct)) {
+                const auto* h = reinterpret_cast<const W3dMeshHeader3Struct*>(item.data.data());
+                dataObj["VERSION"] = QString::fromStdString(FormatUtils::FormatVersion(h->Version));
+                dataObj["ATTRIBUTES"] = static_cast<int>(h->Attributes);
+                dataObj["MESHNAME"] = QString::fromUtf8(h->MeshName, strnlen(h->MeshName, W3D_NAME_LEN));
+                dataObj["CONTAINERNAME"] = QString::fromUtf8(h->ContainerName, strnlen(h->ContainerName, W3D_NAME_LEN));
+                dataObj["NUMTRIS"] = static_cast<int>(h->NumTris);
+                dataObj["NUMVERTICES"] = static_cast<int>(h->NumVertices);
+                dataObj["NUMMATERIALS"] = static_cast<int>(h->NumMaterials);
+                dataObj["NUMDAMAGESTAGES"] = static_cast<int>(h->NumDamageStages);
+                dataObj["SORTLEVEL"] = static_cast<int>(h->SortLevel);
+                dataObj["PRELITVERSION"] = static_cast<int>(h->PrelitVersion);
+                QJsonArray fc;
+                for (int i = 0; i < 1; ++i) fc.append(static_cast<int>(h->FutureCounts[i]));
+                dataObj["FUTURECOUNTS"] = fc;
+                dataObj["VERTEXCHANNELS"] = static_cast<int>(h->VertexChannels);
+                dataObj["FACECHANNELS"] = static_cast<int>(h->FaceChannels);
+                dataObj["MIN"] = QJsonArray{ h->Min.X, h->Min.Y, h->Min.Z };
+                dataObj["MAX"] = QJsonArray{ h->Max.X, h->Max.Y, h->Max.Z };
+                dataObj["SPHCENTER"] = QJsonArray{ h->SphCenter.X, h->SphCenter.Y, h->SphCenter.Z };
+                dataObj["SPHRADIUS"] = h->SphRadius;
+            }
+            break;
+        }
+
+        case 0x0020: {
+            if (item.data.size() % sizeof(W3dTriStruct) == 0) {
+                int count = item.data.size() / sizeof(W3dTriStruct);
+                QJsonArray arr;
+                for (int i = 0; i < count; ++i) {
+                    const auto* t = reinterpret_cast<const W3dTriStruct*>(item.data.data()) + i;
+                    QJsonObject to;
+                    QJsonArray vidx; for (int j = 0; j < 3; ++j) vidx.append(int(t->Vindex[j]));
+                    to["VINDEX"] = vidx;
+                    to["ATTRIBUTES"] = static_cast<int>(t->Attributes);
+                    to["NORMAL"] = QJsonArray{ t->Normal.X, t->Normal.Y, t->Normal.Z };
+                    to["DIST"] = t->Dist;
+                    arr.append(to);
+                }
+                dataObj["TRIANGLES"] = arr;
+            }
+            break;
+        }
+
+        case 0x0021: {
+            if (item.data.size() % sizeof(uint16_t) == 0) {
+                int count = item.data.size() / sizeof(uint16_t);
+                QJsonArray arr;
+                const auto* m = reinterpret_cast<const uint16_t*>(item.data.data());
+                for (int i = 0; i < count; ++i) arr.append(int(m[i]));
+                dataObj["PER_TRI_MATERIALS"] = arr;
+            }
+            break;
+        }
 
         
         
@@ -603,6 +719,155 @@ std::shared_ptr<ChunkItem> ChunkJson::fromJson(const QJsonObject& obj, ChunkItem
             std::memcpy(item->data.data(), cols.data(), item->length);
             break;
         }
+        case 0x0014: {
+            QJsonArray arr = dataObj.value("MATERIALS2").toArray();
+            std::vector<W3dMaterial2Struct> mats(arr.size());
+            for (int i = 0; i < arr.size(); ++i) {
+                QJsonObject m = arr[i].toObject();
+                QByteArray mn = m.value("MATERIALNAME").toString().toUtf8();
+                std::memset(mats[i].MaterialName, 0, 16);
+                std::memcpy(mats[i].MaterialName, mn.constData(), std::min<int>(mn.size(), 16));
+                QByteArray pn = m.value("PRIMARYNAME").toString().toUtf8();
+                std::memset(mats[i].PrimaryName, 0, 16);
+                std::memcpy(mats[i].PrimaryName, pn.constData(), std::min<int>(pn.size(), 16));
+                QByteArray sn = m.value("SECONDARYNAME").toString().toUtf8();
+                std::memset(mats[i].SecondaryName, 0, 16);
+                std::memcpy(mats[i].SecondaryName, sn.constData(), std::min<int>(sn.size(), 16));
+                mats[i].RenderFlags = m.value("RENDERFLAGS").toInt();
+                QJsonArray col = m.value("COLOR").toArray();
+                if (col.size() >= 4) {
+                    mats[i].Red = col[0].toInt();
+                    mats[i].Green = col[1].toInt();
+                    mats[i].Blue = col[2].toInt();
+                    mats[i].Alpha = col[3].toInt();
+                }
+                mats[i].PrimaryNumFrames = m.value("PRIMARYNUMFRAMES").toInt();
+                mats[i].SecondaryNumFrames = m.value("SECONDARYNUMFRAMES").toInt();
+            }
+            item->length = mats.size() * sizeof(W3dMaterial2Struct);
+            item->data.resize(item->length);
+            std::memcpy(item->data.data(), mats.data(), item->length);
+            break;
+        }
+
+        case 0x0017: {
+            QByteArray name = dataObj.value("MATERIAL3_NAME").toString().toUtf8();
+            item->length = name.size() + 1;
+            item->data.resize(item->length);
+            std::memcpy(item->data.data(), name.constData(), name.size());
+            item->data[name.size()] = 0;
+            break;
+        }
+
+        case 0x0018: {
+            W3dMaterial3Struct m{};
+            m.Material3Flags = dataObj.value("MATERIAL3FLAGS").toInt();
+            QJsonArray dc = dataObj.value("DIFFUSECOLOR").toArray();
+            if (dc.size() >= 3) { m.DiffuseColor.R = dc[0].toInt(); m.DiffuseColor.G = dc[1].toInt(); m.DiffuseColor.B = dc[2].toInt(); }
+            QJsonArray sc = dataObj.value("SPECULARCOLOR").toArray();
+            if (sc.size() >= 3) { m.SpecularColor.R = sc[0].toInt(); m.SpecularColor.G = sc[1].toInt(); m.SpecularColor.B = sc[2].toInt(); }
+            QJsonArray ec = dataObj.value("EMISSIVECOEFFICIENTS").toArray();
+            if (ec.size() >= 3) { m.EmissiveCoefficients.R = ec[0].toInt(); m.EmissiveCoefficients.G = ec[1].toInt(); m.EmissiveCoefficients.B = ec[2].toInt(); }
+            QJsonArray ac = dataObj.value("AMBIENTCOEFFICIENTS").toArray();
+            if (ac.size() >= 3) { m.AmbientCoefficients.R = ac[0].toInt(); m.AmbientCoefficients.G = ac[1].toInt(); m.AmbientCoefficients.B = ac[2].toInt(); }
+            QJsonArray dcf = dataObj.value("DIFFUSECOEFFICIENTS").toArray();
+            if (dcf.size() >= 3) { m.DiffuseCoefficients.R = dcf[0].toInt(); m.DiffuseCoefficients.G = dcf[1].toInt(); m.DiffuseCoefficients.B = dcf[2].toInt(); }
+            QJsonArray scf = dataObj.value("SPECULARCOEFFICIENTS").toArray();
+            if (scf.size() >= 3) { m.SpecularCoefficients.R = scf[0].toInt(); m.SpecularCoefficients.G = scf[1].toInt(); m.SpecularCoefficients.B = scf[2].toInt(); }
+            m.Shininess = dataObj.value("SHININESS").toDouble();
+            m.Opacity = dataObj.value("OPACITY").toDouble();
+            m.Translucency = dataObj.value("TRANSLUCENCY").toDouble();
+            m.FogCoeff = dataObj.value("FOGCOEFF").toDouble();
+            item->length = sizeof(W3dMaterial3Struct);
+            item->data.resize(item->length);
+            std::memcpy(item->data.data(), &m, sizeof(m));
+            break;
+        }
+
+        case 0x001A: {
+            QByteArray name = dataObj.value("MAP3_FILENAME").toString().toUtf8();
+            item->length = name.size() + 1;
+            item->data.resize(item->length);
+            std::memcpy(item->data.data(), name.constData(), name.size());
+            item->data[name.size()] = 0;
+            break;
+        }
+
+        case 0x001B: {
+            W3dMap3Struct m{};
+            m.MappingType = dataObj.value("MAPPINGTYPE").toInt();
+            m.FrameCount = dataObj.value("FRAMECOUNT").toInt();
+            m.FrameRate = static_cast<uint32_t>(dataObj.value("FRAMERATE").toInt());
+            item->length = sizeof(W3dMap3Struct);
+            item->data.resize(item->length);
+            std::memcpy(item->data.data(), &m, sizeof(m));
+            break;
+        }
+
+        case 0x001F: {
+            W3dMeshHeader3Struct h{};
+            QString verStr = dataObj.value("VERSION").toString();
+            auto parts = verStr.split('.');
+            if (parts.size() == 2) h.Version = (parts[0].toUInt() << 16) | parts[1].toUInt();
+            h.Attributes = dataObj.value("ATTRIBUTES").toInt();
+            QByteArray mn = dataObj.value("MESHNAME").toString().toUtf8();
+            std::memset(h.MeshName, 0, W3D_NAME_LEN);
+            std::memcpy(h.MeshName, mn.constData(), std::min<int>(mn.size(), W3D_NAME_LEN));
+            QByteArray cn = dataObj.value("CONTAINERNAME").toString().toUtf8();
+            std::memset(h.ContainerName, 0, W3D_NAME_LEN);
+            std::memcpy(h.ContainerName, cn.constData(), std::min<int>(cn.size(), W3D_NAME_LEN));
+            h.NumTris = dataObj.value("NUMTRIS").toInt();
+            h.NumVertices = dataObj.value("NUMVERTICES").toInt();
+            h.NumMaterials = dataObj.value("NUMMATERIALS").toInt();
+            h.NumDamageStages = dataObj.value("NUMDAMAGESTAGES").toInt();
+            h.SortLevel = dataObj.value("SORTLEVEL").toInt();
+            h.PrelitVersion = dataObj.value("PRELITVERSION").toInt();
+            QJsonArray fc = dataObj.value("FUTURECOUNTS").toArray();
+            for (int i = 0; i < 1 && i < fc.size(); ++i) h.FutureCounts[i] = fc[i].toInt();
+            h.VertexChannels = dataObj.value("VERTEXCHANNELS").toInt();
+            h.FaceChannels = dataObj.value("FACECHANNELS").toInt();
+            QJsonArray min = dataObj.value("MIN").toArray();
+            if (min.size() >= 3) { h.Min.X = min[0].toDouble(); h.Min.Y = min[1].toDouble(); h.Min.Z = min[2].toDouble(); }
+            QJsonArray max = dataObj.value("MAX").toArray();
+            if (max.size() >= 3) { h.Max.X = max[0].toDouble(); h.Max.Y = max[1].toDouble(); h.Max.Z = max[2].toDouble(); }
+            QJsonArray sph = dataObj.value("SPHCENTER").toArray();
+            if (sph.size() >= 3) { h.SphCenter.X = sph[0].toDouble(); h.SphCenter.Y = sph[1].toDouble(); h.SphCenter.Z = sph[2].toDouble(); }
+            h.SphRadius = dataObj.value("SPHRADIUS").toDouble();
+            item->length = sizeof(W3dMeshHeader3Struct);
+            item->data.resize(item->length);
+            std::memcpy(item->data.data(), &h, sizeof(h));
+            break;
+        }
+
+        case 0x0020: {
+            QJsonArray arr = dataObj.value("TRIANGLES").toArray();
+            std::vector<W3dTriStruct> tris(arr.size());
+            for (int i = 0; i < arr.size(); ++i) {
+                QJsonObject t = arr[i].toObject();
+                QJsonArray vidx = t.value("VINDEX").toArray();
+                for (int j = 0; j < 3 && j < vidx.size(); ++j) tris[i].Vindex[j] = vidx[j].toInt();
+                tris[i].Attributes = t.value("ATTRIBUTES").toInt();
+                QJsonArray norm = t.value("NORMAL").toArray();
+                if (norm.size() >= 3) { tris[i].Normal.X = norm[0].toDouble(); tris[i].Normal.Y = norm[1].toDouble(); tris[i].Normal.Z = norm[2].toDouble(); }
+                tris[i].Dist = t.value("DIST").toDouble();
+            }
+            item->length = tris.size() * sizeof(W3dTriStruct);
+            item->data.resize(item->length);
+            std::memcpy(item->data.data(), tris.data(), item->length);
+            break;
+        }
+
+        case 0x0021: {
+            QJsonArray arr = dataObj.value("PER_TRI_MATERIALS").toArray();
+            std::vector<uint16_t> mats(arr.size());
+            for (int i = 0; i < arr.size(); ++i) mats[i] = arr[i].toInt();
+            item->length = mats.size() * sizeof(uint16_t);
+            item->data.resize(item->length);
+            std::memcpy(item->data.data(), mats.data(), item->length);
+            break;
+        }
+
+
         case 0x0101: {
             W3dHierarchyStruct h{};
             QString verStr = dataObj.value("VERSION").toString();
