@@ -28,6 +28,7 @@ public:
 
 private:
     std::vector<std::shared_ptr<ChunkItem>> chunks;
+    std::string sourceFilename;
 
     // Internal recursive parser used during load
     bool parseChunk(std::istream& stream, std::shared_ptr<ChunkItem>& parent);

@@ -309,9 +309,11 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <QtMoc Include="MainWindow.h" />
+    <ClCompile Include="backend\ChunkJson.cpp" />
     <ClCompile Include="C:\Users\admin\source\repos\openw3d-oW3Dedit\Main.cpp" />
     <ClCompile Include="C:\Users\admin\source\repos\openw3d-oW3Dedit\mainWindow.cpp" />
     <ClInclude Include="backend\ChunkInterpreter.h" />
+    <ClInclude Include="backend\ChunkJson.h" />
     <ClInclude Include="backend\ChunkNames.h" />
     <ClInclude Include="backend\EnumToString.h" />
     <ClInclude Include="backend\FormatUtils.h" />
