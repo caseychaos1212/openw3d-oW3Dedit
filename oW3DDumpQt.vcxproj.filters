@@ -13,6 +13,9 @@
     <ClCompile Include="backend\ChunkJson.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="backend\ChunkSerializers.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="C:\Users\admin\source\repos\openw3d-oW3Dedit\MainWindow.h">
@@ -106,6 +109,12 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="backend\ChunkJson.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="backend\ChunkSerializers.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="backend\ChunkSerializer.h">
       <Filter>Header Files</Filter>
     </ClInclude>
   </ItemGroup>

@@ -33,6 +33,7 @@
     <ConfigurationType>Application</ConfigurationType>
     <CharacterSet>Unicode</CharacterSet>
     <PlatformToolset>v143</PlatformToolset>
+    <UseDebugLibraries>true</UseDebugLibraries>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'" Label="Configuration">
     <ConfigurationType>Application</ConfigurationType>
@@ -70,13 +71,11 @@
   </PropertyGroup>
   <PropertyGroup>
     <_ProjectFileVersion>10.0.20506.1</_ProjectFileVersion>
-    <OutDir Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">C:\Users\admin\source\repos\openw3d-oW3Dedit\Debug\</OutDir>
     <IntDir Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">oW3DEdit.dir\Debug\</IntDir>
     <TargetName Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">oW3DEdit</TargetName>
     <TargetExt Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">.exe</TargetExt>
     <LinkIncremental Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">true</LinkIncremental>
     <GenerateManifest Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">true</GenerateManifest>
-    <OutDir Condition="'$(Configuration)|$(Platform)'=='Release|x64'">C:\Users\admin\source\repos\openw3d-oW3Dedit\Release\</OutDir>
     <IntDir Condition="'$(Configuration)|$(Platform)'=='Release|x64'">oW3DEdit.dir\Release\</IntDir>
     <TargetName Condition="'$(Configuration)|$(Platform)'=='Release|x64'">oW3DEdit</TargetName>
     <TargetExt Condition="'$(Configuration)|$(Platform)'=='Release|x64'">.exe</TargetExt>
@@ -310,11 +309,14 @@
   <ItemGroup>
     <QtMoc Include="MainWindow.h" />
     <ClCompile Include="backend\ChunkJson.cpp" />
+    <ClCompile Include="backend\ChunkSerializers.cpp" />
     <ClCompile Include="C:\Users\admin\source\repos\openw3d-oW3Dedit\Main.cpp" />
     <ClCompile Include="C:\Users\admin\source\repos\openw3d-oW3Dedit\mainWindow.cpp" />
     <ClInclude Include="backend\ChunkInterpreter.h" />
     <ClInclude Include="backend\ChunkJson.h" />
     <ClInclude Include="backend\ChunkNames.h" />
+    <ClInclude Include="backend\ChunkSerializer.h" />
+    <ClInclude Include="backend\ChunkSerializers.h" />
     <ClInclude Include="backend\EnumToString.h" />
     <ClInclude Include="backend\FormatUtils.h" />
     <ClInclude Include="backend\parseUtils.h" />

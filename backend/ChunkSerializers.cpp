@@ -1574,6 +1574,205 @@ namespace {
         }
     };
 
+    // Serializer for chunk 0x0091 (W3D_CHUNK_AABTREE_HEADER)
+    struct AABTreeHeaderSerializer : ChunkSerializer {
+        QJsonObject toJson(const ChunkItem& item) const override {
+            QJsonObject obj;
+            if (item.data.size() >= sizeof(W3dMeshAABTreeHeader)) {
+                const auto* h = reinterpret_cast<const W3dMeshAABTreeHeader*>(item.data.data());
+                obj["NODECOUNT"] = int(h->NodeCount);
+                obj["POLYCOUNT"] = int(h->PolyCount);
+                QJsonArray pad;
+                for (int i = 0; i < 6; ++i) pad.append(int(h->Padding[i]));
+                obj["PADDING"] = pad;
+            }
+            return obj;
+        }
+
+        void fromJson(const QJsonObject& dataObj, ChunkItem& item) const override {
+            W3dMeshAABTreeHeader h{};
+            h.NodeCount = dataObj.value("NODECOUNT").toInt();
+            h.PolyCount = dataObj.value("POLYCOUNT").toInt();
+            QJsonArray pad = dataObj.value("PADDING").toArray();
+            for (int i = 0; i < 6 && i < pad.size(); ++i) h.Padding[i] = pad[i].toInt();
+            item.length = sizeof(W3dMeshAABTreeHeader);
+            item.data.resize(item.length);
+            std::memcpy(item.data.data(), &h, sizeof(h));
+        }
+    };
+
+    // Serializer for chunk 0x0092 (W3D_CHUNK_AABTREE_POLYINDICES)
+    struct AABTreePolyIndicesSerializer : ChunkSerializer {
+        QJsonObject toJson(const ChunkItem& item) const override {
+            QJsonObject obj;
+            QJsonArray arr;
+            if (item.data.size() % sizeof(uint32_t) == 0) {
+                const auto* begin = reinterpret_cast<const uint32_t*>(item.data.data());
+                int count = int(item.data.size() / sizeof(uint32_t));
+                for (int i = 0; i < count; ++i) arr.append(int(begin[i]));
+            }
+            obj["POLY_INDICES"] = arr;
+            return obj;
+        }
+
+        void fromJson(const QJsonObject& dataObj, ChunkItem& item) const override {
+            QJsonArray arr = dataObj.value("POLY_INDICES").toArray();
+            std::vector<uint32_t> temp(arr.size());
+            for (int i = 0; i < arr.size(); ++i) temp[i] = uint32_t(arr[i].toInt());
+            item.data.resize(temp.size() * sizeof(uint32_t));
+            if (!temp.empty()) std::memcpy(item.data.data(), temp.data(), item.data.size());
+            item.length = uint32_t(item.data.size());
+        }
+    };
+
+    // Serializer for chunk 0x0093 (W3D_CHUNK_AABTREE_NODES)
+    struct AABTreeNodesSerializer : ChunkSerializer {
+        QJsonObject toJson(const ChunkItem& item) const override {
+            QJsonObject obj;
+            obj["AABTREE_NODES"] = structsToJsonArray<W3dMeshAABTreeNode>(
+                item.data,
+                [](const W3dMeshAABTreeNode& n) {
+                    QJsonObject o;
+                    o["MIN"] = QJsonArray{ n.Min.X, n.Min.Y, n.Min.Z };
+                    o["MAX"] = QJsonArray{ n.Max.X, n.Max.Y, n.Max.Z };
+                    o["FRONTORPOLY0"] = int(n.FrontOrPoly0);
+                    o["BACKORPOLYCOUNT"] = int(n.BackOrPolyCount);
+                    return o;
+                }
+            );
+            return obj;
+        }
+
+        void fromJson(const QJsonObject& dataObj, ChunkItem& item) const override {
+            QJsonArray arr = dataObj.value("AABTREE_NODES").toArray();
+            item.data = jsonArrayToStructs<W3dMeshAABTreeNode>(arr, [](const QJsonValue& val) {
+                W3dMeshAABTreeNode n{};
+                QJsonObject o = val.toObject();
+                QJsonArray min = o.value("MIN").toArray();
+                if (min.size() >= 3) { n.Min.X = min[0].toDouble(); n.Min.Y = min[1].toDouble(); n.Min.Z = min[2].toDouble(); }
+                QJsonArray max = o.value("MAX").toArray();
+                if (max.size() >= 3) { n.Max.X = max[0].toDouble(); n.Max.Y = max[1].toDouble(); n.Max.Z = max[2].toDouble(); }
+                n.FrontOrPoly0 = uint32_t(o.value("FRONTORPOLY0").toInt());
+                n.BackOrPolyCount = uint32_t(o.value("BACKORPOLYCOUNT").toInt());
+                return n;
+                });
+            item.length = uint32_t(item.data.size());
+        }
+    };
+
+    // Serializer for chunk 0x0101 (W3D_CHUNK_HIERARCHY_HEADER)
+    struct HierarchyHeaderSerializer : ChunkSerializer {
+        QJsonObject toJson(const ChunkItem& item) const override {
+            QJsonObject obj;
+            if (item.data.size() >= sizeof(W3dHierarchyStruct)) {
+                const auto* h = reinterpret_cast<const W3dHierarchyStruct*>(item.data.data());
+                obj["VERSION"] = QString::fromStdString(FormatUtils::FormatVersion(h->Version));
+                obj["NAME"] = QString::fromUtf8(h->Name, strnlen(h->Name, W3D_NAME_LEN));
+                obj["NUMPIVOTS"] = int(h->NumPivots);
+                obj["CENTER"] = QJsonArray{ h->Center.X, h->Center.Y, h->Center.Z };
+            }
+            return obj;
+        }
+
+        void fromJson(const QJsonObject& dataObj, ChunkItem& item) const override {
+            W3dHierarchyStruct h{};
+            QString verStr = dataObj.value("VERSION").toString();
+            auto parts = verStr.split('.');
+            if (parts.size() == 2) {
+                h.Version = (parts[0].toUInt() << 16) | parts[1].toUInt();
+            }
+            QByteArray name = dataObj.value("NAME").toString().toUtf8();
+            std::memset(h.Name, 0, W3D_NAME_LEN);
+            std::memcpy(h.Name, name.constData(), std::min<int>(name.size(), W3D_NAME_LEN));
+            h.NumPivots = dataObj.value("NUMPIVOTS").toInt();
+            QJsonArray center = dataObj.value("CENTER").toArray();
+            if (center.size() >= 3) { h.Center.X = center[0].toDouble(); h.Center.Y = center[1].toDouble(); h.Center.Z = center[2].toDouble(); }
+            item.length = sizeof(W3dHierarchyStruct);
+            item.data.resize(item.length);
+            std::memcpy(item.data.data(), &h, sizeof(h));
+        }
+    };
+
+    // Serializer for chunk 0x0102 (W3D_CHUNK_PIVOTS)
+    struct PivotsSerializer : ChunkSerializer {
+        QJsonObject toJson(const ChunkItem& item) const override {
+            QJsonObject obj;
+            obj["PIVOTS"] = structsToJsonArray<W3dPivotStruct>(
+                item.data,
+                [](const W3dPivotStruct& p) {
+                    QJsonObject o;
+                    o["NAME"] = QString::fromUtf8(p.Name, strnlen(p.Name, W3D_NAME_LEN));
+                    o["PARENTIDX"] = int(p.ParentIdx);
+                    o["TRANSLATION"] = QJsonArray{ p.Translation.X, p.Translation.Y, p.Translation.Z };
+                    o["EULERANGLES"] = QJsonArray{ p.EulerAngles.X, p.EulerAngles.Y, p.EulerAngles.Z };
+                    QJsonArray rot;
+                    for (int i = 0; i < 4; ++i) rot.append(p.Rotation.Q[i]);
+                    o["ROTATION"] = rot;
+                    return o;
+                }
+            );
+            return obj;
+        }
+
+        void fromJson(const QJsonObject& dataObj, ChunkItem& item) const override {
+            QJsonArray arr = dataObj.value("PIVOTS").toArray();
+            item.data = jsonArrayToStructs<W3dPivotStruct>(arr, [](const QJsonValue& val) {
+                W3dPivotStruct p{};
+                QJsonObject o = val.toObject();
+                QByteArray name = o.value("NAME").toString().toUtf8();
+                std::memset(p.Name, 0, W3D_NAME_LEN);
+                std::memcpy(p.Name, name.constData(), std::min<int>(name.size(), W3D_NAME_LEN));
+                p.ParentIdx = uint32_t(o.value("PARENTIDX").toInt());
+                QJsonArray trans = o.value("TRANSLATION").toArray();
+                if (trans.size() >= 3) { p.Translation.X = trans[0].toDouble(); p.Translation.Y = trans[1].toDouble(); p.Translation.Z = trans[2].toDouble(); }
+                QJsonArray euler = o.value("EULERANGLES").toArray();
+                if (euler.size() >= 3) { p.EulerAngles.X = euler[0].toDouble(); p.EulerAngles.Y = euler[1].toDouble(); p.EulerAngles.Z = euler[2].toDouble(); }
+                QJsonArray rot = o.value("ROTATION").toArray();
+                for (int i = 0; i < 4 && i < rot.size(); ++i) p.Rotation.Q[i] = rot[i].toDouble();
+                return p;
+                });
+            item.length = uint32_t(item.data.size());
+        }
+    };
+
+    // Serializer for chunk 0x0103 (W3D_CHUNK_PIVOT_FIXUPS)
+    struct PivotFixupsSerializer : ChunkSerializer {
+        QJsonObject toJson(const ChunkItem& item) const override {
+            QJsonObject obj;
+            obj["PIVOT_FIXUPS"] = structsToJsonArray<W3dPivotFixupStruct>(
+                item.data,
+                [](const W3dPivotFixupStruct& f) {
+                    QJsonObject o;
+                    QJsonArray tm;
+                    for (int i = 0; i < 4; ++i) {
+                        QJsonArray row;
+                        for (int j = 0; j < 3; ++j) row.append(f.TM[i][j]);
+                        tm.append(row);
+                    }
+                    o["TM"] = tm;
+                    return o;
+                }
+            );
+            return obj;
+        }
+
+        void fromJson(const QJsonObject& dataObj, ChunkItem& item) const override {
+            QJsonArray arr = dataObj.value("PIVOT_FIXUPS").toArray();
+            item.data = jsonArrayToStructs<W3dPivotFixupStruct>(arr, [](const QJsonValue& val) {
+                W3dPivotFixupStruct f{};
+                QJsonObject o = val.toObject();
+                QJsonArray tm = o.value("TM").toArray();
+                for (int i = 0; i < 4 && i < tm.size(); ++i) {
+                    QJsonArray row = tm[i].toArray();
+                    for (int j = 0; j < 3 && j < row.size(); ++j) f.TM[i][j] = row[j].toDouble();
+                }
+                return f;
+                });
+            item.length = uint32_t(item.data.size());
+        }
+    };
+
+
     // static serializer instances
     static const MeshHeader1Serializer meshHeader1SerializerInstance;
     static const VerticesSerializer verticesSerializerInstance;
@@ -1623,7 +1822,12 @@ namespace {
     static const TangentsSerializer tangentsSerializerInstance;
     static const BinormalsSerializer binormalsSerializerInstance;
     static const Ps2ShadersSerializer ps2ShadersSerializerInstance;
-
+    static const AABTreeHeaderSerializer aabTreeHeaderSerializerInstance;
+    static const AABTreePolyIndicesSerializer aabTreePolyIndicesSerializerInstance;
+    static const AABTreeNodesSerializer aabTreeNodesSerializerInstance;
+    static const HierarchyHeaderSerializer hierarchyHeaderSerializerInstance;
+    static const PivotsSerializer pivotsSerializerInstance;
+    static const PivotFixupsSerializer pivotFixupsSerializerInstance;
 
 } // namespace
 
@@ -1677,6 +1881,12 @@ const std::unordered_map<uint32_t, const ChunkSerializer*>& chunkSerializerRegis
         {0x0060, &tangentsSerializerInstance},
         {0x0061, &binormalsSerializerInstance},
         {0x0080, &ps2ShadersSerializerInstance},
+        {0x0091, &aabTreeHeaderSerializerInstance},
+        {0x0092, &aabTreePolyIndicesSerializerInstance},
+        {0x0093, &aabTreeNodesSerializerInstance},
+        {0x0101, &hierarchyHeaderSerializerInstance},
+        {0x0102, &pivotsSerializerInstance},
+        {0x0103, &pivotFixupsSerializerInstance},
     };
     return registry;
 }
