@@ -6,6 +6,7 @@
 
 #include <QJsonArray>
 #include <QByteArray>
+#include <QString>
 #include <vector>
 #include <cstring>
 #include <algorithm>
@@ -281,6 +282,134 @@ namespace {
         }
     };
 
+    
+
+    // Serializer for chunk 0x0009 (O_W3D_CHUNK_SURRENDER_TRIANGLES)
+    struct SurrenderTrianglesSerializer : ChunkSerializer {
+        QJsonObject toJson(const ChunkItem& item) const override {
+            QJsonObject obj;
+            obj["SURRENDER_TRIANGLES"] = structsToJsonArray<W3dSurrenderTriStruct>(
+                item.data,
+                [](const W3dSurrenderTriStruct& t) {
+                    QJsonObject to;
+                    QJsonArray vi; for (int i = 0; i < 3; ++i) vi.append(int(t.VIndex[i]));
+                    to["VINDEX"] = vi;
+                    QJsonArray tc;
+                    for (int i = 0; i < 3; ++i) tc.append(QJsonArray{ t.TexCoord[i].U, t.TexCoord[i].V });
+                    to["TEXCOORD"] = tc;
+                    to["MATERIALIDX"] = int(t.MaterialIDx);
+                    to["NORMAL"] = QJsonArray{ t.Normal.X, t.Normal.Y, t.Normal.Z };
+                    to["ATTRIBUTES"] = int(t.Attributes);
+                    QJsonArray g;
+                    for (int i = 0; i < 3; ++i) g.append(QJsonArray{ int(t.Gouraud[i].R), int(t.Gouraud[i].G), int(t.Gouraud[i].B) });
+                    to["GOURAUD"] = g;
+                    return to;
+                }
+            );
+            return obj;
+        }
+
+        void fromJson(const QJsonObject& dataObj, ChunkItem& item) const override {
+            QJsonArray arr = dataObj.value("SURRENDER_TRIANGLES").toArray();
+            item.data = jsonArrayToStructs<W3dSurrenderTriStruct>(arr, [](const QJsonValue& val) {
+                W3dSurrenderTriStruct t{};
+                QJsonObject o = val.toObject();
+                QJsonArray vi = o.value("VINDEX").toArray();
+                for (int i = 0; i < 3 && i < vi.size(); ++i) t.VIndex[i] = vi[i].toInt();
+                QJsonArray tcArr = o.value("TEXCOORD").toArray();
+                for (int i = 0; i < 3 && i < tcArr.size(); ++i) {
+                    auto a = tcArr[i].toArray();
+                    if (a.size() >= 2) { t.TexCoord[i].U = a[0].toDouble(); t.TexCoord[i].V = a[1].toDouble(); }
+                }
+                t.MaterialIDx = o.value("MATERIALIDX").toInt();
+                QJsonArray n = o.value("NORMAL").toArray();
+                if (n.size() >= 3) { t.Normal.X = n[0].toDouble(); t.Normal.Y = n[1].toDouble(); t.Normal.Z = n[2].toDouble(); }
+                t.Attributes = o.value("ATTRIBUTES").toInt();
+                QJsonArray gArr = o.value("GOURAUD").toArray();
+                for (int i = 0; i < 3 && i < gArr.size(); ++i) {
+                    auto ga = gArr[i].toArray();
+                    if (ga.size() >= 3) { t.Gouraud[i].R = ga[0].toInt(); t.Gouraud[i].G = ga[1].toInt(); t.Gouraud[i].B = ga[2].toInt(); }
+                }
+                return t;
+                });
+            item.length = uint32_t(item.data.size());
+        }
+    };
+
+    // Serializer for chunk 0x000C (W3D_CHUNK_MESH_USER_TEXT)
+    struct MeshUserTextSerializer : ChunkSerializer {
+        QJsonObject toJson(const ChunkItem& item) const override {
+            QJsonObject obj;
+            QString text = QString::fromUtf8(reinterpret_cast<const char*>(item.data.data()), int(item.data.size()));
+            obj["TEXT"] = text;
+            return obj;
+        }
+
+        void fromJson(const QJsonObject& dataObj, ChunkItem& item) const override {
+            QByteArray text = dataObj.value("TEXT").toString().toUtf8();
+            item.length = uint32_t(text.size() + 1);
+            item.data.resize(item.length);
+            std::memcpy(item.data.data(), text.constData(), text.size());
+            item.data[text.size()] = 0;
+        }
+    };
+
+    // Serializer for chunk 0x000D (W3D_CHUNK_VERTEX_COLORS)
+    struct VertexColorsSerializer : ChunkSerializer {
+        QJsonObject toJson(const ChunkItem& item) const override {
+            QJsonObject obj;
+            obj["VERTEX_COLORS"] = structsToJsonArray<W3dRGBStruct>(
+                item.data,
+                [](const W3dRGBStruct& c) { return QJsonArray{ int(c.R), int(c.G), int(c.B) }; }
+            );
+            return obj;
+        }
+
+        void fromJson(const QJsonObject& dataObj, ChunkItem& item) const override {
+            QJsonArray arr = dataObj.value("VERTEX_COLORS").toArray();
+            item.data = jsonArrayToStructs<W3dRGBStruct>(arr, [](const QJsonValue& val) {
+                W3dRGBStruct c{};
+                auto a = val.toArray();
+                if (a.size() >= 3) { c.R = a[0].toInt(); c.G = a[1].toInt(); c.B = a[2].toInt(); }
+                return c;
+                });
+            item.length = uint32_t(item.data.size());
+        }
+    };
+
+    // Serializer for chunk 0x000E (W3D_CHUNK_VERTEX_INFLUENCES)
+    struct VertexInfluencesSerializer : ChunkSerializer {
+        QJsonObject toJson(const ChunkItem& item) const override {
+            QJsonObject obj;
+            obj["VERTEX_INFLUENCES"] = structsToJsonArray<W3dVertInfStruct>(
+                item.data,
+                [](const W3dVertInfStruct& v) {
+                    QJsonObject o;
+                    QJsonArray b; for (int i = 0; i < 2; ++i) b.append(int(v.BoneIdx[i]));
+                    QJsonArray w; for (int i = 0; i < 2; ++i) w.append(int(v.Weight[i]));
+                    o["BONEIDX"] = b;
+                    o["WEIGHT"] = w;
+                    return o;
+                }
+            );
+            return obj;
+        }
+
+        void fromJson(const QJsonObject& dataObj, ChunkItem& item) const override {
+            QJsonArray arr = dataObj.value("VERTEX_INFLUENCES").toArray();
+            item.data = jsonArrayToStructs<W3dVertInfStruct>(arr, [](const QJsonValue& val) {
+                W3dVertInfStruct v{};
+                QJsonObject o = val.toObject();
+                QJsonArray b = o.value("BONEIDX").toArray();
+                for (int i = 0; i < 2 && i < b.size(); ++i) v.BoneIdx[i] = uint16_t(b[i].toInt());
+                QJsonArray w = o.value("WEIGHT").toArray();
+                for (int i = 0; i < 2 && i < w.size(); ++i) v.Weight[i] = uint16_t(w[i].toInt());
+                return v;
+                });
+            item.length = uint32_t(item.data.size());
+        }
+    };
+
     // static serializer instances
     static const MeshHeader1Serializer meshHeader1SerializerInstance;
     static const VerticesSerializer verticesSerializerInstance;
@@ -288,6 +417,10 @@ namespace {
     static const SurrenderNormalsSerializer surrenderNormalsSerializerInstance;
     static const TexCoordsSerializer texCoordsSerializerInstance;
     static const MaterialsSerializer materialsSerializerInstance;
+    static const SurrenderTrianglesSerializer surrenderTrianglesSerializerInstance;
+    static const MeshUserTextSerializer meshUserTextSerializerInstance;
+    static const VertexColorsSerializer vertexColorsSerializerInstance;
+    static const VertexInfluencesSerializer vertexInfluencesSerializerInstance;
 
 } // namespace
 
@@ -299,6 +432,10 @@ const std::unordered_map<uint32_t, const ChunkSerializer*>& chunkSerializerRegis
         {0x0004, &surrenderNormalsSerializerInstance},
         {0x0005, &texCoordsSerializerInstance},
         {0x0006, &materialsSerializerInstance},
+        {0x0009, &surrenderTrianglesSerializerInstance},
+        {0x000C, &meshUserTextSerializerInstance},
+        {0x000D, &vertexColorsSerializerInstance},
+        {0x000E, &vertexInfluencesSerializerInstance},
     };
     return registry;
 }
