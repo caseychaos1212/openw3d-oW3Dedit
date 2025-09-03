@@ -1771,6 +1771,445 @@ namespace {
             item.length = uint32_t(item.data.size());
         }
     };
+    // Serializer for chunk 0x0201 (W3D_CHUNK_ANIMATION_HEADER)
+    struct AnimationHeaderSerializer : ChunkSerializer {
+        QJsonObject toJson(const ChunkItem& item) const override {
+            QJsonObject obj;
+            if (item.data.size() >= sizeof(W3dAnimHeaderStruct)) {
+                const auto* h = reinterpret_cast<const W3dAnimHeaderStruct*>(item.data.data());
+                obj["VERSION"] = QString::fromStdString(FormatUtils::FormatVersion(h->Version));
+                obj["NAME"] = QString::fromUtf8(h->Name, strnlen(h->Name, W3D_NAME_LEN));
+                obj["HIERARCHYNAME"] = QString::fromUtf8(h->HierarchyName, strnlen(h->HierarchyName, W3D_NAME_LEN));
+                obj["NUMFRAMES"] = int(h->NumFrames);
+                obj["FRAMERATE"] = int(h->FrameRate);
+            }
+            return obj;
+        }
+
+        void fromJson(const QJsonObject& dataObj, ChunkItem& item) const override {
+            W3dAnimHeaderStruct h{};
+            QString verStr = dataObj.value("VERSION").toString();
+            auto parts = verStr.split('.');
+            if (parts.size() == 2) {
+                h.Version = (parts[0].toUInt() << 16) | parts[1].toUInt();
+            }
+            QByteArray name = dataObj.value("NAME").toString().toUtf8();
+            std::memset(h.Name, 0, W3D_NAME_LEN);
+            std::memcpy(h.Name, name.constData(), std::min<int>(name.size(), W3D_NAME_LEN));
+            QByteArray hname = dataObj.value("HIERARCHYNAME").toString().toUtf8();
+            std::memset(h.HierarchyName, 0, W3D_NAME_LEN);
+            std::memcpy(h.HierarchyName, hname.constData(), std::min<int>(hname.size(), W3D_NAME_LEN));
+            h.NumFrames = dataObj.value("NUMFRAMES").toInt();
+            h.FrameRate = dataObj.value("FRAMERATE").toInt();
+            item.length = sizeof(W3dAnimHeaderStruct);
+            item.data.resize(item.length);
+            std::memcpy(item.data.data(), &h, sizeof(h));
+        }
+    };
+
+    // Serializer for chunk 0x0202 (W3D_CHUNK_ANIMATION_CHANNEL)
+    struct AnimationChannelSerializer : ChunkSerializer {
+        QJsonObject toJson(const ChunkItem& item) const override {
+            QJsonObject obj;
+            const auto& buf = item.data;
+            if (buf.size() >= sizeof(W3dAnimChannelStruct)) {
+                W3dAnimChannelStruct hdr{};
+                std::memcpy(&hdr, buf.data(), sizeof(W3dAnimChannelStruct));
+                obj["FIRSTFRAME"] = int(hdr.FirstFrame);
+                obj["LASTFRAME"] = int(hdr.LastFrame);
+                obj["VECTORLEN"] = int(hdr.VectorLen);
+                obj["FLAGS"] = int(hdr.Flags);
+                obj["PIVOT"] = int(hdr.Pivot);
+
+                int frameCount = int(hdr.LastFrame) - int(hdr.FirstFrame) + 1;
+                int vectorLen = int(hdr.VectorLen);
+                size_t valueCount = size_t(frameCount) * size_t(vectorLen);
+                size_t headerBytes = sizeof(W3dAnimChannelStruct);
+                size_t neededBytes = headerBytes + (valueCount > 0 ? (valueCount - 1) * sizeof(float) : 0);
+                if (buf.size() >= neededBytes && valueCount > 0) {
+                    std::vector<float> values(valueCount);
+                    values[0] = hdr.Data[0];
+                    if (valueCount > 1) {
+                        const float* tail = reinterpret_cast<const float*>(buf.data() + headerBytes);
+                        std::memcpy(values.data() + 1, tail, (valueCount - 1) * sizeof(float));
+                    }
+                    QJsonArray dataArr;
+                    for (int f = 0; f < frameCount; ++f) {
+                        QJsonArray frameArr;
+                        for (int v = 0; v < vectorLen; ++v) {
+                            frameArr.append(values[size_t(f) * vectorLen + v]);
+                        }
+                        dataArr.append(frameArr);
+                    }
+                    obj["DATA"] = dataArr;
+                }
+            }
+            return obj;
+        }
+
+        void fromJson(const QJsonObject& dataObj, ChunkItem& item) const override {
+            W3dAnimChannelStruct hdr{};
+            hdr.FirstFrame = dataObj.value("FIRSTFRAME").toInt();
+            hdr.LastFrame = dataObj.value("LASTFRAME").toInt();
+            hdr.VectorLen = dataObj.value("VECTORLEN").toInt();
+            hdr.Flags = dataObj.value("FLAGS").toInt();
+            hdr.Pivot = dataObj.value("PIVOT").toInt();
+            hdr.pad = 0;
+
+            QJsonArray dataArr = dataObj.value("DATA").toArray();
+            int frameCount = dataArr.size();
+            int vectorLen = int(hdr.VectorLen);
+            size_t valueCount = size_t(frameCount) * size_t(vectorLen);
+            std::vector<float> values(valueCount);
+            for (int f = 0; f < frameCount; ++f) {
+                QJsonArray frameArr = dataArr[f].toArray();
+                for (int v = 0; v < vectorLen && v < frameArr.size(); ++v) {
+                    values[size_t(f) * vectorLen + v] = float(frameArr[v].toDouble());
+                }
+            }
+
+            hdr.Data[0] = valueCount > 0 ? values[0] : 0.0f;
+            size_t headerBytes = sizeof(W3dAnimChannelStruct);
+            item.length = uint32_t(headerBytes + (valueCount > 1 ? (valueCount - 1) * sizeof(float) : 0));
+            item.data.resize(item.length);
+            std::memcpy(item.data.data(), &hdr, sizeof(W3dAnimChannelStruct));
+            if (valueCount > 1) {
+                std::memcpy(item.data.data() + headerBytes, values.data() + 1, (valueCount - 1) * sizeof(float));
+            }
+        }
+    };
+
+    // Serializer for chunk 0x0203 (W3D_CHUNK_BIT_CHANNEL)
+    struct BitChannelSerializer : ChunkSerializer {
+        QJsonObject toJson(const ChunkItem& item) const override {
+            QJsonObject obj;
+            const auto& buf = item.data;
+            if (buf.size() >= sizeof(W3dBitChannelStruct)) {
+                W3dBitChannelStruct hdr{};
+                std::memcpy(&hdr, buf.data(), sizeof(W3dBitChannelStruct));
+                obj["FIRSTFRAME"] = int(hdr.FirstFrame);
+                obj["LASTFRAME"] = int(hdr.LastFrame);
+                obj["FLAGS"] = int(hdr.Flags);
+                obj["PIVOT"] = int(hdr.Pivot);
+                obj["DEFAULTVAL"] = int(hdr.DefaultVal);
+
+                int count = int(hdr.LastFrame) - int(hdr.FirstFrame) + 1;
+                size_t bitBytes = size_t((count + 7) / 8);
+                size_t headerBytes = sizeof(W3dBitChannelStruct);
+                size_t neededBytes = (headerBytes - 1) + bitBytes;
+                if (buf.size() >= neededBytes && count > 0) {
+                    std::vector<uint8_t> bits(bitBytes);
+                    bits[0] = hdr.Data[0];
+                    if (bitBytes > 1) {
+                        const uint8_t* tail = reinterpret_cast<const uint8_t*>(buf.data() + headerBytes);
+                        std::memcpy(bits.data() + 1, tail, bitBytes - 1);
+                    }
+                    QJsonArray arr;
+                    for (int i = 0; i < count; ++i) {
+                        bool val = (bits[size_t(i) / 8] >> (i % 8)) & 1;
+                        arr.append(val);
+                    }
+                    obj["DATA"] = arr;
+                }
+            }
+            return obj;
+        }
+
+        void fromJson(const QJsonObject& dataObj, ChunkItem& item) const override {
+            W3dBitChannelStruct hdr{};
+            hdr.FirstFrame = dataObj.value("FIRSTFRAME").toInt();
+            hdr.LastFrame = dataObj.value("LASTFRAME").toInt();
+            hdr.Flags = dataObj.value("FLAGS").toInt();
+            hdr.Pivot = dataObj.value("PIVOT").toInt();
+            hdr.DefaultVal = uint8_t(dataObj.value("DEFAULTVAL").toInt());
+
+            QJsonArray arr = dataObj.value("DATA").toArray();
+            int count = arr.size();
+            size_t bitBytes = size_t((count + 7) / 8);
+            std::vector<uint8_t> bits(bitBytes, 0);
+            for (int i = 0; i < count; ++i) {
+                if (arr[i].toBool()) bits[size_t(i) / 8] |= uint8_t(1 << (i % 8));
+            }
+
+            std::vector<uint8_t> out((sizeof(W3dBitChannelStruct) - 1) + bitBytes);
+            std::memcpy(out.data(), &hdr, sizeof(W3dBitChannelStruct) - 1);
+            if (bitBytes > 0) out[sizeof(W3dBitChannelStruct) - 1] = bits[0];
+            if (bitBytes > 1) std::memcpy(out.data() + sizeof(W3dBitChannelStruct), bits.data() + 1, bitBytes - 1);
+            item.data = std::move(out);
+            item.length = uint32_t(item.data.size());
+        }
+    };
+
+    // Serializer for chunk 0x0281 (W3D_CHUNK_COMPRESSED_ANIMATION_HEADER)
+    struct CompressedAnimHeaderSerializer : ChunkSerializer {
+        QJsonObject toJson(const ChunkItem& item) const override {
+            QJsonObject obj;
+            if (item.data.size() >= sizeof(W3dCompressedAnimHeaderStruct)) {
+                const auto* h = reinterpret_cast<const W3dCompressedAnimHeaderStruct*>(item.data.data());
+                obj["VERSION"] = QString::fromStdString(FormatUtils::FormatVersion(h->Version));
+                obj["NAME"] = QString::fromUtf8(h->Name, strnlen(h->Name, W3D_NAME_LEN));
+                obj["HIERARCHYNAME"] = QString::fromUtf8(h->HierarchyName, strnlen(h->HierarchyName, W3D_NAME_LEN));
+                obj["NUMFRAMES"] = int(h->NumFrames);
+                obj["FRAMERATE"] = int(h->FrameRate);
+                obj["FLAVOR"] = int(h->Flavor);
+            }
+            return obj;
+        }
+
+        void fromJson(const QJsonObject& dataObj, ChunkItem& item) const override {
+            W3dCompressedAnimHeaderStruct h{};
+            QString verStr = dataObj.value("VERSION").toString();
+            auto parts = verStr.split('.');
+            if (parts.size() == 2) {
+                h.Version = (parts[0].toUInt() << 16) | parts[1].toUInt();
+            }
+            QByteArray name = dataObj.value("NAME").toString().toUtf8();
+            std::memset(h.Name, 0, W3D_NAME_LEN);
+            std::memcpy(h.Name, name.constData(), std::min<int>(name.size(), W3D_NAME_LEN));
+            QByteArray hname = dataObj.value("HIERARCHYNAME").toString().toUtf8();
+            std::memset(h.HierarchyName, 0, W3D_NAME_LEN);
+            std::memcpy(h.HierarchyName, hname.constData(), std::min<int>(hname.size(), W3D_NAME_LEN));
+            h.NumFrames = dataObj.value("NUMFRAMES").toInt();
+            h.FrameRate = uint16_t(dataObj.value("FRAMERATE").toInt());
+            h.Flavor = uint16_t(dataObj.value("FLAVOR").toInt());
+            item.length = sizeof(W3dCompressedAnimHeaderStruct);
+            item.data.resize(item.length);
+            std::memcpy(item.data.data(), &h, sizeof(h));
+        }
+    };
+
+    // Serializer for chunk 0x0282 (W3D_CHUNK_COMPRESSED_ANIMATION_CHANNEL)
+    struct CompressedAnimChannelSerializer : ChunkSerializer {
+        QJsonObject toJson(const ChunkItem& item) const override {
+            QJsonObject obj;
+            const auto& buf = item.data;
+            if (buf.size() >= 8) {
+                const uint32_t* u32 = reinterpret_cast<const uint32_t*>(buf.data());
+                obj["NUMTIMECODES"] = int(u32[0]);
+                obj["PIVOT"] = int(*reinterpret_cast<const uint16_t*>(buf.data() + 4));
+                obj["VECTORLEN"] = int(*(buf.data() + 6));
+                obj["FLAGS"] = int(*(buf.data() + 7));
+                size_t count = (buf.size() - 8) / 4;
+                const uint32_t* data = reinterpret_cast<const uint32_t*>(buf.data() + 8);
+                QJsonArray arr;
+                for (size_t i = 0; i < count; ++i) arr.append(int(data[i]));
+                obj["DATA"] = arr;
+            }
+            return obj;
+        }
+
+        void fromJson(const QJsonObject& dataObj, ChunkItem& item) const override {
+            uint32_t numTimeCodes = dataObj.value("NUMTIMECODES").toInt();
+            uint16_t pivot = uint16_t(dataObj.value("PIVOT").toInt());
+            uint8_t vectorLen = uint8_t(dataObj.value("VECTORLEN").toInt());
+            uint8_t flags = uint8_t(dataObj.value("FLAGS").toInt());
+            QJsonArray arr = dataObj.value("DATA").toArray();
+            std::vector<uint32_t> data(arr.size());
+            for (int i = 0; i < arr.size(); ++i) data[i] = uint32_t(arr[i].toInt());
+            std::vector<uint8_t> out(8 + data.size() * 4);
+            std::memcpy(out.data(), &numTimeCodes, 4);
+            std::memcpy(out.data() + 4, &pivot, 2);
+            out[6] = vectorLen;
+            out[7] = flags;
+            if (!data.empty()) std::memcpy(out.data() + 8, data.data(), data.size() * 4);
+            item.data = std::move(out);
+            item.length = uint32_t(item.data.size());
+        }
+    };
+
+    // Serializer for chunk 0x0283 (W3D_CHUNK_COMPRESSED_BIT_CHANNEL)
+    struct CompressedBitChannelSerializer : ChunkSerializer {
+        QJsonObject toJson(const ChunkItem& item) const override {
+            QJsonObject obj;
+            const auto& buf = item.data;
+            if (buf.size() >= 8) {
+                const uint32_t* u32 = reinterpret_cast<const uint32_t*>(buf.data());
+                obj["NUMTIMECODES"] = int(u32[0]);
+                obj["PIVOT"] = int(*reinterpret_cast<const uint16_t*>(buf.data() + 4));
+                obj["FLAGS"] = int(*(buf.data() + 6));
+                obj["DEFAULTVAL"] = int(*(buf.data() + 7));
+                size_t count = (buf.size() - 8) / 4;
+                const uint32_t* data = reinterpret_cast<const uint32_t*>(buf.data() + 8);
+                QJsonArray arr;
+                for (size_t i = 0; i < count; ++i) arr.append(int(data[i]));
+                obj["DATA"] = arr;
+            }
+            return obj;
+        }
+
+        void fromJson(const QJsonObject& dataObj, ChunkItem& item) const override {
+            uint32_t numTimeCodes = dataObj.value("NUMTIMECODES").toInt();
+            uint16_t pivot = uint16_t(dataObj.value("PIVOT").toInt());
+            uint8_t flags = uint8_t(dataObj.value("FLAGS").toInt());
+            uint8_t defVal = uint8_t(dataObj.value("DEFAULTVAL").toInt());
+            QJsonArray arr = dataObj.value("DATA").toArray();
+            std::vector<uint32_t> data(arr.size());
+            for (int i = 0; i < arr.size(); ++i) data[i] = uint32_t(arr[i].toInt());
+            std::vector<uint8_t> out(8 + data.size() * 4);
+            std::memcpy(out.data(), &numTimeCodes, 4);
+            std::memcpy(out.data() + 4, &pivot, 2);
+            out[6] = flags;
+            out[7] = defVal;
+            if (!data.empty()) std::memcpy(out.data() + 8, data.data(), data.size() * 4);
+            item.data = std::move(out);
+            item.length = uint32_t(item.data.size());
+        }
+    };
+
+    // Serializer for chunk 0x0284 (W3D_CHUNK_COMPRESSED_ANIMATION_MOTION_CHANNEL)
+    struct CompressedAnimMotionChannelSerializer : ChunkSerializer {
+        QJsonObject toJson(const ChunkItem& item) const override {
+            QJsonObject obj;
+            const auto& buf = item.data;
+            if (buf.size() >= 12) {
+                uint32_t numFrames = *reinterpret_cast<const uint32_t*>(buf.data());
+                uint16_t pivot = *reinterpret_cast<const uint16_t*>(buf.data() + 4);
+                uint8_t vectorLen = *(buf.data() + 6);
+                uint8_t flags = *(buf.data() + 7);
+                float scale = *reinterpret_cast<const float*>(buf.data() + 8);
+                obj["NUMFRAMES"] = int(numFrames);
+                obj["PIVOT"] = int(pivot);
+                obj["VECTORLEN"] = int(vectorLen);
+                obj["FLAGS"] = int(flags);
+                obj["SCALE"] = scale;
+                size_t count = (buf.size() - 12) / 4;
+                const uint32_t* data = reinterpret_cast<const uint32_t*>(buf.data() + 12);
+                QJsonArray arr;
+                for (size_t i = 0; i < count; ++i) arr.append(int(data[i]));
+                obj["DATA"] = arr;
+            }
+            return obj;
+        }
+
+        void fromJson(const QJsonObject& dataObj, ChunkItem& item) const override {
+            uint32_t numFrames = dataObj.value("NUMFRAMES").toInt();
+            uint16_t pivot = uint16_t(dataObj.value("PIVOT").toInt());
+            uint8_t vectorLen = uint8_t(dataObj.value("VECTORLEN").toInt());
+            uint8_t flags = uint8_t(dataObj.value("FLAGS").toInt());
+            float scale = float(dataObj.value("SCALE").toDouble());
+            QJsonArray arr = dataObj.value("DATA").toArray();
+            std::vector<uint32_t> data(arr.size());
+            for (int i = 0; i < arr.size(); ++i) data[i] = uint32_t(arr[i].toInt());
+            std::vector<uint8_t> out(12 + data.size() * 4);
+            std::memcpy(out.data(), &numFrames, 4);
+            std::memcpy(out.data() + 4, &pivot, 2);
+            out[6] = vectorLen;
+            out[7] = flags;
+            std::memcpy(out.data() + 8, &scale, 4);
+            if (!data.empty()) std::memcpy(out.data() + 12, data.data(), data.size() * 4);
+            item.data = std::move(out);
+            item.length = uint32_t(item.data.size());
+        }
+    };
+
+    // Serializer for chunk 0x02C1 (W3D_CHUNK_MORPHANIM_HEADER)
+    struct MorphAnimHeaderSerializer : ChunkSerializer {
+        QJsonObject toJson(const ChunkItem& item) const override {
+            QJsonObject obj;
+            if (item.data.size() >= sizeof(W3dMorphAnimHeaderStruct)) {
+                const auto* h = reinterpret_cast<const W3dMorphAnimHeaderStruct*>(item.data.data());
+                obj["VERSION"] = QString::fromStdString(FormatUtils::FormatVersion(h->Version));
+                obj["NAME"] = QString::fromUtf8(h->Name, strnlen(h->Name, W3D_NAME_LEN));
+                obj["HIERARCHYNAME"] = QString::fromUtf8(h->HierarchyName, strnlen(h->HierarchyName, W3D_NAME_LEN));
+                obj["FRAMECOUNT"] = int(h->FrameCount);
+                obj["FRAMERATE"] = h->FrameRate;
+                obj["CHANNELCOUNT"] = int(h->ChannelCount);
+            }
+            return obj;
+        }
+
+        void fromJson(const QJsonObject& dataObj, ChunkItem& item) const override {
+            W3dMorphAnimHeaderStruct h{};
+            QString verStr = dataObj.value("VERSION").toString();
+            auto parts = verStr.split('.');
+            if (parts.size() == 2) {
+                h.Version = (parts[0].toUInt() << 16) | parts[1].toUInt();
+            }
+            QByteArray name = dataObj.value("NAME").toString().toUtf8();
+            std::memset(h.Name, 0, W3D_NAME_LEN);
+            std::memcpy(h.Name, name.constData(), std::min<int>(name.size(), W3D_NAME_LEN));
+            QByteArray hname = dataObj.value("HIERARCHYNAME").toString().toUtf8();
+            std::memset(h.HierarchyName, 0, W3D_NAME_LEN);
+            std::memcpy(h.HierarchyName, hname.constData(), std::min<int>(hname.size(), W3D_NAME_LEN));
+            h.FrameCount = dataObj.value("FRAMECOUNT").toInt();
+            h.FrameRate = float(dataObj.value("FRAMERATE").toDouble());
+            h.ChannelCount = dataObj.value("CHANNELCOUNT").toInt();
+            item.length = sizeof(W3dMorphAnimHeaderStruct);
+            item.data.resize(item.length);
+            std::memcpy(item.data.data(), &h, sizeof(h));
+        }
+    };
+
+    // Serializer for chunk 0x02C3 (W3D_CHUNK_MORPHANIM_POSENAME)
+    struct MorphAnimPoseNameSerializer : ChunkSerializer {
+        QJsonObject toJson(const ChunkItem& item) const override {
+            QJsonObject obj;
+            QByteArray arr(reinterpret_cast<const char*>(item.data.data()), int(item.data.size()));
+            obj["POSENAME"] = QString::fromUtf8(arr.constData());
+            return obj;
+        }
+
+        void fromJson(const QJsonObject& dataObj, ChunkItem& item) const override {
+            QByteArray name = dataObj.value("POSENAME").toString().toUtf8();
+            item.data.resize(name.size() + 1);
+            std::memcpy(item.data.data(), name.constData(), name.size());
+            item.data[name.size()] = 0;
+            item.length = uint32_t(item.data.size());
+        }
+    };
+
+    // Serializer for chunk 0x02C4 (W3D_CHUNK_MORPHANIM_KEYDATA)
+    struct MorphAnimKeyDataSerializer : ChunkSerializer {
+        QJsonObject toJson(const ChunkItem& item) const override {
+            QJsonObject obj;
+            obj["KEYS"] = structsToJsonArray<W3dMorphAnimKeyStruct>(
+                item.data,
+                [](const W3dMorphAnimKeyStruct& k) {
+                    QJsonObject o;
+                    o["MORPHFRAME"] = int(k.MorphFrame);
+                    o["POSEFRAME"] = int(k.PoseFrame);
+                    return o;
+                }
+            );
+            return obj;
+        }
+
+        void fromJson(const QJsonObject& dataObj, ChunkItem& item) const override {
+            QJsonArray arr = dataObj.value("KEYS").toArray();
+            item.data = jsonArrayToStructs<W3dMorphAnimKeyStruct>(arr, [](const QJsonValue& val) {
+                W3dMorphAnimKeyStruct k{};
+                QJsonObject o = val.toObject();
+                k.MorphFrame = o.value("MORPHFRAME").toInt();
+                k.PoseFrame = o.value("POSEFRAME").toInt();
+                return k;
+                });
+            item.length = uint32_t(item.data.size());
+        }
+    };
+
+    // Serializer for chunk 0x02C5 (W3D_CHUNK_MORPHANIM_PIVOTCHANNELDATA)
+    struct MorphAnimPivotChannelDataSerializer : ChunkSerializer {
+        QJsonObject toJson(const ChunkItem& item) const override {
+            QJsonObject obj;
+            QJsonArray arr;
+            if (item.data.size() % sizeof(uint32_t) == 0) {
+                const auto* begin = reinterpret_cast<const uint32_t*>(item.data.data());
+                int count = int(item.data.size() / sizeof(uint32_t));
+                for (int i = 0; i < count; ++i) arr.append(int(begin[i]));
+            }
+            obj["PIVOTCHANNELDATA"] = arr;
+            return obj;
+        }
+
+        void fromJson(const QJsonObject& dataObj, ChunkItem& item) const override {
+            QJsonArray arr = dataObj.value("PIVOTCHANNELDATA").toArray();
+            std::vector<uint32_t> temp(arr.size());
+            for (int i = 0; i < arr.size(); ++i) temp[i] = uint32_t(arr[i].toInt());
+            item.data.resize(temp.size() * sizeof(uint32_t));
+            if (!temp.empty()) std::memcpy(item.data.data(), temp.data(), item.data.size());
+            item.length = uint32_t(item.data.size());
+        }
+    };
 
 
     // static serializer instances
@@ -1828,6 +2267,17 @@ namespace {
     static const HierarchyHeaderSerializer hierarchyHeaderSerializerInstance;
     static const PivotsSerializer pivotsSerializerInstance;
     static const PivotFixupsSerializer pivotFixupsSerializerInstance;
+    static const AnimationHeaderSerializer animationHeaderSerializerInstance;
+    static const AnimationChannelSerializer animationChannelSerializerInstance;
+    static const BitChannelSerializer bitChannelSerializerInstance;
+    static const CompressedAnimHeaderSerializer compressedAnimHeaderSerializerInstance;
+    static const CompressedAnimChannelSerializer compressedAnimChannelSerializerInstance;
+    static const CompressedBitChannelSerializer compressedBitChannelSerializerInstance;
+    static const CompressedAnimMotionChannelSerializer compressedAnimMotionChannelSerializerInstance;
+    static const MorphAnimHeaderSerializer morphAnimHeaderSerializerInstance;
+    static const MorphAnimPoseNameSerializer morphAnimPoseNameSerializerInstance;
+    static const MorphAnimKeyDataSerializer morphAnimKeyDataSerializerInstance;
+    static const MorphAnimPivotChannelDataSerializer morphAnimPivotChannelDataSerializerInstance;
 
 } // namespace
 
@@ -1887,6 +2337,17 @@ const std::unordered_map<uint32_t, const ChunkSerializer*>& chunkSerializerRegis
         {0x0101, &hierarchyHeaderSerializerInstance},
         {0x0102, &pivotsSerializerInstance},
         {0x0103, &pivotFixupsSerializerInstance},
+        {0x0201, &animationHeaderSerializerInstance},
+        {0x0202, &animationChannelSerializerInstance},
+        {0x0203, &bitChannelSerializerInstance},
+        {0x0281, &compressedAnimHeaderSerializerInstance},
+        {0x0282, &compressedAnimChannelSerializerInstance},
+        {0x0283, &compressedBitChannelSerializerInstance},
+        {0x0284, &compressedAnimMotionChannelSerializerInstance},
+        {0x02C1, &morphAnimHeaderSerializerInstance},
+        {0x02C3, &morphAnimPoseNameSerializerInstance},
+        {0x02C4, &morphAnimKeyDataSerializerInstance},
+        {0x02C5, &morphAnimPivotChannelDataSerializerInstance},
     };
     return registry;
 }

@@ -60,7 +60,8 @@ enum class ChunkID : uint32_t {
 		W3D_CHUNK_COMPRESSED_ANIMATION_HEADER	=0x00000281,	//describes playback rate, number of frames, and type of compression
 		W3D_CHUNK_COMPRESSED_ANIMATION_CHANNEL	=0x00000282,	//compressed channel, format dependent on type of compression
 		W3D_CHUNK_COMPRESSED_BIT_CHANNEL	=0x00000283,	//compressed bit stream channel, format dependent on type of compression
-	
+		W3D_CHUNK_COMPRESSED_ANIMATION_MOTION_CHANNEL = 0x00000284,    //adaptive delta/motion channel (BFMEII)
+
 	W3D_CHUNK_MORPH_ANIMATION	=0x000002C0,	//hierarchy morphing animation data(morphs between poses, for facial animation)
 		W3D_CHUNK_MORPHANIM_HEADER	=0x000002C1,	//W3dMorphAnimHeaderStruct describes playback rate, number of frames, and type of compression
 		W3D_CHUNK_MORPHANIM_CHANNEL	=0x000002C2,	//wrapper for a channel
