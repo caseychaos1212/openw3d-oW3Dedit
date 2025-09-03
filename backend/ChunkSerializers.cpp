@@ -2500,6 +2500,156 @@ namespace {
             if (h.name_len > 0) std::memcpy(item.data.data() + sizeof(h), name.constData(), name.size());
         }
     };
+    struct PointsSerializer : ChunkSerializer {
+        QJsonObject toJson(const ChunkItem& item) const override {
+            QJsonObject obj;
+            obj["POINTS"] = structsToJsonArray<W3dVectorStruct>(
+                item.data,
+                [](const W3dVectorStruct& v) { return QJsonArray{ v.X, v.Y, v.Z }; }
+            );
+            return obj;
+        }
+
+        void fromJson(const QJsonObject& dataObj, ChunkItem& item) const override {
+            QJsonArray arr = dataObj.value("POINTS").toArray();
+            item.data = jsonArrayToStructs<W3dVectorStruct>(arr, [](const QJsonValue& val) {
+                W3dVectorStruct v{};
+                auto a = val.toArray();
+                if (a.size() >= 3) { v.X = float(a[0].toDouble()); v.Y = float(a[1].toDouble()); v.Z = float(a[2].toDouble()); }
+                return v;
+                });
+            item.length = uint32_t(item.data.size());
+        }
+    };
+
+    struct LightInfoSerializer : ChunkSerializer {
+        QJsonObject toJson(const ChunkItem& item) const override {
+            QJsonObject obj;
+            if (item.data.size() >= sizeof(W3dLightStruct)) {
+                const auto* L = reinterpret_cast<const W3dLightStruct*>(item.data.data());
+                obj["ATTRIBUTES"] = int(L->Attributes);
+                obj["UNUSED"] = int(L->Unused);
+                obj["AMBIENT"] = QJsonArray{ int(L->Ambient.R), int(L->Ambient.G), int(L->Ambient.B) };
+                obj["DIFFUSE"] = QJsonArray{ int(L->Diffuse.R), int(L->Diffuse.G), int(L->Diffuse.B) };
+                obj["SPECULAR"] = QJsonArray{ int(L->Specular.R), int(L->Specular.G), int(L->Specular.B) };
+                obj["INTENSITY"] = L->Intensity;
+            }
+            return obj;
+        }
+
+        void fromJson(const QJsonObject& dataObj, ChunkItem& item) const override {
+            W3dLightStruct L{};
+            L.Attributes = dataObj.value("ATTRIBUTES").toInt();
+            L.Unused = dataObj.value("UNUSED").toInt();
+            auto amb = dataObj.value("AMBIENT").toArray();
+            if (amb.size() >= 3) { L.Ambient.R = amb[0].toInt(); L.Ambient.G = amb[1].toInt(); L.Ambient.B = amb[2].toInt(); }
+            auto diff = dataObj.value("DIFFUSE").toArray();
+            if (diff.size() >= 3) { L.Diffuse.R = diff[0].toInt(); L.Diffuse.G = diff[1].toInt(); L.Diffuse.B = diff[2].toInt(); }
+            auto spec = dataObj.value("SPECULAR").toArray();
+            if (spec.size() >= 3) { L.Specular.R = spec[0].toInt(); L.Specular.G = spec[1].toInt(); L.Specular.B = spec[2].toInt(); }
+            L.Intensity = float(dataObj.value("INTENSITY").toDouble());
+            item.length = sizeof(W3dLightStruct);
+            item.data.resize(item.length);
+            std::memcpy(item.data.data(), &L, sizeof(L));
+        }
+    };
+
+    struct SpotLightInfoSerializer : ChunkSerializer {
+        QJsonObject toJson(const ChunkItem& item) const override {
+            QJsonObject obj;
+            if (item.data.size() >= sizeof(W3dSpotLightStruct)) {
+                const auto* S = reinterpret_cast<const W3dSpotLightStruct*>(item.data.data());
+                obj["SPOT_DIRECTION"] = QJsonArray{ S->SpotDirection.X, S->SpotDirection.Y, S->SpotDirection.Z };
+                obj["SPOT_ANGLE"] = S->SpotAngle;
+                obj["SPOT_EXPONENT"] = S->SpotExponent;
+            }
+            return obj;
+        }
+
+        void fromJson(const QJsonObject& dataObj, ChunkItem& item) const override {
+            W3dSpotLightStruct S{};
+            auto dir = dataObj.value("SPOT_DIRECTION").toArray();
+            if (dir.size() >= 3) { S.SpotDirection.X = float(dir[0].toDouble()); S.SpotDirection.Y = float(dir[1].toDouble()); S.SpotDirection.Z = float(dir[2].toDouble()); }
+            S.SpotAngle = float(dataObj.value("SPOT_ANGLE").toDouble());
+            S.SpotExponent = float(dataObj.value("SPOT_EXPONENT").toDouble());
+            item.length = sizeof(W3dSpotLightStruct);
+            item.data.resize(item.length);
+            std::memcpy(item.data.data(), &S, sizeof(S));
+        }
+    };
+
+    struct LightAttenuationSerializer : ChunkSerializer {
+        QJsonObject toJson(const ChunkItem& item) const override {
+            QJsonObject obj;
+            if (item.data.size() >= sizeof(W3dLightAttenuationStruct)) {
+                const auto* A = reinterpret_cast<const W3dLightAttenuationStruct*>(item.data.data());
+                obj["START"] = A->Start;
+                obj["END"] = A->End;
+            }
+            return obj;
+        }
+
+        void fromJson(const QJsonObject& dataObj, ChunkItem& item) const override {
+            W3dLightAttenuationStruct A{};
+            A.Start = float(dataObj.value("START").toDouble());
+            A.End = float(dataObj.value("END").toDouble());
+            item.length = sizeof(W3dLightAttenuationStruct);
+            item.data.resize(item.length);
+            std::memcpy(item.data.data(), &A, sizeof(A));
+        }
+    };
+
+    struct SpotLightInfo50Serializer : ChunkSerializer {
+        QJsonObject toJson(const ChunkItem& item) const override {
+            QJsonObject obj;
+            if (item.data.size() >= sizeof(W3dSpotLightTTStruct)) {
+                const auto* S = reinterpret_cast<const W3dSpotLightTTStruct*>(item.data.data());
+                obj["SPOT_OUTER_ANGLE"] = S->SpotOuterAngle;
+                obj["SPOT_INNER_ANGLE"] = S->SpotInnerAngle;
+            }
+            return obj;
+        }
+
+        void fromJson(const QJsonObject& dataObj, ChunkItem& item) const override {
+            W3dSpotLightTTStruct S{};
+            S.SpotOuterAngle = float(dataObj.value("SPOT_OUTER_ANGLE").toDouble());
+            S.SpotInnerAngle = float(dataObj.value("SPOT_INNER_ANGLE").toDouble());
+            item.length = sizeof(W3dSpotLightTTStruct);
+            item.data.resize(item.length);
+            std::memcpy(item.data.data(), &S, sizeof(S));
+        }
+    };
+
+    struct LightPulseSerializer : ChunkSerializer {
+        QJsonObject toJson(const ChunkItem& item) const override {
+            QJsonObject obj;
+            if (item.data.size() >= sizeof(W3dLightPulseTTStruct)) {
+                const auto* P = reinterpret_cast<const W3dLightPulseTTStruct*>(item.data.data());
+                obj["MIN_INTENSITY"] = P->MinIntensity;
+                obj["MAX_INTENSITY"] = P->MaxIntensity;
+                obj["INTENSITY_TIME"] = P->IntensityTime;
+                obj["INTENSITY_TIME_RANDOM"] = P->IntensityTimeRandom;
+                obj["INTENSITY_ADJUST"] = P->IntensityAdjust;
+                obj["INTENSITY_STOPS_AT_MAX"] = int(P->IntensityStopsAtMax);
+                obj["INTENSITY_STOPS_AT_MIN"] = int(P->IntensityStopsAtMin);
+            }
+            return obj;
+        }
+
+        void fromJson(const QJsonObject& dataObj, ChunkItem& item) const override {
+            W3dLightPulseTTStruct P{};
+            P.MinIntensity = float(dataObj.value("MIN_INTENSITY").toDouble());
+            P.MaxIntensity = float(dataObj.value("MAX_INTENSITY").toDouble());
+            P.IntensityTime = float(dataObj.value("INTENSITY_TIME").toDouble());
+            P.IntensityTimeRandom = float(dataObj.value("INTENSITY_TIME_RANDOM").toDouble());
+            P.IntensityAdjust = float(dataObj.value("INTENSITY_ADJUST").toDouble());
+            P.IntensityStopsAtMax = char(dataObj.value("INTENSITY_STOPS_AT_MAX").toInt());
+            P.IntensityStopsAtMin = char(dataObj.value("INTENSITY_STOPS_AT_MIN").toInt());
+            item.length = sizeof(W3dLightPulseTTStruct);
+            item.data.resize(item.length);
+            std::memcpy(item.data.data(), &P, sizeof(P));
+        }
+    };
 
 
     // static serializer instances
@@ -2580,6 +2730,13 @@ namespace {
     static const CollectionObjNameSerializer collectionObjNameSerializerInstance;
     static const PlaceholderSerializer placeholderSerializerInstance;
     static const TransformNodeSerializer transformNodeSerializerInstance;
+    static const PointsSerializer pointsSerializerInstance;
+    static const LightInfoSerializer lightInfoSerializerInstance;
+    static const SpotLightInfoSerializer spotLightInfoSerializerInstance;
+    static const LightAttenuationSerializer nearAttenuationSerializerInstance;
+    static const LightAttenuationSerializer farAttenuationSerializerInstance;
+    static const SpotLightInfo50Serializer spotLightInfo50SerializerInstance;
+    static const LightPulseSerializer lightPulseSerializerInstance;
 
 } // namespace
 
@@ -2662,6 +2819,13 @@ const std::unordered_map<uint32_t, const ChunkSerializer*>& chunkSerializerRegis
         {0x0422, &collectionObjNameSerializerInstance},
         {0x0423, &placeholderSerializerInstance},
         {0x0424, &transformNodeSerializerInstance},
+        {0x0440, &pointsSerializerInstance},
+        {0x0461, &lightInfoSerializerInstance},
+        {0x0462, &spotLightInfoSerializerInstance},
+        {0x0463, &nearAttenuationSerializerInstance},
+        {0x0464, &farAttenuationSerializerInstance},
+        {0x0465, &spotLightInfo50SerializerInstance},
+        {0x0466, &lightPulseSerializerInstance},
     };
     return registry;
 }

@@ -94,6 +94,8 @@ enum class ChunkID : uint32_t {
 		W3D_CHUNK_SPOT_LIGHT_INFO	=0x00000462,	//extra spot light parameters
 		W3D_CHUNK_NEAR_ATTENUATION	=0x00000463,	//optional near attenuation parameters
 		W3D_CHUNK_FAR_ATTENUATION	=0x00000464,	//optional far attenuation parameters
+		W3D_CHUNK_SPOT_LIGHT_INFO_5_0 = 0x00000465,    //TT: extra spot light params (5.0)
+		W3D_CHUNK_PULSE = 0x00000466,    //TT: pulse data (5.0)
 	
 	W3D_CHUNK_EMITTER	=0x00000500,	//description of a particle emitter
 		W3D_CHUNK_EMITTER_HEADER	=0x00000501,	//general information such as name and version
