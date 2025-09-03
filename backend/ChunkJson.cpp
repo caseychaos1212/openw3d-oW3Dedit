@@ -5,11 +5,45 @@
 #include <cstring>
 #include <algorithm>
 #include <vector>
-
+#include <cstdint>
 #include "ChunkItem.h"
 #include "ChunkNames.h"
 #include "FormatUtils.h"
 #include "W3DStructs.h"
+
+namespace {
+
+    // Convert a contiguous array of structs in a byte vector to a QJsonArray
+    template <typename T, typename Converter>
+    QJsonArray structsToJsonArray(const std::vector<uint8_t>& data, Converter&& conv) {
+        QJsonArray arr;
+        if (data.size() % sizeof(T) != 0) {
+            return arr;
+        }
+        const auto* begin = reinterpret_cast<const T*>(data.data());
+        int count = static_cast<int>(data.size() / sizeof(T));
+        for (int i = 0; i < count; ++i) {
+            arr.append(conv(begin[i]));
+        }
+        return arr;
+    }
+
+    // Convert a QJsonArray to a byte vector containing an array of structs
+    template <typename T, typename Converter>
+    std::vector<uint8_t> jsonArrayToStructs(const QJsonArray& arr, Converter&& conv) {
+        std::vector<T> temp(arr.size());
+        for (int i = 0; i < arr.size(); ++i) {
+            temp[i] = conv(arr[i]);
+        }
+        std::vector<uint8_t> out(arr.size() * sizeof(T));
+        if (!out.empty()) {
+            std::memcpy(out.data(), temp.data(), out.size());
+        }
+        return out;
+    }
+
+} // namespace
+
 
 QJsonObject ChunkJson::toJson(const ChunkItem& item) {
     QJsonObject obj;
@@ -72,70 +106,55 @@ QJsonObject ChunkJson::toJson(const ChunkItem& item) {
             }
             break;
         }
-        case 0x0002: {
-            if (item.data.size() % sizeof(W3dVectorStruct) == 0) {
-                int count = item.data.size() / sizeof(W3dVectorStruct);
-                QJsonArray arr;
-                for (int i = 0; i < count; ++i) {
-                    const auto* v = reinterpret_cast<const W3dVectorStruct*>(item.data.data()) + i;
-                    arr.append(QJsonArray{ v->X, v->Y, v->Z });
+        case 0x0002: { // VERTICES: array of W3dVectorStruct
+            dataObj["VERTICES"] = structsToJsonArray<W3dVectorStruct>(
+                item.data,
+                [](const W3dVectorStruct& v) {
+                    return QJsonArray{ v.X, v.Y, v.Z };
                 }
-                dataObj["VERTICES"] = arr;
-            }
+            );
             break;
         }
-        case 0x0003: {
-            if (item.data.size() % sizeof(W3dVectorStruct) == 0) {
-                int count = item.data.size() / sizeof(W3dVectorStruct);
-                QJsonArray arr;
-                for (int i = 0; i < count; ++i) {
-                    const auto* v = reinterpret_cast<const W3dVectorStruct*>(item.data.data()) + i;
-                    arr.append(QJsonArray{ v->X, v->Y, v->Z });
+        case 0x0003: { // VERTEX_NORMALS
+            dataObj["VERTEX_NORMALS"] = structsToJsonArray<W3dVectorStruct>(
+                item.data,
+                [](const W3dVectorStruct& v) {
+                    return QJsonArray{ v.X, v.Y, v.Z };
                 }
-                dataObj["VERTEX_NORMALS"] = arr;
-            }
+            );
             break;
         }
-        case 0x0004: {
-            if (item.data.size() % sizeof(W3dVectorStruct) == 0) {
-                int count = item.data.size() / sizeof(W3dVectorStruct);
-                QJsonArray arr;
-                for (int i = 0; i < count; ++i) {
-                    const auto* v = reinterpret_cast<const W3dVectorStruct*>(item.data.data()) + i;
-                    arr.append(QJsonArray{ v->X, v->Y, v->Z });
+        case 0x0004: { // SURRENDER_NORMALS
+            dataObj["SURRENDER_NORMALS"] = structsToJsonArray<W3dVectorStruct>(
+                item.data,
+                [](const W3dVectorStruct& v) {
+                    return QJsonArray{ v.X, v.Y, v.Z };
                 }
-                dataObj["SURRENDER_NORMALS"] = arr;
-            }
+            );
             break;
         }
-        case 0x0005: {
-            if (item.data.size() % sizeof(W3dTexCoordStruct) == 0) {
-                int count = item.data.size() / sizeof(W3dTexCoordStruct);
-                QJsonArray arr;
-                for (int i = 0; i < count; ++i) {
-                    const auto* t = reinterpret_cast<const W3dTexCoordStruct*>(item.data.data()) + i;
-                    arr.append(QJsonArray{ t->U, t->V });
+        case 0x0005: { // TEXCOORDS: array of W3dTexCoordStruct
+            dataObj["TEXCOORDS"] = structsToJsonArray<W3dTexCoordStruct>(
+                item.data,
+                [](const W3dTexCoordStruct& t) {
+                    return QJsonArray{ t.U, t.V };
                 }
-                dataObj["TEXCOORDS"] = arr;
-            }
+            );
             break;
         }
-        case 0x0006: {
-            if (item.data.size() % sizeof(W3dMaterial1Struct) == 0) {
-                int count = item.data.size() / sizeof(W3dMaterial1Struct);
-                QJsonArray arr;
-                for (int i = 0; i < count; ++i) {
-                    const auto* m = reinterpret_cast<const W3dMaterial1Struct*>(item.data.data()) + i;
+        case 0x0006: { // MATERIALS: array of W3dMaterial1Struct
+            dataObj["MATERIALS"] = structsToJsonArray<W3dMaterial1Struct>(
+                item.data,
+                [](const W3dMaterial1Struct& m) {
                     QJsonObject mo;
-                    mo["MATERIALNAME"] = QString::fromUtf8(m->MaterialName, strnlen(m->MaterialName, 16));
-                    mo["PRIMARYNAME"] = QString::fromUtf8(m->PrimaryName, strnlen(m->PrimaryName, 16));
-                    mo["SECONDARYNAME"] = QString::fromUtf8(m->SecondaryName, strnlen(m->SecondaryName, 16));
-                    mo["RENDERFLAGS"] = static_cast<int>(m->RenderFlags);
-                    mo["COLOR"] = QJsonArray{ int(m->Red), int(m->Green), int(m->Blue) };
-                    arr.append(mo);
+                    mo["MATERIALNAME"] = QString::fromUtf8(m.MaterialName, int(strnlen(m.MaterialName, 16)));
+                    mo["PRIMARYNAME"] = QString::fromUtf8(m.PrimaryName, int(strnlen(m.PrimaryName, 16)));
+                    mo["SECONDARYNAME"] = QString::fromUtf8(m.SecondaryName, int(strnlen(m.SecondaryName, 16)));
+                    mo["RENDERFLAGS"] = int(m.RenderFlags);
+                    mo["COLOR"] = QJsonArray{ int(m.Red), int(m.Green), int(m.Blue) };
+                    return mo;
                 }
-                dataObj["MATERIALS"] = arr;
-            }
+            );
             break;
         }
         case 0x0009: {
@@ -584,94 +603,87 @@ std::shared_ptr<ChunkItem> ChunkJson::fromJson(const QJsonObject& obj, ChunkItem
             std::memcpy(item->data.data(), &h, sizeof(h));
             break;
         }
-        case 0x0002: {
+        case 0x0002: { // VERTICES
             QJsonArray arr = dataObj.value("VERTICES").toArray();
-            std::vector<W3dVectorStruct> verts(arr.size());
-            for (int i = 0; i < arr.size(); ++i) {
-                QJsonArray v = arr[i].toArray();
-                if (v.size() >= 3) {
-                    verts[i].X = v[0].toDouble();
-                    verts[i].Y = v[1].toDouble();
-                    verts[i].Z = v[2].toDouble();
-                }
-            }
-            item->length = verts.size() * sizeof(W3dVectorStruct);
-            item->data.resize(item->length);
-            std::memcpy(item->data.data(), verts.data(), item->length);
+            item->data = jsonArrayToStructs<W3dVectorStruct>(arr, [](const QJsonValue& val) {
+                W3dVectorStruct v{};
+                auto a = val.toArray();
+                if (a.size() >= 3) { v.X = a[0].toDouble(); v.Y = a[1].toDouble(); v.Z = a[2].toDouble(); }
+                return v;
+                });
+            item->length = uint32_t(item->data.size());
             break;
         }
-        case 0x0003: {
+        case 0x0003: { // VERTEX_NORMALS
             QJsonArray arr = dataObj.value("VERTEX_NORMALS").toArray();
-            std::vector<W3dVectorStruct> norms(arr.size());
-            for (int i = 0; i < arr.size(); ++i) {
-                QJsonArray v = arr[i].toArray();
-                if (v.size() >= 3) {
-                    norms[i].X = v[0].toDouble();
-                    norms[i].Y = v[1].toDouble();
-                    norms[i].Z = v[2].toDouble();
-                }
-            }
-            item->length = norms.size() * sizeof(W3dVectorStruct);
-            item->data.resize(item->length);
-            std::memcpy(item->data.data(), norms.data(), item->length);
+            item->data = jsonArrayToStructs<W3dVectorStruct>(arr, [](const QJsonValue& val) {
+                W3dVectorStruct v{};
+                auto a = val.toArray();
+                if (a.size() >= 3) { v.X = a[0].toDouble(); v.Y = a[1].toDouble(); v.Z = a[2].toDouble(); }
+                return v;
+                });
+            item->length = uint32_t(item->data.size());
             break;
         }
-        case 0x0004: {
+        case 0x0004: { // SURRENDER_NORMALS
             QJsonArray arr = dataObj.value("SURRENDER_NORMALS").toArray();
-            std::vector<W3dVectorStruct> norms(arr.size());
-            for (int i = 0; i < arr.size(); ++i) {
-                QJsonArray v = arr[i].toArray();
-                if (v.size() >= 3) {
-                    norms[i].X = v[0].toDouble();
-                    norms[i].Y = v[1].toDouble();
-                    norms[i].Z = v[2].toDouble();
-                }
-            }
-            item->length = norms.size() * sizeof(W3dVectorStruct);
-            item->data.resize(item->length);
-            std::memcpy(item->data.data(), norms.data(), item->length);
+            item->data = jsonArrayToStructs<W3dVectorStruct>(arr, [](const QJsonValue& val) {
+                W3dVectorStruct v{};
+                auto a = val.toArray();
+                if (a.size() >= 3) { v.X = a[0].toDouble(); v.Y = a[1].toDouble(); v.Z = a[2].toDouble(); }
+                return v;
+                });
+            item->length = uint32_t(item->data.size());
             break;
         }
-        case 0x0005: {
+        case 0x0005: { // TEXCOORDS
             QJsonArray arr = dataObj.value("TEXCOORDS").toArray();
-            std::vector<W3dTexCoordStruct> tex(arr.size());
-            for (int i = 0; i < arr.size(); ++i) {
-                QJsonArray t = arr[i].toArray();
-                if (t.size() >= 2) {
-                    tex[i].U = t[0].toDouble();
-                    tex[i].V = t[1].toDouble();
-                }
-            }
-            item->length = tex.size() * sizeof(W3dTexCoordStruct);
-            item->data.resize(item->length);
-            std::memcpy(item->data.data(), tex.data(), item->length);
+            item->data = jsonArrayToStructs<W3dTexCoordStruct>(arr, [](const QJsonValue& val) {
+                W3dTexCoordStruct t{};
+                auto a = val.toArray();
+                if (a.size() >= 2) { t.U = a[0].toDouble(); t.V = a[1].toDouble(); }
+                return t;
+                });
+            item->length = uint32_t(item->data.size());
             break;
         }
-        case 0x0006: {
+        case 0x0006: { // MATERIALS
             QJsonArray arr = dataObj.value("MATERIALS").toArray();
-            std::vector<W3dMaterial1Struct> mats(arr.size());
-            for (int i = 0; i < arr.size(); ++i) {
-                QJsonObject m = arr[i].toObject();
-                QByteArray mn = m.value("MATERIALNAME").toString().toUtf8();
-                std::memset(mats[i].MaterialName, 0, 16);
-                std::memcpy(mats[i].MaterialName, mn.constData(), std::min<int>(mn.size(), 16));
-                QByteArray pn = m.value("PRIMARYNAME").toString().toUtf8();
-                std::memset(mats[i].PrimaryName, 0, 16);
-                std::memcpy(mats[i].PrimaryName, pn.constData(), std::min<int>(pn.size(), 16));
-                QByteArray sn = m.value("SECONDARYNAME").toString().toUtf8();
-                std::memset(mats[i].SecondaryName, 0, 16);
-                std::memcpy(mats[i].SecondaryName, sn.constData(), std::min<int>(sn.size(), 16));
-                mats[i].RenderFlags = m.value("RENDERFLAGS").toInt();
-                QJsonArray c = m.value("COLOR").toArray();
-                if (c.size() >= 3) {
-                    mats[i].Red = c[0].toInt();
-                    mats[i].Green = c[1].toInt();
-                    mats[i].Blue = c[2].toInt();
-                }
-            }
-            item->length = mats.size() * sizeof(W3dMaterial1Struct);
-            item->data.resize(item->length);
-            std::memcpy(item->data.data(), mats.data(), item->length);
+            item->data = jsonArrayToStructs<W3dMaterial1Struct>(arr, [](const QJsonValue& val) {
+                W3dMaterial1Struct m{};
+                auto o = val.toObject();
+                auto mn = o.value("MATERIALNAME").toString().toUtf8();
+                auto pn = o.value("PRIMARYNAME").toString().toUtf8();
+                auto sn = o.value("SECONDARYNAME").toString().toUtf8();
+                // MaterialName
+                std::memset(m.MaterialName, 0, sizeof m.MaterialName);
+                const size_t n0 = (std::min)(
+                    static_cast<size_t>(mn.size()),
+                    sizeof m.MaterialName
+                    );
+                if (n0) std::memcpy(m.MaterialName, mn.constData(), n0);
+
+                // PrimaryName
+                std::memset(m.PrimaryName, 0, sizeof m.PrimaryName);
+                const size_t n1 = (std::min)(
+                    static_cast<size_t>(pn.size()),
+                    sizeof m.PrimaryName
+                    );
+                if (n1) std::memcpy(m.PrimaryName, pn.constData(), n1);
+
+                // SecondaryName
+                std::memset(m.SecondaryName, 0, sizeof m.SecondaryName);
+                const size_t n2 = (std::min)(
+                    static_cast<size_t>(sn.size()),
+                    sizeof m.SecondaryName
+                    );
+                if (n2) std::memcpy(m.SecondaryName, sn.constData(), n2);
+                m.RenderFlags = o.value("RENDERFLAGS").toInt();
+                auto c = o.value("COLOR").toArray();
+                if (c.size() >= 3) { m.Red = c[0].toInt(); m.Green = c[1].toInt(); m.Blue = c[2].toInt(); }
+                return m;
+                });
+            item->length = uint32_t(item->data.size());
             break;
         }
         case 0x0009: {
