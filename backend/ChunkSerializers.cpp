@@ -3846,8 +3846,285 @@ namespace {
 
             item.length = out.size();
             item.data.assign(out.begin(), out.end());
+}
+};
+
+
+struct ShdMeshNameSerializer : ChunkSerializer {
+    QJsonObject toJson(const ChunkItem& item) const override {
+        QJsonObject obj;
+        QString text = QString::fromUtf8(reinterpret_cast<const char*>(item.data.data()), int(item.data.size()));
+        obj["NAME"] = text;
+        return obj;
+    }
+    void fromJson(const QJsonObject& dataObj, ChunkItem& item) const override {
+        QByteArray text = dataObj.value("NAME").toString().toUtf8();
+        item.length = uint32_t(text.size() + 1);
+        item.data.resize(item.length);
+        std::memcpy(item.data.data(), text.constData(), text.size());
+        item.data[text.size()] = 0;
+    }
+};
+
+struct ShdMeshHeaderSerializer : ChunkSerializer {
+    QJsonObject toJson(const ChunkItem& item) const override {
+        QJsonObject obj;
+        if (item.data.size() >= sizeof(W3dShdMeshHeaderStruct)) {
+            const auto* h = reinterpret_cast<const W3dShdMeshHeaderStruct*>(item.data.data());
+            obj["VERSION"] = QString::fromStdString(FormatUtils::FormatVersion(h->Version));
+            obj["MESHFLAGS"] = int(h->MeshFlags);
+            obj["NUMTRIANGLES"] = int(h->NumTriangles);
+            obj["NUMVERTICES"] = int(h->NumVertices);
+            obj["NUMSUBMESHES"] = int(h->NumSubMeshes);
+            QJsonArray fc; for (int i = 0; i < 5; ++i) fc.append(int(h->FutureCounts[i]));
+            obj["FUTURECOUNTS"] = fc;
+            obj["BOXMIN"] = QJsonArray{ h->BoxMin.X, h->BoxMin.Y, h->BoxMin.Z };
+            obj["BOXMAX"] = QJsonArray{ h->BoxMax.X, h->BoxMax.Y, h->BoxMax.Z };
+            obj["SPHCENTER"] = QJsonArray{ h->SphCenter.X, h->SphCenter.Y, h->SphCenter.Z };
+            obj["SPHRADIUS"] = h->SphRadius;
         }
-    };
+        return obj;
+    }
+    void fromJson(const QJsonObject& dataObj, ChunkItem& item) const override {
+        W3dShdMeshHeaderStruct h{};
+        QString verStr = dataObj.value("VERSION").toString();
+        auto parts = verStr.split('.');
+        if (parts.size() == 2) h.Version = (parts[0].toUInt() << 16) | parts[1].toUInt();
+        h.MeshFlags = dataObj.value("MESHFLAGS").toInt();
+        h.NumTriangles = dataObj.value("NUMTRIANGLES").toInt();
+        h.NumVertices = dataObj.value("NUMVERTICES").toInt();
+        h.NumSubMeshes = dataObj.value("NUMSUBMESHES").toInt();
+        QJsonArray fc = dataObj.value("FUTURECOUNTS").toArray();
+        for (int i = 0; i < 5 && i < fc.size(); ++i) h.FutureCounts[i] = fc[i].toInt();
+        QJsonArray bmin = dataObj.value("BOXMIN").toArray();
+        if (bmin.size() >= 3) { h.BoxMin.X = bmin[0].toDouble(); h.BoxMin.Y = bmin[1].toDouble(); h.BoxMin.Z = bmin[2].toDouble(); }
+        QJsonArray bmax = dataObj.value("BOXMAX").toArray();
+        if (bmax.size() >= 3) { h.BoxMax.X = bmax[0].toDouble(); h.BoxMax.Y = bmax[1].toDouble(); h.BoxMax.Z = bmax[2].toDouble(); }
+        QJsonArray sph = dataObj.value("SPHCENTER").toArray();
+        if (sph.size() >= 3) { h.SphCenter.X = sph[0].toDouble(); h.SphCenter.Y = sph[1].toDouble(); h.SphCenter.Z = sph[2].toDouble(); }
+        h.SphRadius = dataObj.value("SPHRADIUS").toDouble();
+        item.length = sizeof(W3dShdMeshHeaderStruct);
+        item.data.resize(item.length);
+        std::memcpy(item.data.data(), &h, sizeof(h));
+    }
+};
+
+struct ShdSubMeshHeaderSerializer : ChunkSerializer {
+    QJsonObject toJson(const ChunkItem& item) const override {
+        QJsonObject obj;
+        if (item.data.size() >= sizeof(W3dShdSubMeshHeaderStruct)) {
+            const auto* h = reinterpret_cast<const W3dShdSubMeshHeaderStruct*>(item.data.data());
+            obj["NUMTRIANGLES"] = int(h->NumTriangles);
+            obj["NUMVERTICES"] = int(h->NumVertices);
+            QJsonArray fc; for (int i = 0; i < 2; ++i) fc.append(int(h->FutureCounts[i]));
+            obj["FUTURECOUNTS"] = fc;
+            obj["BOXMIN"] = QJsonArray{ h->BoxMin.X, h->BoxMin.Y, h->BoxMin.Z };
+            obj["BOXMAX"] = QJsonArray{ h->BoxMax.X, h->BoxMax.Y, h->BoxMax.Z };
+            obj["SPHCENTER"] = QJsonArray{ h->SphCenter.X, h->SphCenter.Y, h->SphCenter.Z };
+            obj["SPHRADIUS"] = h->SphRadius;
+        }
+        return obj;
+    }
+    void fromJson(const QJsonObject& dataObj, ChunkItem& item) const override {
+        W3dShdSubMeshHeaderStruct h{};
+        h.NumTriangles = dataObj.value("NUMTRIANGLES").toInt();
+        h.NumVertices = dataObj.value("NUMVERTICES").toInt();
+        QJsonArray fc = dataObj.value("FUTURECOUNTS").toArray();
+        for (int i = 0; i < 2 && i < fc.size(); ++i) h.FutureCounts[i] = fc[i].toInt();
+        QJsonArray bmin = dataObj.value("BOXMIN").toArray();
+        if (bmin.size() >= 3) { h.BoxMin.X = bmin[0].toDouble(); h.BoxMin.Y = bmin[1].toDouble(); h.BoxMin.Z = bmin[2].toDouble(); }
+        QJsonArray bmax = dataObj.value("BOXMAX").toArray();
+        if (bmax.size() >= 3) { h.BoxMax.X = bmax[0].toDouble(); h.BoxMax.Y = bmax[1].toDouble(); h.BoxMax.Z = bmax[2].toDouble(); }
+        QJsonArray sph = dataObj.value("SPHCENTER").toArray();
+        if (sph.size() >= 3) { h.SphCenter.X = sph[0].toDouble(); h.SphCenter.Y = sph[1].toDouble(); h.SphCenter.Z = sph[2].toDouble(); }
+        h.SphRadius = dataObj.value("SPHRADIUS").toDouble();
+        item.length = sizeof(W3dShdSubMeshHeaderStruct);
+        item.data.resize(item.length);
+        std::memcpy(item.data.data(), &h, sizeof(h));
+    }
+};
+
+struct ShdSubMeshShaderClassIdSerializer : ChunkSerializer {
+    QJsonObject toJson(const ChunkItem& item) const override {
+        QJsonObject obj;
+        if (item.data.size() >= sizeof(W3dShdSubMeshShaderClassIdStruct)) {
+            const auto* s = reinterpret_cast<const W3dShdSubMeshShaderClassIdStruct*>(item.data.data());
+            obj["CLASSID"] = int(s->ShaderClass);
+        }
+        return obj;
+    }
+    void fromJson(const QJsonObject& dataObj, ChunkItem& item) const override {
+        W3dShdSubMeshShaderClassIdStruct s{};
+        s.ShaderClass = dataObj.value("CLASSID").toInt();
+        item.length = sizeof(W3dShdSubMeshShaderClassIdStruct);
+        item.data.resize(item.length);
+        std::memcpy(item.data.data(), &s, sizeof(s));
+    }
+};
+
+struct ShdSubMeshTrianglesSerializer : ChunkSerializer {
+    struct W3dTri16Struct { uint16_t I, J, K; };
+    QJsonObject toJson(const ChunkItem& item) const override {
+        QJsonObject obj;
+        obj["TRIANGLES"] = structsToJsonArray<W3dTri16Struct>(
+            item.data,
+            [](const W3dTri16Struct& t) {
+                QJsonArray arr; arr.append(int(t.I)); arr.append(int(t.J)); arr.append(int(t.K));
+                return QJsonValue(arr);
+            }
+        );
+        return obj;
+    }
+    void fromJson(const QJsonObject& dataObj, ChunkItem& item) const override {
+        QJsonArray arr = dataObj.value("TRIANGLES").toArray();
+        item.data = jsonArrayToStructs<W3dTri16Struct>(arr, [](const QJsonValue& val) {
+            W3dTri16Struct t{}; QJsonArray a = val.toArray();
+            if (a.size() >= 3) { t.I = uint16_t(a[0].toInt()); t.J = uint16_t(a[1].toInt()); t.K = uint16_t(a[2].toInt()); }
+            return t;
+            });
+        item.length = uint32_t(item.data.size());
+    }
+};
+
+struct ShdSubMeshUV0Serializer : ChunkSerializer {
+    QJsonObject toJson(const ChunkItem& item) const override {
+        QJsonObject obj;
+        obj["UV0"] = structsToJsonArray<W3dTexCoordStruct>(
+            item.data,
+            [](const W3dTexCoordStruct& t) { return QJsonArray{ t.U, t.V }; }
+        );
+        return obj;
+    }
+    void fromJson(const QJsonObject& dataObj, ChunkItem& item) const override {
+        QJsonArray arr = dataObj.value("UV0").toArray();
+        item.data = jsonArrayToStructs<W3dTexCoordStruct>(arr, [](const QJsonValue& val) {
+            W3dTexCoordStruct t{}; QJsonArray a = val.toArray();
+            if (a.size() >= 2) { t.U = a[0].toDouble(); t.V = a[1].toDouble(); }
+            return t;
+            });
+        item.length = uint32_t(item.data.size());
+    }
+};
+
+struct ShdSubMeshUV1Serializer : ChunkSerializer {
+    QJsonObject toJson(const ChunkItem& item) const override {
+        QJsonObject obj;
+        obj["UV1"] = structsToJsonArray<W3dTexCoordStruct>(
+            item.data,
+            [](const W3dTexCoordStruct& t) { return QJsonArray{ t.U, t.V }; }
+        );
+        return obj;
+    }
+    void fromJson(const QJsonObject& dataObj, ChunkItem& item) const override {
+        QJsonArray arr = dataObj.value("UV1").toArray();
+        item.data = jsonArrayToStructs<W3dTexCoordStruct>(arr, [](const QJsonValue& val) {
+            W3dTexCoordStruct t{}; QJsonArray a = val.toArray();
+            if (a.size() >= 2) { t.U = a[0].toDouble(); t.V = a[1].toDouble(); }
+            return t;
+            });
+        item.length = uint32_t(item.data.size());
+    }
+};
+
+struct ShdSubMeshTangentBasisSSerializer : ChunkSerializer {
+    QJsonObject toJson(const ChunkItem& item) const override {
+        QJsonObject obj;
+        obj["TANGENT_BASIS_S"] = structsToJsonArray<W3dVectorStruct>(
+            item.data,
+            [](const W3dVectorStruct& v) { return QJsonArray{ v.X, v.Y, v.Z }; }
+        );
+        return obj;
+    }
+    void fromJson(const QJsonObject& dataObj, ChunkItem& item) const override {
+        QJsonArray arr = dataObj.value("TANGENT_BASIS_S").toArray();
+        item.data = jsonArrayToStructs<W3dVectorStruct>(arr, [](const QJsonValue& val) {
+            W3dVectorStruct v{}; QJsonArray a = val.toArray();
+            if (a.size() >= 3) { v.X = a[0].toDouble(); v.Y = a[1].toDouble(); v.Z = a[2].toDouble(); }
+            return v;
+            });
+        item.length = uint32_t(item.data.size());
+    }
+};
+
+struct ShdSubMeshTangentBasisTSerializer : ChunkSerializer {
+    QJsonObject toJson(const ChunkItem& item) const override {
+        QJsonObject obj;
+        obj["TANGENT_BASIS_T"] = structsToJsonArray<W3dVectorStruct>(
+            item.data,
+            [](const W3dVectorStruct& v) { return QJsonArray{ v.X, v.Y, v.Z }; }
+        );
+        return obj;
+    }
+    void fromJson(const QJsonObject& dataObj, ChunkItem& item) const override {
+        QJsonArray arr = dataObj.value("TANGENT_BASIS_T").toArray();
+        item.data = jsonArrayToStructs<W3dVectorStruct>(arr, [](const QJsonValue& val) {
+            W3dVectorStruct v{}; QJsonArray a = val.toArray();
+            if (a.size() >= 3) { v.X = a[0].toDouble(); v.Y = a[1].toDouble(); v.Z = a[2].toDouble(); }
+            return v;
+            });
+        item.length = uint32_t(item.data.size());
+    }
+};
+
+struct ShdSubMeshTangentBasisSXTSerializer : ChunkSerializer {
+    QJsonObject toJson(const ChunkItem& item) const override {
+        QJsonObject obj;
+        obj["TANGENT_BASIS_SXT"] = structsToJsonArray<W3dVectorStruct>(
+            item.data,
+            [](const W3dVectorStruct& v) { return QJsonArray{ v.X, v.Y, v.Z }; }
+        );
+        return obj;
+    }
+    void fromJson(const QJsonObject& dataObj, ChunkItem& item) const override {
+        QJsonArray arr = dataObj.value("TANGENT_BASIS_SXT").toArray();
+        item.data = jsonArrayToStructs<W3dVectorStruct>(arr, [](const QJsonValue& val) {
+            W3dVectorStruct v{}; QJsonArray a = val.toArray();
+            if (a.size() >= 3) { v.X = a[0].toDouble(); v.Y = a[1].toDouble(); v.Z = a[2].toDouble(); }
+            return v;
+            });
+        item.length = uint32_t(item.data.size());
+    }
+};
+
+struct SecondaryVerticesSerializer : ChunkSerializer {
+    QJsonObject toJson(const ChunkItem& item) const override {
+        QJsonObject obj;
+        obj["SECONDARY_VERTICES"] = structsToJsonArray<W3dVectorStruct>(
+            item.data,
+            [](const W3dVectorStruct& v) { return QJsonArray{ v.X, v.Y, v.Z }; }
+        );
+        return obj;
+    }
+    void fromJson(const QJsonObject& dataObj, ChunkItem& item) const override {
+        QJsonArray arr = dataObj.value("SECONDARY_VERTICES").toArray();
+        item.data = jsonArrayToStructs<W3dVectorStruct>(arr, [](const QJsonValue& val) {
+            W3dVectorStruct v{}; QJsonArray a = val.toArray();
+            if (a.size() >= 3) { v.X = a[0].toDouble(); v.Y = a[1].toDouble(); v.Z = a[2].toDouble(); }
+            return v;
+            });
+        item.length = uint32_t(item.data.size());
+    }
+};
+
+struct SecondaryVertexNormalsSerializer : ChunkSerializer {
+    QJsonObject toJson(const ChunkItem& item) const override {
+        QJsonObject obj;
+        obj["SECONDARY_VERTEX_NORMALS"] = structsToJsonArray<W3dVectorStruct>(
+            item.data,
+            [](const W3dVectorStruct& v) { return QJsonArray{ v.X, v.Y, v.Z }; }
+        );
+        return obj;
+    }
+    void fromJson(const QJsonObject& dataObj, ChunkItem& item) const override {
+        QJsonArray arr = dataObj.value("SECONDARY_VERTEX_NORMALS").toArray();
+        item.data = jsonArrayToStructs<W3dVectorStruct>(arr, [](const QJsonValue& val) {
+            W3dVectorStruct v{}; QJsonArray a = val.toArray();
+            if (a.size() >= 3) { v.X = a[0].toDouble(); v.Y = a[1].toDouble(); v.Z = a[2].toDouble(); }
+            return v;
+            });
+        item.length = uint32_t(item.data.size());
+    }
+};
 
 
 
@@ -3968,6 +4245,18 @@ namespace {
     static const DazzleTypenameSerializer dazzleTypenameSerializerInstance;
     static const SoundRObjHeaderSerializer soundRObjHeaderSerializerInstance;
     static const SoundRObjDefinitionSerializer soundRObjDefinitionSerializerInstance;
+    static const ShdMeshNameSerializer shdMeshNameSerializerInstance;
+    static const ShdMeshHeaderSerializer shdMeshHeaderSerializerInstance;
+    static const ShdSubMeshHeaderSerializer shdSubMeshHeaderSerializerInstance;
+    static const ShdSubMeshShaderClassIdSerializer shdSubMeshShaderClassIdSerializerInstance;
+    static const ShdSubMeshTrianglesSerializer shdSubMeshTrianglesSerializerInstance;
+    static const ShdSubMeshUV0Serializer shdSubMeshUV0SerializerInstance;
+    static const ShdSubMeshUV1Serializer shdSubMeshUV1SerializerInstance;
+    static const ShdSubMeshTangentBasisSSerializer shdSubMeshTangentBasisSSerializerInstance;
+    static const ShdSubMeshTangentBasisTSerializer shdSubMeshTangentBasisTSerializerInstance;
+    static const ShdSubMeshTangentBasisSXTSerializer shdSubMeshTangentBasisSXTSerializerInstance;
+    static const SecondaryVerticesSerializer secondaryVerticesSerializerInstance;
+    static const SecondaryVertexNormalsSerializer secondaryVertexNormalsSerializerInstance;
 } // namespace
 
 const std::unordered_map<uint32_t, const ChunkSerializer*>& chunkSerializerRegistry() {
@@ -4085,6 +4374,24 @@ const std::unordered_map<uint32_t, const ChunkSerializer*>& chunkSerializerRegis
         {0x0902, &dazzleTypenameSerializerInstance},
         {0x0A01, &soundRObjHeaderSerializerInstance},
         {0x0A02, &soundRObjDefinitionSerializerInstance},
+        {0x0B01, &shdMeshNameSerializerInstance },
+        {0x0B02, &shdMeshHeaderSerializerInstance },
+        {0x0B03, &meshUserTextSerializerInstance },
+        {0x0B21, &shdSubMeshHeaderSerializerInstance },
+        {0x0B41, &shdSubMeshShaderClassIdSerializerInstance },
+        {0x0B43, &verticesSerializerInstance },
+        {0x0B44, &vertexNormalsSerializerInstance },
+        {0x0B45, &shdSubMeshTrianglesSerializerInstance },
+        {0x0B46, &vertexShadeIndicesSerializerInstance },
+        {0x0B47, &shdSubMeshUV0SerializerInstance },
+        {0x0B48, &shdSubMeshUV1SerializerInstance },
+        {0x0B49, &shdSubMeshTangentBasisSSerializerInstance },
+        {0x0B4A, &shdSubMeshTangentBasisTSerializerInstance },
+        {0x0B4B, &shdSubMeshTangentBasisSXTSerializerInstance },
+        {0x0B4C, &vertexColorsSerializerInstance },
+        {0x0B4D, &vertexInfluencesSerializerInstance },
+        {0x0C00, &secondaryVerticesSerializerInstance },
+        {0x0C01, &secondaryVertexNormalsSerializerInstance },
     };
     return registry;
 }
