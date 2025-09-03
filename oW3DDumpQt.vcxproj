@@ -124,7 +124,7 @@
       <AdditionalIncludeDirectories>%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ResourceCompile>
     <Midl>
-      <AdditionalIncludeDirectories>C:\Users\admin\source\repos\openw3d-oW3Dedit\oW3DEdit_autogen\include_Debug;C:\Qt\6.9.0\msvc2022_64\include\QtWidgets;C:\Qt\6.9.0\msvc2022_64\include;C:\Qt\6.9.0\msvc2022_64\include\QtCore;C:\Qt\6.9.0\msvc2022_64\mkspecs\win32-msvc;C:\Qt\6.9.0\msvc2022_64\include\QtGui;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(ProjectDir)\oW3DEdit_autogen\include_Debug;C:\Qt\6.9.0\msvc2022_64\include\QtWidgets;C:\Qt\6.9.0\msvc2022_64\include;C:\Qt\6.9.0\msvc2022_64\include\QtCore;C:\Qt\6.9.0\msvc2022_64\mkspecs\win32-msvc;C:\Qt\6.9.0\msvc2022_64\include\QtGui;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <OutputDirectory>$(ProjectDir)/$(IntDir)</OutputDirectory>
       <HeaderFileName>%(Filename).h</HeaderFileName>
       <TypeLibraryName>%(Filename).tlb</TypeLibraryName>
@@ -137,8 +137,8 @@
       <AdditionalOptions>%(AdditionalOptions) /machine:x64</AdditionalOptions>
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <IgnoreSpecificDefaultLibraries>%(IgnoreSpecificDefaultLibraries)</IgnoreSpecificDefaultLibraries>
-      <ImportLibrary>C:/Users/admin/source/repos/openw3d-oW3Dedit/Debug/oW3DEdit.lib</ImportLibrary>
-      <ProgramDataBaseFile>C:/Users/admin/source/repos/openw3d-oW3Dedit/Debug/oW3DEdit.pdb</ProgramDataBaseFile>
+      <ImportLibrary>$(ProjectDir)/Debug/oW3DEdit.lib</ImportLibrary>
+      <ProgramDataBaseFile>$(ProjectDir)/Debug/oW3DEdit.pdb</ProgramDataBaseFile>
       <SubSystem>Console</SubSystem>
     </Link>
     <ProjectReference>
@@ -179,7 +179,7 @@
       <AdditionalIncludeDirectories>%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ResourceCompile>
     <Midl>
-      <AdditionalIncludeDirectories>C:\Users\admin\source\repos\openw3d-oW3Dedit\oW3DEdit_autogen\include_Release;C:\Qt\6.9.0\msvc2022_64\include\QtWidgets;C:\Qt\6.9.0\msvc2022_64\include;C:\Qt\6.9.0\msvc2022_64\include\QtCore;C:\Qt\6.9.0\msvc2022_64\mkspecs\win32-msvc;C:\Qt\6.9.0\msvc2022_64\include\QtGui;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(ProjectDir)\oW3DEdit_autogen\include_Release;C:\Qt\6.9.0\msvc2022_64\include\QtWidgets;C:\Qt\6.9.0\msvc2022_64\include;C:\Qt\6.9.0\msvc2022_64\include\QtCore;C:\Qt\6.9.0\msvc2022_64\mkspecs\win32-msvc;C:\Qt\6.9.0\msvc2022_64\include\QtGui;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <OutputDirectory>$(ProjectDir)/$(IntDir)</OutputDirectory>
       <HeaderFileName>%(Filename).h</HeaderFileName>
       <TypeLibraryName>%(Filename).tlb</TypeLibraryName>
@@ -192,8 +192,8 @@
       <AdditionalOptions>%(AdditionalOptions) /machine:x64</AdditionalOptions>
       <GenerateDebugInformation>false</GenerateDebugInformation>
       <IgnoreSpecificDefaultLibraries>%(IgnoreSpecificDefaultLibraries)</IgnoreSpecificDefaultLibraries>
-      <ImportLibrary>C:/Users/admin/source/repos/openw3d-oW3Dedit/Release/oW3DEdit.lib</ImportLibrary>
-      <ProgramDataBaseFile>C:/Users/admin/source/repos/openw3d-oW3Dedit/Release/oW3DEdit.pdb</ProgramDataBaseFile>
+      <ImportLibrary>$(ProjectDir)/Release/oW3DEdit.lib</ImportLibrary>
+      <ProgramDataBaseFile>C$(ProjectDir)/Release/oW3DEdit.pdb</ProgramDataBaseFile>
       <SubSystem>Windows</SubSystem>
     </Link>
     <ProjectReference>
@@ -234,7 +234,7 @@
       <AdditionalIncludeDirectories>%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ResourceCompile>
     <Midl>
-      <AdditionalIncludeDirectories>C:\Users\admin\source\repos\openw3d-oW3Dedit\oW3DEdit_autogen\include_MinSizeRel;C:\Qt\6.9.0\msvc2022_64\include\QtWidgets;C:\Qt\6.9.0\msvc2022_64\include;C:\Qt\6.9.0\msvc2022_64\include\QtCore;C:\Qt\6.9.0\msvc2022_64\mkspecs\win32-msvc;C:\Qt\6.9.0\msvc2022_64\include\QtGui;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(ProjectDir)\oW3DEdit_autogen\include_MinSizeRel;C:\Qt\6.9.0\msvc2022_64\include\QtWidgets;C:\Qt\6.9.0\msvc2022_64\include;C:\Qt\6.9.0\msvc2022_64\include\QtCore;C:\Qt\6.9.0\msvc2022_64\mkspecs\win32-msvc;C:\Qt\6.9.0\msvc2022_64\include\QtGui;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <OutputDirectory>$(ProjectDir)/$(IntDir)</OutputDirectory>
       <HeaderFileName>%(Filename).h</HeaderFileName>
       <TypeLibraryName>%(Filename).tlb</TypeLibraryName>
@@ -285,7 +285,7 @@
       <AdditionalIncludeDirectories>%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ResourceCompile>
     <Midl>
-      <AdditionalIncludeDirectories>C:\Users\admin\source\repos\openw3d-oW3Dedit\oW3DEdit_autogen\include_RelWithDebInfo;C:\Qt\6.9.0\msvc2022_64\include\QtWidgets;C:\Qt\6.9.0\msvc2022_64\include;C:\Qt\6.9.0\msvc2022_64\include\QtCore;C:\Qt\6.9.0\msvc2022_64\mkspecs\win32-msvc;C:\Qt\6.9.0\msvc2022_64\include\QtGui;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(ProjectDir)\oW3DEdit_autogen\include_RelWithDebInfo;C:\Qt\6.9.0\msvc2022_64\include\QtWidgets;C:\Qt\6.9.0\msvc2022_64\include;C:\Qt\6.9.0\msvc2022_64\include\QtCore;C:\Qt\6.9.0\msvc2022_64\mkspecs\win32-msvc;C:\Qt\6.9.0\msvc2022_64\include\QtGui;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <OutputDirectory>$(ProjectDir)/$(IntDir)</OutputDirectory>
       <HeaderFileName>%(Filename).h</HeaderFileName>
       <TypeLibraryName>%(Filename).tlb</TypeLibraryName>
@@ -298,8 +298,8 @@
       <AdditionalOptions>%(AdditionalOptions) /machine:x64</AdditionalOptions>
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <IgnoreSpecificDefaultLibraries>%(IgnoreSpecificDefaultLibraries)</IgnoreSpecificDefaultLibraries>
-      <ImportLibrary>C:/Users/admin/source/repos/openw3d-oW3Dedit/RelWithDebInfo/oW3DEdit.lib</ImportLibrary>
-      <ProgramDataBaseFile>C:/Users/admin/source/repos/openw3d-oW3Dedit/RelWithDebInfo/oW3DEdit.pdb</ProgramDataBaseFile>
+      <ImportLibrary>$(ProjectDir)/RelWithDebInfo/oW3DEdit.lib</ImportLibrary>
+      <ProgramDataBaseFile>$(ProjectDir)/RelWithDebInfo/oW3DEdit.pdb</ProgramDataBaseFile>
       <SubSystem>Console</SubSystem>
     </Link>
     <ProjectReference>
@@ -310,8 +310,8 @@
     <QtMoc Include="MainWindow.h" />
     <ClCompile Include="backend\ChunkJson.cpp" />
     <ClCompile Include="backend\ChunkSerializers.cpp" />
-    <ClCompile Include="C:\Users\admin\source\repos\openw3d-oW3Dedit\Main.cpp" />
-    <ClCompile Include="C:\Users\admin\source\repos\openw3d-oW3Dedit\mainWindow.cpp" />
+    <ClCompile Include="Main.cpp" />
+    <ClCompile Include="mainWindow.cpp" />
     <ClInclude Include="backend\ChunkInterpreter.h" />
     <ClInclude Include="backend\ChunkJson.h" />
     <ClInclude Include="backend\ChunkNames.h" />
@@ -342,10 +342,9 @@
     <ClInclude Include="backend\W3DShdMesh.h" />
     <ClInclude Include="backend\W3DSoundRenderObj.h" />
     <ClInclude Include="backend\W3DStructs.h" />
-    <ClInclude Include="C:\Users\admin\source\repos\openw3d-oW3Dedit\MainWindow.h" />
-    <ClInclude Include="C:\Users\admin\source\repos\openw3d-oW3Dedit\backend\ChunkItem.h" />
-    <ClInclude Include="C:\Users\admin\source\repos\openw3d-oW3Dedit\backend\ChunkData.h" />
-    <ClCompile Include="C:\Users\admin\source\repos\openw3d-oW3Dedit\backend\ChunkData.cpp" />
+    <ClInclude Include="backend\ChunkItem.h" />
+    <ClInclude Include="backend\ChunkData.h" />
+    <ClCompile Include="backend\ChunkData.cpp" />
   </ItemGroup>
   <ItemGroup />
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
