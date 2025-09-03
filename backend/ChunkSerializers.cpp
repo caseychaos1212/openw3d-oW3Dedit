@@ -3172,6 +3172,685 @@ namespace {
         }
     };
 
+    struct AggregateHeaderSerializer : ChunkSerializer {
+        QJsonObject toJson(const ChunkItem& item) const override {
+            QJsonObject obj;
+            if (item.data.size() >= sizeof(W3dAggregateHeaderStruct)) {
+                const auto* h = reinterpret_cast<const W3dAggregateHeaderStruct*>(item.data.data());
+                obj["VERSION"] = int(h->Version);
+                obj["NAME"] = QString::fromUtf8(h->Name, int(strnlen(h->Name, W3D_NAME_LEN)));
+            }
+            return obj;
+        }
+
+        void fromJson(const QJsonObject& dataObj, ChunkItem& item) const override {
+            W3dAggregateHeaderStruct h{};
+            h.Version = dataObj.value("VERSION").toInt();
+            QByteArray name = dataObj.value("NAME").toString().toUtf8();
+            std::memset(h.Name, 0, sizeof(h.Name));
+            std::memcpy(h.Name, name.constData(), std::min<int>(name.size(), W3D_NAME_LEN));
+            item.length = sizeof(W3dAggregateHeaderStruct);
+            item.data.resize(item.length);
+            std::memcpy(item.data.data(), &h, sizeof(h));
+        }
+    };
+
+    struct AggregateInfoSerializer : ChunkSerializer {
+        QJsonObject toJson(const ChunkItem& item) const override {
+            QJsonObject obj;
+            if (item.data.size() >= sizeof(W3dAggregateInfoStruct)) {
+                const auto* hdr = reinterpret_cast<const W3dAggregateInfoStruct*>(item.data.data());
+                obj["BASE_MODEL_NAME"] = QString::fromUtf8(hdr->BaseModelName, int(strnlen(hdr->BaseModelName, W3D_NAME_LEN * 2)));
+                obj["SUBOBJECT_COUNT"] = int(hdr->SubobjectCount);
+                QJsonArray subsArr;
+                const size_t entrySize = sizeof(W3dAggregateSubobjectStruct);
+                const size_t avail = item.data.size() - sizeof(W3dAggregateInfoStruct);
+                size_t n = std::min<size_t>(hdr->SubobjectCount, avail / entrySize);
+                const auto* subs = reinterpret_cast<const W3dAggregateSubobjectStruct*>(item.data.data() + sizeof(W3dAggregateInfoStruct));
+                for (size_t i = 0; i < n; ++i) {
+                    QJsonObject so;
+                    so["SUBOBJECT_NAME"] = QString::fromUtf8(subs[i].SubobjectName, int(strnlen(subs[i].SubobjectName, W3D_NAME_LEN * 2)));
+                    so["BONE_NAME"] = QString::fromUtf8(subs[i].BoneName, int(strnlen(subs[i].BoneName, W3D_NAME_LEN * 2)));
+                    subsArr.append(so);
+                }
+                obj["SUBOBJECTS"] = subsArr;
+            }
+            return obj;
+        }
+
+        void fromJson(const QJsonObject& dataObj, ChunkItem& item) const override {
+            W3dAggregateInfoStruct hdr{};
+            QByteArray base = dataObj.value("BASE_MODEL_NAME").toString().toUtf8();
+            std::memset(hdr.BaseModelName, 0, sizeof(hdr.BaseModelName));
+            std::memcpy(hdr.BaseModelName, base.constData(), std::min<int>(base.size(), int(sizeof(hdr.BaseModelName))));
+            QJsonArray arr = dataObj.value("SUBOBJECTS").toArray();
+            hdr.SubobjectCount = arr.size();
+            std::vector<W3dAggregateSubobjectStruct> subs(hdr.SubobjectCount);
+            for (int i = 0; i < arr.size(); ++i) {
+                QJsonObject so = arr[i].toObject();
+                QByteArray sn = so.value("SUBOBJECT_NAME").toString().toUtf8();
+                std::memset(subs[i].SubobjectName, 0, sizeof(subs[i].SubobjectName));
+                std::memcpy(subs[i].SubobjectName, sn.constData(), std::min<int>(sn.size(), int(sizeof(subs[i].SubobjectName))));
+                QByteArray bn = so.value("BONE_NAME").toString().toUtf8();
+                std::memset(subs[i].BoneName, 0, sizeof(subs[i].BoneName));
+                std::memcpy(subs[i].BoneName, bn.constData(), std::min<int>(bn.size(), int(sizeof(subs[i].BoneName))));
+            }
+            item.length = uint32_t(sizeof(W3dAggregateInfoStruct) + subs.size() * sizeof(W3dAggregateSubobjectStruct));
+            item.data.resize(item.length);
+            std::memcpy(item.data.data(), &hdr, sizeof(hdr));
+            if (!subs.empty()) {
+                std::memcpy(item.data.data() + sizeof(W3dAggregateInfoStruct), subs.data(), subs.size() * sizeof(W3dAggregateSubobjectStruct));
+            }
+        }
+    };
+
+    struct TextureReplacerInfoSerializer : ChunkSerializer {
+        QJsonObject toJson(const ChunkItem& item) const override {
+            QJsonObject obj;
+            if (item.data.size() >= sizeof(W3dTextureReplacerHeaderStruct)) {
+                const auto* hdr = reinterpret_cast<const W3dTextureReplacerHeaderStruct*>(item.data.data());
+                obj["COUNT"] = int(hdr->ReplacedTexturesCount);
+                QJsonArray arr;
+                size_t offset = sizeof(W3dTextureReplacerHeaderStruct);
+                for (uint32_t i = 0; i < hdr->ReplacedTexturesCount && offset + sizeof(W3dTextureReplacerStruct) <= item.data.size(); ++i) {
+                    const auto* r = reinterpret_cast<const W3dTextureReplacerStruct*>(item.data.data() + offset);
+                    QJsonObject o;
+                    QJsonArray meshPath, bonePath;
+                    for (int j = 0; j < 15; ++j) meshPath.append(QString::fromUtf8(r->MeshPath[j], int(strnlen(r->MeshPath[j], 32))));
+                    for (int j = 0; j < 15; ++j) bonePath.append(QString::fromUtf8(r->BonePath[j], int(strnlen(r->BonePath[j], 32))));
+                    o["MESHPATH"] = meshPath;
+                    o["BONEPATH"] = bonePath;
+                    o["OLD_TEXTURE_NAME"] = QString::fromUtf8(r->OldTextureName, int(strnlen(r->OldTextureName, 260)));
+                    o["NEW_TEXTURE_NAME"] = QString::fromUtf8(r->NewTextureName, int(strnlen(r->NewTextureName, 260)));
+                    QJsonObject tp;
+                    tp["ATTRIBUTES"] = int(r->TextureParams.Attributes);
+                    tp["ANIMTYPE"] = int(r->TextureParams.AnimType);
+                    tp["FRAMECOUNT"] = int(r->TextureParams.FrameCount);
+                    tp["FRAMERATE"] = r->TextureParams.FrameRate;
+                    o["TEXTURE_PARAMS"] = tp;
+                    arr.append(o);
+                    offset += sizeof(W3dTextureReplacerStruct);
+                }
+                obj["REPLACERS"] = arr;
+            }
+            return obj;
+        }
+
+        void fromJson(const QJsonObject& dataObj, ChunkItem& item) const override {
+            W3dTextureReplacerHeaderStruct hdr{};
+            QJsonArray arr = dataObj.value("REPLACERS").toArray();
+            hdr.ReplacedTexturesCount = arr.size();
+            std::vector<W3dTextureReplacerStruct> reps(hdr.ReplacedTexturesCount);
+            for (int i = 0; i < arr.size(); ++i) {
+                QJsonObject o = arr[i].toObject();
+                QJsonArray mesh = o.value("MESHPATH").toArray();
+                for (int j = 0; j < 15 && j < mesh.size(); ++j) {
+                    QByteArray s = mesh[j].toString().toUtf8();
+                    std::memset(reps[i].MeshPath[j], 0, sizeof(reps[i].MeshPath[j]));
+                    std::memcpy(reps[i].MeshPath[j], s.constData(), std::min<int>(s.size(), int(sizeof(reps[i].MeshPath[j]))));
+                }
+                QJsonArray bone = o.value("BONEPATH").toArray();
+                for (int j = 0; j < 15 && j < bone.size(); ++j) {
+                    QByteArray s = bone[j].toString().toUtf8();
+                    std::memset(reps[i].BonePath[j], 0, sizeof(reps[i].BonePath[j]));
+                    std::memcpy(reps[i].BonePath[j], s.constData(), std::min<int>(s.size(), int(sizeof(reps[i].BonePath[j]))));
+                }
+                QByteArray old = o.value("OLD_TEXTURE_NAME").toString().toUtf8();
+                std::memset(reps[i].OldTextureName, 0, sizeof(reps[i].OldTextureName));
+                std::memcpy(reps[i].OldTextureName, old.constData(), std::min<int>(old.size(), int(sizeof(reps[i].OldTextureName))));
+                QByteArray neu = o.value("NEW_TEXTURE_NAME").toString().toUtf8();
+                std::memset(reps[i].NewTextureName, 0, sizeof(reps[i].NewTextureName));
+                std::memcpy(reps[i].NewTextureName, neu.constData(), std::min<int>(neu.size(), int(sizeof(reps[i].NewTextureName))));
+                QJsonObject tp = o.value("TEXTURE_PARAMS").toObject();
+                reps[i].TextureParams.Attributes = uint16_t(tp.value("ATTRIBUTES").toInt());
+                reps[i].TextureParams.AnimType = uint16_t(tp.value("ANIMTYPE").toInt());
+                reps[i].TextureParams.FrameCount = tp.value("FRAMECOUNT").toInt();
+                reps[i].TextureParams.FrameRate = float(tp.value("FRAMERATE").toDouble());
+            }
+            item.length = uint32_t(sizeof(W3dTextureReplacerHeaderStruct) + reps.size() * sizeof(W3dTextureReplacerStruct));
+            item.data.resize(item.length);
+            std::memcpy(item.data.data(), &hdr, sizeof(hdr));
+            if (!reps.empty()) {
+                std::memcpy(item.data.data() + sizeof(W3dTextureReplacerHeaderStruct), reps.data(), reps.size() * sizeof(W3dTextureReplacerStruct));
+            }
+        }
+    };
+
+    struct AggregateClassInfoSerializer : ChunkSerializer {
+        QJsonObject toJson(const ChunkItem& item) const override {
+            QJsonObject obj;
+            if (item.data.size() >= sizeof(W3dAggregateMiscInfo)) {
+                const auto* info = reinterpret_cast<const W3dAggregateMiscInfo*>(item.data.data());
+                obj["ORIGINAL_CLASS_ID"] = int(info->OriginalClassID);
+                obj["FLAGS"] = int(info->Flags);
+            }
+            return obj;
+        }
+
+        void fromJson(const QJsonObject& dataObj, ChunkItem& item) const override {
+            W3dAggregateMiscInfo info{};
+            info.OriginalClassID = dataObj.value("ORIGINAL_CLASS_ID").toInt();
+            info.Flags = dataObj.value("FLAGS").toInt();
+            item.length = sizeof(W3dAggregateMiscInfo);
+            item.data.resize(item.length);
+            std::memcpy(item.data.data(), &info, sizeof(info));
+        }
+    };
+
+    struct HLodHeaderSerializer : ChunkSerializer {
+        QJsonObject toJson(const ChunkItem& item) const override {
+            QJsonObject obj;
+            if (item.data.size() >= sizeof(W3dHLodHeaderStruct)) {
+                const auto* h = reinterpret_cast<const W3dHLodHeaderStruct*>(item.data.data());
+                obj["VERSION"] = int(h->Version);
+                obj["LOD_COUNT"] = int(h->LodCount);
+                obj["NAME"] = QString::fromUtf8(h->Name, int(strnlen(h->Name, W3D_NAME_LEN)));
+                obj["HIERARCHY_NAME"] = QString::fromUtf8(h->HierarchyName, int(strnlen(h->HierarchyName, W3D_NAME_LEN)));
+            }
+            return obj;
+        }
+
+        void fromJson(const QJsonObject& dataObj, ChunkItem& item) const override {
+            W3dHLodHeaderStruct h{};
+            h.Version = dataObj.value("VERSION").toInt();
+            h.LodCount = dataObj.value("LOD_COUNT").toInt();
+            QByteArray name = dataObj.value("NAME").toString().toUtf8();
+            std::memset(h.Name, 0, sizeof(h.Name));
+            std::memcpy(h.Name, name.constData(), std::min<int>(name.size(), W3D_NAME_LEN));
+            QByteArray hier = dataObj.value("HIERARCHY_NAME").toString().toUtf8();
+            std::memset(h.HierarchyName, 0, sizeof(h.HierarchyName));
+            std::memcpy(h.HierarchyName, hier.constData(), std::min<int>(hier.size(), W3D_NAME_LEN));
+            item.length = sizeof(W3dHLodHeaderStruct);
+            item.data.resize(item.length);
+            std::memcpy(item.data.data(), &h, sizeof(h));
+        }
+    };
+
+    struct HLodLodArraySerializer : ChunkSerializer {
+        QJsonObject toJson(const ChunkItem& item) const override {
+            QJsonObject obj;
+            if (item.data.size() >= sizeof(W3dHLodArrayHeaderStruct)) {
+                const auto* h = reinterpret_cast<const W3dHLodArrayHeaderStruct*>(item.data.data());
+                obj["MODEL_COUNT"] = int(h->ModelCount);
+                obj["MAX_SCREEN_SIZE"] = h->MaxScreenSize;
+            }
+            return obj;
+        }
+
+        void fromJson(const QJsonObject& dataObj, ChunkItem& item) const override {
+            W3dHLodArrayHeaderStruct h{};
+            h.ModelCount = dataObj.value("MODEL_COUNT").toInt();
+            h.MaxScreenSize = float(dataObj.value("MAX_SCREEN_SIZE").toDouble());
+            item.length = sizeof(W3dHLodArrayHeaderStruct);
+            item.data.resize(item.length);
+            std::memcpy(item.data.data(), &h, sizeof(h));
+        }
+    };
+
+    struct HLodSubObjectSerializer : ChunkSerializer {
+        QJsonObject toJson(const ChunkItem& item) const override {
+            QJsonObject obj;
+            if (item.data.size() >= sizeof(W3dHLodSubObjectStruct)) {
+                const auto* h = reinterpret_cast<const W3dHLodSubObjectStruct*>(item.data.data());
+                obj["BONE_INDEX"] = int(h->BoneIndex);
+                obj["NAME"] = QString::fromUtf8(h->Name, int(strnlen(h->Name, W3D_NAME_LEN * 2)));
+            }
+            return obj;
+        }
+
+        void fromJson(const QJsonObject& dataObj, ChunkItem& item) const override {
+            W3dHLodSubObjectStruct h{};
+            h.BoneIndex = dataObj.value("BONE_INDEX").toInt();
+            QByteArray name = dataObj.value("NAME").toString().toUtf8();
+            std::memset(h.Name, 0, sizeof(h.Name));
+            std::memcpy(h.Name, name.constData(), std::min<int>(name.size(), int(sizeof(h.Name))));
+            item.length = sizeof(W3dHLodSubObjectStruct);
+            item.data.resize(item.length);
+            std::memcpy(item.data.data(), &h, sizeof(h));
+        }
+    };
+
+    struct BoxSerializer : ChunkSerializer {
+        QJsonObject toJson(const ChunkItem& item) const override {
+            QJsonObject obj;
+            if (item.data.size() >= sizeof(W3dBoxStruct)) {
+                const auto* b = reinterpret_cast<const W3dBoxStruct*>(item.data.data());
+                obj["VERSION"] = int(b->Version);
+                obj["ATTRIBUTES"] = int(b->Attributes);
+                obj["NAME"] = QString::fromUtf8(b->Name, int(strnlen(b->Name, 2 * W3D_NAME_LEN)));
+                obj["COLOR"] = QJsonArray{ int(b->Color.R), int(b->Color.G), int(b->Color.B) };
+                obj["CENTER"] = QJsonArray{ b->Center.X, b->Center.Y, b->Center.Z };
+                obj["EXTENT"] = QJsonArray{ b->Extent.X, b->Extent.Y, b->Extent.Z };
+            }
+            return obj;
+        }
+
+        void fromJson(const QJsonObject& dataObj, ChunkItem& item) const override {
+            W3dBoxStruct b{};
+            b.Version = dataObj.value("VERSION").toInt();
+            b.Attributes = dataObj.value("ATTRIBUTES").toInt();
+            QByteArray name = dataObj.value("NAME").toString().toUtf8();
+            std::memset(b.Name, 0, sizeof(b.Name));
+            std::memcpy(b.Name, name.constData(), std::min<int>(name.size(), int(sizeof(b.Name))));
+            QJsonArray color = dataObj.value("COLOR").toArray();
+            if (color.size() >= 3) {
+                b.Color.R = uint8_t(color[0].toInt());
+                b.Color.G = uint8_t(color[1].toInt());
+                b.Color.B = uint8_t(color[2].toInt());
+            }
+            QJsonArray center = dataObj.value("CENTER").toArray();
+            if (center.size() >= 3) { b.Center.X = center[0].toDouble(); b.Center.Y = center[1].toDouble(); b.Center.Z = center[2].toDouble(); }
+            QJsonArray extent = dataObj.value("EXTENT").toArray();
+            if (extent.size() >= 3) { b.Extent.X = extent[0].toDouble(); b.Extent.Y = extent[1].toDouble(); b.Extent.Z = extent[2].toDouble(); }
+            item.length = sizeof(W3dBoxStruct);
+            item.data.resize(item.length);
+            std::memcpy(item.data.data(), &b, sizeof(b));
+        }
+    };
+
+    struct SphereSerializer : ChunkSerializer {
+        QJsonObject toJson(const ChunkItem& item) const override {
+            QJsonObject obj;
+            if (item.data.size() >= sizeof(W3dSphereStruct)) {
+                const auto* s = reinterpret_cast<const W3dSphereStruct*>(item.data.data());
+                obj["VERSION"] = int(s->Version);
+                obj["ATTRIBUTES"] = int(s->Attributes);
+                obj["NAME"] = QString::fromUtf8(s->Name, int(strnlen(s->Name, 2 * W3D_NAME_LEN)));
+                obj["CENTER"] = QJsonArray{ s->Center.X, s->Center.Y, s->Center.Z };
+                obj["EXTENT"] = QJsonArray{ s->Extent.X, s->Extent.Y, s->Extent.Z };
+                obj["ANIM_DURATION"] = s->AnimDuration;
+                obj["DEFAULT_COLOR"] = QJsonArray{ int(s->DefaultColor.X), int(s->DefaultColor.Y), int(s->DefaultColor.Z) };
+                obj["DEFAULT_ALPHA"] = s->DefaultAlpha;
+                obj["DEFAULT_SCALE"] = QJsonArray{ s->DefaultScale.X, s->DefaultScale.Y, s->DefaultScale.Z };
+                QJsonObject dv;
+                dv["ANGLE"] = QJsonArray{ s->DefaultVector.angle.x, s->DefaultVector.angle.y, s->DefaultVector.angle.z, s->DefaultVector.angle.w };
+                dv["INTENSITY"] = s->DefaultVector.intensity;
+                obj["DEFAULT_VECTOR"] = dv;
+                obj["TEXTURE_NAME"] = QString::fromUtf8(s->TextureName, int(strnlen(s->TextureName, 2 * W3D_NAME_LEN)));
+                QJsonArray sh;
+                const uint32_t* d = reinterpret_cast<const uint32_t*>(&s->Shader);
+                for (size_t i = 0; i < sizeof(W3dShaderStruct) / 4; ++i) sh.append(int(d[i]));
+                obj["SHADER_RAW"] = sh;
+            }
+            return obj;
+        }
+
+        void fromJson(const QJsonObject& dataObj, ChunkItem& item) const override {
+            W3dSphereStruct s{};
+            s.Version = dataObj.value("VERSION").toInt();
+            s.Attributes = dataObj.value("ATTRIBUTES").toInt();
+            QByteArray name = dataObj.value("NAME").toString().toUtf8();
+            std::memset(s.Name, 0, sizeof(s.Name));
+            std::memcpy(s.Name, name.constData(), std::min<int>(name.size(), int(sizeof(s.Name))));
+            QJsonArray center = dataObj.value("CENTER").toArray();
+            if (center.size() >= 3) { s.Center.X = center[0].toDouble(); s.Center.Y = center[1].toDouble(); s.Center.Z = center[2].toDouble(); }
+            QJsonArray extent = dataObj.value("EXTENT").toArray();
+            if (extent.size() >= 3) { s.Extent.X = extent[0].toDouble(); s.Extent.Y = extent[1].toDouble(); s.Extent.Z = extent[2].toDouble(); }
+            s.AnimDuration = dataObj.value("ANIM_DURATION").toDouble();
+            QJsonArray dc = dataObj.value("DEFAULT_COLOR").toArray();
+            if (dc.size() >= 3) { s.DefaultColor.X = uint8_t(dc[0].toInt()); s.DefaultColor.Y = uint8_t(dc[1].toInt()); s.DefaultColor.Z = uint8_t(dc[2].toInt()); }
+            s.DefaultAlpha = dataObj.value("DEFAULT_ALPHA").toDouble();
+            QJsonArray ds = dataObj.value("DEFAULT_SCALE").toArray();
+            if (ds.size() >= 3) { s.DefaultScale.X = ds[0].toDouble(); s.DefaultScale.Y = ds[1].toDouble(); s.DefaultScale.Z = ds[2].toDouble(); }
+            QJsonObject dv = dataObj.value("DEFAULT_VECTOR").toObject();
+            QJsonArray ang = dv.value("ANGLE").toArray();
+            if (ang.size() >= 4) { s.DefaultVector.angle.x = ang[0].toDouble(); s.DefaultVector.angle.y = ang[1].toDouble(); s.DefaultVector.angle.z = ang[2].toDouble(); s.DefaultVector.angle.w = ang[3].toDouble(); }
+            s.DefaultVector.intensity = dv.value("INTENSITY").toDouble();
+            QByteArray tex = dataObj.value("TEXTURE_NAME").toString().toUtf8();
+            std::memset(s.TextureName, 0, sizeof(s.TextureName));
+            std::memcpy(s.TextureName, tex.constData(), std::min<int>(tex.size(), int(sizeof(s.TextureName))));
+            QJsonArray sh = dataObj.value("SHADER_RAW").toArray();
+            uint32_t* d = reinterpret_cast<uint32_t*>(&s.Shader);
+            for (int i = 0; i < sh.size() && i < int(sizeof(W3dShaderStruct) / 4); ++i) d[i] = uint32_t(sh[i].toInt());
+            item.length = sizeof(W3dSphereStruct);
+            item.data.resize(item.length);
+            std::memcpy(item.data.data(), &s, sizeof(s));
+        }
+    };
+
+    struct RingSerializer : ChunkSerializer {
+        QJsonObject toJson(const ChunkItem& item) const override {
+            QJsonObject obj;
+            if (item.data.size() >= sizeof(W3dRingStruct)) {
+                const auto* r = reinterpret_cast<const W3dRingStruct*>(item.data.data());
+                obj["VERSION"] = int(r->Version);
+                obj["ATTRIBUTES"] = int(r->Attributes);
+                obj["NAME"] = QString::fromUtf8(r->Name, int(strnlen(r->Name, 2 * W3D_NAME_LEN)));
+                obj["CENTER"] = QJsonArray{ r->Center.X, r->Center.Y, r->Center.Z };
+                obj["EXTENT"] = QJsonArray{ r->Extent.X, r->Extent.Y, r->Extent.Z };
+                obj["ANIM_DURATION"] = r->AnimDuration;
+                obj["DEFAULT_COLOR"] = QJsonArray{ int(r->DefaultColor.X), int(r->DefaultColor.Y), int(r->DefaultColor.Z) };
+                obj["DEFAULT_ALPHA"] = r->DefaultAlpha;
+                obj["DEFAULT_INNER_SCALE"] = QJsonArray{ r->DefaultInnerScale.x, r->DefaultInnerScale.y };
+                obj["DEFAULT_OUTER_SCALE"] = QJsonArray{ r->DefaultOuterScale.x, r->DefaultOuterScale.y };
+                obj["INNER_EXTENT"] = QJsonArray{ r->InnerExtent.x, r->InnerExtent.y };
+                obj["OUTER_EXTENT"] = QJsonArray{ r->OuterExtent.x, r->OuterExtent.y };
+                obj["TEXTURE_NAME"] = QString::fromUtf8(r->TextureName, int(strnlen(r->TextureName, 2 * W3D_NAME_LEN)));
+                QJsonArray sh;
+                const uint32_t* d = reinterpret_cast<const uint32_t*>(&r->Shader);
+                for (size_t i = 0; i < sizeof(W3dShaderStruct) / 4; ++i) sh.append(int(d[i]));
+                obj["SHADER_RAW"] = sh;
+                obj["TEXTURE_TILE_COUNT"] = r->TextureTileCount;
+            }
+            return obj;
+        }
+
+        void fromJson(const QJsonObject& dataObj, ChunkItem& item) const override {
+            W3dRingStruct r{};
+            r.Version = dataObj.value("VERSION").toInt();
+            r.Attributes = dataObj.value("ATTRIBUTES").toInt();
+            QByteArray name = dataObj.value("NAME").toString().toUtf8();
+            std::memset(r.Name, 0, sizeof(r.Name));
+            std::memcpy(r.Name, name.constData(), std::min<int>(name.size(), int(sizeof(r.Name))));
+            QJsonArray center = dataObj.value("CENTER").toArray();
+            if (center.size() >= 3) { r.Center.X = center[0].toDouble(); r.Center.Y = center[1].toDouble(); r.Center.Z = center[2].toDouble(); }
+            QJsonArray extent = dataObj.value("EXTENT").toArray();
+            if (extent.size() >= 3) { r.Extent.X = extent[0].toDouble(); r.Extent.Y = extent[1].toDouble(); r.Extent.Z = extent[2].toDouble(); }
+            r.AnimDuration = dataObj.value("ANIM_DURATION").toDouble();
+            QJsonArray dc = dataObj.value("DEFAULT_COLOR").toArray();
+            if (dc.size() >= 3) { r.DefaultColor.X = uint8_t(dc[0].toInt()); r.DefaultColor.Y = uint8_t(dc[1].toInt()); r.DefaultColor.Z = uint8_t(dc[2].toInt()); }
+            r.DefaultAlpha = dataObj.value("DEFAULT_ALPHA").toDouble();
+            QJsonArray dis = dataObj.value("DEFAULT_INNER_SCALE").toArray();
+            if (dis.size() >= 2) { r.DefaultInnerScale.x = dis[0].toDouble(); r.DefaultInnerScale.y = dis[1].toDouble(); }
+            QJsonArray dos = dataObj.value("DEFAULT_OUTER_SCALE").toArray();
+            if (dos.size() >= 2) { r.DefaultOuterScale.x = dos[0].toDouble(); r.DefaultOuterScale.y = dos[1].toDouble(); }
+            QJsonArray inext = dataObj.value("INNER_EXTENT").toArray();
+            if (inext.size() >= 2) { r.InnerExtent.x = inext[0].toDouble(); r.InnerExtent.y = inext[1].toDouble(); }
+            QJsonArray outext = dataObj.value("OUTER_EXTENT").toArray();
+            if (outext.size() >= 2) { r.OuterExtent.x = outext[0].toDouble(); r.OuterExtent.y = outext[1].toDouble(); }
+            QByteArray tex = dataObj.value("TEXTURE_NAME").toString().toUtf8();
+            std::memset(r.TextureName, 0, sizeof(r.TextureName));
+            std::memcpy(r.TextureName, tex.constData(), std::min<int>(tex.size(), int(sizeof(r.TextureName))));
+            QJsonArray sh = dataObj.value("SHADER_RAW").toArray();
+            uint32_t* d = reinterpret_cast<uint32_t*>(&r.Shader);
+            for (int i = 0; i < sh.size() && i < int(sizeof(W3dShaderStruct) / 4); ++i) d[i] = uint32_t(sh[i].toInt());
+            r.TextureTileCount = dataObj.value("TEXTURE_TILE_COUNT").toInt();
+            item.length = sizeof(W3dRingStruct);
+            item.data.resize(item.length);
+            std::memcpy(item.data.data(), &r, sizeof(r));
+        }
+    };
+
+    struct NullObjectSerializer : ChunkSerializer {
+        QJsonObject toJson(const ChunkItem& item) const override {
+            QJsonObject obj;
+            if (item.data.size() >= sizeof(W3dNullObjectStruct)) {
+                const auto* n = reinterpret_cast<const W3dNullObjectStruct*>(item.data.data());
+                obj["VERSION"] = int(n->Version);
+                obj["ATTRIBUTES"] = int(n->Attributes);
+                obj["NAME"] = QString::fromUtf8(n->Name, int(strnlen(n->Name, 2 * W3D_NAME_LEN)));
+            }
+            return obj;
+        }
+
+        void fromJson(const QJsonObject& dataObj, ChunkItem& item) const override {
+            W3dNullObjectStruct n{};
+            n.Version = dataObj.value("VERSION").toInt();
+            n.Attributes = dataObj.value("ATTRIBUTES").toInt();
+            QByteArray name = dataObj.value("NAME").toString().toUtf8();
+            std::memset(n.Name, 0, sizeof(n.Name));
+            std::memcpy(n.Name, name.constData(), std::min<int>(name.size(), int(sizeof(n.Name))));
+            item.length = sizeof(W3dNullObjectStruct);
+            item.data.resize(item.length);
+            std::memcpy(item.data.data(), &n, sizeof(n));
+        }
+    };
+
+    struct LightTransformSerializer : ChunkSerializer {
+        QJsonObject toJson(const ChunkItem& item) const override {
+            QJsonObject obj;
+            if (item.data.size() >= sizeof(W3dLightTransformStruct)) {
+                const auto* m = reinterpret_cast<const W3dLightTransformStruct*>(item.data.data());
+                QJsonArray rows;
+                for (int i = 0; i < 3; ++i) {
+                    rows.append(QJsonArray{ m->Transform[i][0], m->Transform[i][1], m->Transform[i][2], m->Transform[i][3] });
+                }
+                obj["MATRIX"] = rows;
+            }
+            return obj;
+        }
+
+        void fromJson(const QJsonObject& dataObj, ChunkItem& item) const override {
+            W3dLightTransformStruct m{};
+            QJsonArray rows = dataObj.value("MATRIX").toArray();
+            for (int i = 0; i < 3 && i < rows.size(); ++i) {
+                QJsonArray r = rows[i].toArray();
+                for (int j = 0; j < 4 && j < r.size(); ++j) {
+                    m.Transform[i][j] = float(r[j].toDouble());
+                }
+            }
+            item.length = sizeof(W3dLightTransformStruct);
+            item.data.resize(item.length);
+            std::memcpy(item.data.data(), &m, sizeof(m));
+        }
+    };
+
+    struct DazzleNameSerializer : ChunkSerializer {
+        QJsonObject toJson(const ChunkItem& item) const override {
+            QJsonObject obj;
+            QString text = QString::fromUtf8(reinterpret_cast<const char*>(item.data.data()), int(item.data.size()));
+            obj["NAME"] = text;
+            return obj;
+        }
+
+        void fromJson(const QJsonObject& dataObj, ChunkItem& item) const override {
+            QByteArray text = dataObj.value("NAME").toString().toUtf8();
+            item.length = uint32_t(text.size() + 1);
+            item.data.resize(item.length);
+            std::memcpy(item.data.data(), text.constData(), text.size());
+            item.data[text.size()] = 0;
+        }
+    };
+
+    struct DazzleTypenameSerializer : ChunkSerializer {
+        QJsonObject toJson(const ChunkItem& item) const override {
+            QJsonObject obj;
+            QString text = QString::fromUtf8(reinterpret_cast<const char*>(item.data.data()), int(item.data.size()));
+            obj["TYPENAME"] = text;
+            return obj;
+        }
+
+        void fromJson(const QJsonObject& dataObj, ChunkItem& item) const override {
+            QByteArray text = dataObj.value("TYPENAME").toString().toUtf8();
+            item.length = uint32_t(text.size() + 1);
+            item.data.resize(item.length);
+            std::memcpy(item.data.data(), text.constData(), text.size());
+            item.data[text.size()] = 0;
+        }
+    };
+
+    struct SoundRObjHeaderSerializer : ChunkSerializer {
+        QJsonObject toJson(const ChunkItem& item) const override {
+            QJsonObject obj;
+            if (item.data.size() >= sizeof(W3dSoundRObjHeaderStruct)) {
+                const auto* h = reinterpret_cast<const W3dSoundRObjHeaderStruct*>(item.data.data());
+                obj["VERSION"] = int(h->Version);
+                obj["NAME"] = QString::fromUtf8(h->Name, int(strnlen(h->Name, W3D_NAME_LEN)));
+                obj["FLAGS"] = int(h->Flags);
+            }
+            return obj;
+        }
+
+        void fromJson(const QJsonObject& dataObj, ChunkItem& item) const override {
+            W3dSoundRObjHeaderStruct h{};
+            h.Version = dataObj.value("VERSION").toInt();
+            QByteArray name = dataObj.value("NAME").toString().toUtf8();
+            std::memset(h.Name, 0, sizeof(h.Name));
+            std::memcpy(h.Name, name.constData(), std::min<int>(name.size(), W3D_NAME_LEN));
+            h.Flags = dataObj.value("FLAGS").toInt();
+            item.length = sizeof(W3dSoundRObjHeaderStruct);
+            item.data.resize(item.length);
+            std::memcpy(item.data.data(), &h, sizeof(h));
+        }
+    };
+
+    struct SoundRObjDefinitionSerializer : ChunkSerializer {
+        QJsonObject toJson(const ChunkItem& item) const override {
+            QJsonObject obj;
+            const uint8_t* cur = item.data.data();
+            const uint8_t* end = cur + item.data.size();
+            auto need = [&](size_t n) { return size_t(end - cur) >= n; };
+            while (need(2)) {
+                uint8_t id = cur[0];
+                uint8_t size = cur[1];
+                cur += 2;
+                if (!need(size)) break;
+                const uint8_t* pay = cur;
+                switch (id) {
+                case 0x01: if (size == 4) { uint32_t v; std::memcpy(&v, pay, 4); obj["m_ID"] = int(v); } break;
+                case 0x03:
+                    if (size == 4) { float f; std::memcpy(&f, pay, 4); obj["m_Priority"] = f; }
+                    else { obj["m_Name"] = QString::fromUtf8(reinterpret_cast<const char*>(pay), int(std::min<size_t>(size, strnlen(reinterpret_cast<const char*>(pay), size)))); }
+                    break;
+                case 0x04: if (size == 4) { float f; std::memcpy(&f, pay, 4); obj["m_Volume"] = f; } break;
+                case 0x05: if (size == 4) { float f; std::memcpy(&f, pay, 4); obj["m_Pan"] = f; } break;
+                case 0x06: if (size == 4) { uint32_t v; std::memcpy(&v, pay, 4); obj["m_LoopCount"] = int(v); } break;
+                case 0x07: if (size == 4) { float f; std::memcpy(&f, pay, 4); obj["m_DropoffRadius"] = f; } break;
+                case 0x08: if (size == 4) { float f; std::memcpy(&f, pay, 4); obj["m_MaxVolRadius"] = f; } break;
+                case 0x09: if (size == 4) { uint32_t v; std::memcpy(&v, pay, 4); obj["m_Type"] = int(v); } break;
+                case 0x0A: if (size >= 1) { obj["m_is3DSound"] = int(pay[0]); } break;
+                case 0x0B: obj["m_Filename"] = QString::fromUtf8(reinterpret_cast<const char*>(pay), int(std::min<size_t>(size, strnlen(reinterpret_cast<const char*>(pay), size)))); break;
+                case 0x0C: obj["m_DisplayText"] = QString::fromUtf8(reinterpret_cast<const char*>(pay), int(std::min<size_t>(size, strnlen(reinterpret_cast<const char*>(pay), size)))); break;
+                case 0x12: if (size == 4) { float f; std::memcpy(&f, pay, 4); obj["m_StartOffset"] = f; } break;
+                case 0x13: if (size == 4) { float f; std::memcpy(&f, pay, 4); obj["m_PitchFactor"] = f; } break;
+                case 0x14: if (size == 4) { float f; std::memcpy(&f, pay, 4); obj["m_PitchFactorRandomizer"] = f; } break;
+                case 0x15: if (size == 4) { float f; std::memcpy(&f, pay, 4); obj["m_VolumeRandomizer"] = f; } break;
+                case 0x16: if (size == 4) { uint32_t v; std::memcpy(&v, pay, 4); obj["m_VirtualChannel"] = int(v); } break;
+                case 0x0D: if (size == 4) { uint32_t v; std::memcpy(&v, pay, 4); obj["m_LogicalType"] = int(v); } break;
+                case 0x0E: if (size == 4) { float f; std::memcpy(&f, pay, 4); obj["m_LogicalNotifDelay"] = f; } break;
+                case 0x0F: if (size >= 1) { obj["m_CreateLogicalSound"] = int(pay[0]); } break;
+                case 0x10: if (size == 4) { float f; std::memcpy(&f, pay, 4); obj["m_LogicalDropoffRadius"] = f; } break;
+                case 0x11:
+                    if (size == 12) {
+                        const float* f = reinterpret_cast<const float*>(pay);
+                        obj["m_SphereColor"] = QJsonArray{ f[0], f[1], f[2] };
+                    }
+                    break;
+                default: {
+                    QJsonArray raw;
+                    for (int i = 0; i < size; ++i) raw.append(int(pay[i]));
+                    obj[QString("UNKNOWN_%1").arg(id, 2, 16, QChar('0'))] = raw;
+                    break;
+                }
+                }
+                cur += size;
+            }
+            return obj;
+        }
+
+        void fromJson(const QJsonObject& dataObj, ChunkItem& item) const override {
+            QByteArray out;
+            auto append = [&](uint8_t id, const QByteArray& payload) {
+                out.append(char(id));
+                out.append(char(payload.size()));
+                out.append(payload);
+                };
+
+            if (dataObj.contains("m_ID")) {
+                uint32_t v = dataObj.value("m_ID").toInt();
+                append(0x01, QByteArray(reinterpret_cast<const char*>(&v), 4));
+            }
+            if (dataObj.contains("m_Name")) {
+                QByteArray s = dataObj.value("m_Name").toString().toUtf8();
+                s.append('\0');
+                append(0x03, s);
+            }
+            if (dataObj.contains("m_Priority")) {
+                float f = float(dataObj.value("m_Priority").toDouble());
+                append(0x03, QByteArray(reinterpret_cast<const char*>(&f), 4));
+            }
+            if (dataObj.contains("m_Volume")) {
+                float f = float(dataObj.value("m_Volume").toDouble());
+                append(0x04, QByteArray(reinterpret_cast<const char*>(&f), 4));
+            }
+            if (dataObj.contains("m_Pan")) {
+                float f = float(dataObj.value("m_Pan").toDouble());
+                append(0x05, QByteArray(reinterpret_cast<const char*>(&f), 4));
+            }
+            if (dataObj.contains("m_LoopCount")) {
+                uint32_t v = dataObj.value("m_LoopCount").toInt();
+                append(0x06, QByteArray(reinterpret_cast<const char*>(&v), 4));
+            }
+            if (dataObj.contains("m_DropoffRadius")) {
+                float f = float(dataObj.value("m_DropoffRadius").toDouble());
+                append(0x07, QByteArray(reinterpret_cast<const char*>(&f), 4));
+            }
+            if (dataObj.contains("m_MaxVolRadius")) {
+                float f = float(dataObj.value("m_MaxVolRadius").toDouble());
+                append(0x08, QByteArray(reinterpret_cast<const char*>(&f), 4));
+            }
+            if (dataObj.contains("m_Type")) {
+                uint32_t v = dataObj.value("m_Type").toInt();
+                append(0x09, QByteArray(reinterpret_cast<const char*>(&v), 4));
+            }
+            if (dataObj.contains("m_is3DSound")) {
+                QByteArray b(1, '\0');
+                b[0] = char(dataObj.value("m_is3DSound").toInt());
+                append(0x0A, b);
+            }
+            if (dataObj.contains("m_Filename")) {
+                QByteArray s = dataObj.value("m_Filename").toString().toUtf8();
+                s.append('\0');
+                append(0x0B, s);
+            }
+            if (dataObj.contains("m_DisplayText")) {
+                QByteArray s = dataObj.value("m_DisplayText").toString().toUtf8();
+                s.append('\0');
+                append(0x0C, s);
+            }
+            if (dataObj.contains("m_StartOffset")) {
+                float f = float(dataObj.value("m_StartOffset").toDouble());
+                append(0x12, QByteArray(reinterpret_cast<const char*>(&f), 4));
+            }
+            if (dataObj.contains("m_PitchFactor")) {
+                float f = float(dataObj.value("m_PitchFactor").toDouble());
+                append(0x13, QByteArray(reinterpret_cast<const char*>(&f), 4));
+            }
+            if (dataObj.contains("m_PitchFactorRandomizer")) {
+                float f = float(dataObj.value("m_PitchFactorRandomizer").toDouble());
+                append(0x14, QByteArray(reinterpret_cast<const char*>(&f), 4));
+            }
+            if (dataObj.contains("m_VolumeRandomizer")) {
+                float f = float(dataObj.value("m_VolumeRandomizer").toDouble());
+                append(0x15, QByteArray(reinterpret_cast<const char*>(&f), 4));
+            }
+            if (dataObj.contains("m_VirtualChannel")) {
+                uint32_t v = dataObj.value("m_VirtualChannel").toInt();
+                append(0x16, QByteArray(reinterpret_cast<const char*>(&v), 4));
+            }
+            if (dataObj.contains("m_LogicalType")) {
+                uint32_t v = dataObj.value("m_LogicalType").toInt();
+                append(0x0D, QByteArray(reinterpret_cast<const char*>(&v), 4));
+            }
+            if (dataObj.contains("m_LogicalNotifDelay")) {
+                float f = float(dataObj.value("m_LogicalNotifDelay").toDouble());
+                append(0x0E, QByteArray(reinterpret_cast<const char*>(&f), 4));
+            }
+            if (dataObj.contains("m_CreateLogicalSound")) {
+                QByteArray b(1, '\0');
+                b[0] = char(dataObj.value("m_CreateLogicalSound").toInt());
+                append(0x0F, b);
+            }
+            if (dataObj.contains("m_LogicalDropoffRadius")) {
+                float f = float(dataObj.value("m_LogicalDropoffRadius").toDouble());
+                append(0x10, QByteArray(reinterpret_cast<const char*>(&f), 4));
+            }
+            if (dataObj.contains("m_SphereColor")) {
+                QJsonArray sc = dataObj.value("m_SphereColor").toArray();
+                if (sc.size() >= 3) {
+                    float f[3];
+                    for (int i = 0; i < 3; ++i) f[i] = float(sc[i].toDouble());
+                    append(0x11, QByteArray(reinterpret_cast<const char*>(f), 12));
+                }
+            }
+
+            item.length = out.size();
+            item.data.assign(out.begin(), out.end());
+        }
+    };
+
+
+
 
 
 
@@ -3273,7 +3952,22 @@ namespace {
     static const EmitterFrameKeyframesSerializer emitterFrameKeyframesSerializerInstance;
     static const EmitterBlurTimeKeyframesSerializer emitterBlurTimeKeyframesSerializerInstance;
     static const EmitterExtraInfoSerializer emitterExtraInfoSerializerInstance;
-
+    static const AggregateHeaderSerializer aggregateHeaderSerializerInstance;
+    static const AggregateInfoSerializer aggregateInfoSerializerInstance;
+    static const TextureReplacerInfoSerializer textureReplacerInfoSerializerInstance;
+    static const AggregateClassInfoSerializer aggregateClassInfoSerializerInstance;
+    static const HLodHeaderSerializer hLodHeaderSerializerInstance;
+    static const HLodLodArraySerializer hLodLodArraySerializerInstance;
+    static const HLodSubObjectSerializer hLodSubObjectSerializerInstance;
+    static const BoxSerializer boxSerializerInstance;
+    static const SphereSerializer sphereSerializerInstance;
+    static const RingSerializer ringSerializerInstance;
+    static const NullObjectSerializer nullObjectSerializerInstance;
+    static const LightTransformSerializer lightTransformSerializerInstance;
+    static const DazzleNameSerializer dazzleNameSerializerInstance;
+    static const DazzleTypenameSerializer dazzleTypenameSerializerInstance;
+    static const SoundRObjHeaderSerializer soundRObjHeaderSerializerInstance;
+    static const SoundRObjDefinitionSerializer soundRObjDefinitionSerializerInstance;
 } // namespace
 
 const std::unordered_map<uint32_t, const ChunkSerializer*>& chunkSerializerRegistry() {
@@ -3375,6 +4069,22 @@ const std::unordered_map<uint32_t, const ChunkSerializer*>& chunkSerializerRegis
         {0x050B, &emitterFrameKeyframesSerializerInstance},
         {0x050C, &emitterBlurTimeKeyframesSerializerInstance},
         {0x050D, &emitterExtraInfoSerializerInstance},
+        {0x0601, &aggregateHeaderSerializerInstance},
+        {0x0602, &aggregateInfoSerializerInstance},
+        {0x0603, &textureReplacerInfoSerializerInstance},
+        {0x0604, &aggregateClassInfoSerializerInstance},
+        {0x0701, &hLodHeaderSerializerInstance},
+        {0x0702, &hLodLodArraySerializerInstance},
+        {0x0704, &hLodSubObjectSerializerInstance},
+        {0x0740, &boxSerializerInstance},
+        {0x0741, &sphereSerializerInstance},
+        {0x0742, &ringSerializerInstance},
+        {0x0750, &nullObjectSerializerInstance},
+        {0x0802, &lightTransformSerializerInstance},
+        {0x0901, &dazzleNameSerializerInstance},
+        {0x0902, &dazzleTypenameSerializerInstance},
+        {0x0A01, &soundRObjHeaderSerializerInstance},
+        {0x0A02, &soundRObjDefinitionSerializerInstance},
     };
     return registry;
 }
