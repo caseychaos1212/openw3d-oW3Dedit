@@ -2651,6 +2651,529 @@ namespace {
         }
     };
 
+    // --- Emitter chunk serializers ---
+
+    struct EmitterHeaderSerializer : ChunkSerializer {
+        QJsonObject toJson(const ChunkItem& item) const override {
+            QJsonObject obj;
+            if (item.data.size() >= sizeof(W3dEmitterHeaderStruct)) {
+                const auto* h = reinterpret_cast<const W3dEmitterHeaderStruct*>(item.data.data());
+                obj["VERSION"] = QString::fromStdString(FormatUtils::FormatVersion(h->Version));
+                obj["NAME"] = QString::fromUtf8(h->Name, strnlen(h->Name, W3D_NAME_LEN));
+            }
+            return obj;
+        }
+
+        void fromJson(const QJsonObject& dataObj, ChunkItem& item) const override {
+            W3dEmitterHeaderStruct h{};
+            QString verStr = dataObj.value("VERSION").toString();
+            auto parts = verStr.split('.');
+            if (parts.size() == 2) {
+                h.Version = (parts[0].toUInt() << 16) | parts[1].toUInt();
+            }
+            QByteArray name = dataObj.value("NAME").toString().toUtf8();
+            std::memset(h.Name, 0, W3D_NAME_LEN);
+            std::memcpy(h.Name, name.constData(), std::min<int>(name.size(), W3D_NAME_LEN));
+            item.length = sizeof(W3dEmitterHeaderStruct);
+            item.data.resize(item.length);
+            std::memcpy(item.data.data(), &h, sizeof(h));
+        }
+    };
+
+    struct EmitterUserDataSerializer : ChunkSerializer {
+        QJsonObject toJson(const ChunkItem& item) const override {
+            QJsonObject obj;
+            obj["USER_DATA"] = QString::fromUtf8(
+                reinterpret_cast<const char*>(item.data.data()),
+                item.data.size());
+            return obj;
+        }
+
+        void fromJson(const QJsonObject& dataObj, ChunkItem& item) const override {
+            QByteArray arr = dataObj.value("USER_DATA").toString().toUtf8();
+            item.length = uint32_t(arr.size() + 1);
+            item.data.resize(item.length);
+            if (!arr.isEmpty()) {
+                std::memcpy(item.data.data(), arr.constData(), arr.size());
+            }
+            item.data[item.length - 1] = 0;
+        }
+    };
+
+    struct EmitterInfoSerializer : ChunkSerializer {
+        QJsonObject toJson(const ChunkItem& item) const override {
+            QJsonObject obj;
+            if (item.data.size() >= sizeof(W3dEmitterInfoStruct)) {
+                const auto* info = reinterpret_cast<const W3dEmitterInfoStruct*>(item.data.data());
+                obj["TEXTURE_FILENAME"] = QString::fromUtf8(info->TextureFilename, strnlen(info->TextureFilename, 260));
+                obj["START_SIZE"] = info->StartSize;
+                obj["END_SIZE"] = info->EndSize;
+                obj["LIFETIME"] = info->Lifetime;
+                obj["EMISSION_RATE"] = info->EmissionRate;
+                obj["MAX_EMISSIONS"] = info->MaxEmissions;
+                obj["VELOCITY_RANDOM"] = info->VelocityRandom;
+                obj["POSITION_RANDOM"] = info->PositionRandom;
+                obj["FADE_TIME"] = info->FadeTime;
+                obj["GRAVITY"] = info->Gravity;
+                obj["ELASTICITY"] = info->Elasticity;
+                obj["VELOCITY"] = QJsonArray{ info->Velocity.X, info->Velocity.Y, info->Velocity.Z };
+                obj["ACCELERATION"] = QJsonArray{ info->Acceleration.X, info->Acceleration.Y, info->Acceleration.Z };
+                obj["START_COLOR"] = QJsonArray{ info->StartColor.R, info->StartColor.G, info->StartColor.B, info->StartColor.A };
+                obj["END_COLOR"] = QJsonArray{ info->EndColor.R, info->EndColor.G, info->EndColor.B, info->EndColor.A };
+            }
+            return obj;
+        }
+
+        void fromJson(const QJsonObject& dataObj, ChunkItem& item) const override {
+            W3dEmitterInfoStruct info{};
+            QByteArray tex = dataObj.value("TEXTURE_FILENAME").toString().toUtf8();
+            std::memset(info.TextureFilename, 0, sizeof(info.TextureFilename));
+            std::memcpy(info.TextureFilename, tex.constData(), std::min<int>(tex.size(), int(sizeof(info.TextureFilename))));
+            info.StartSize = float(dataObj.value("START_SIZE").toDouble());
+            info.EndSize = float(dataObj.value("END_SIZE").toDouble());
+            info.Lifetime = float(dataObj.value("LIFETIME").toDouble());
+            info.EmissionRate = float(dataObj.value("EMISSION_RATE").toDouble());
+            info.MaxEmissions = float(dataObj.value("MAX_EMISSIONS").toDouble());
+            info.VelocityRandom = float(dataObj.value("VELOCITY_RANDOM").toDouble());
+            info.PositionRandom = float(dataObj.value("POSITION_RANDOM").toDouble());
+            info.FadeTime = float(dataObj.value("FADE_TIME").toDouble());
+            info.Gravity = float(dataObj.value("GRAVITY").toDouble());
+            info.Elasticity = float(dataObj.value("ELASTICITY").toDouble());
+            auto vel = dataObj.value("VELOCITY").toArray();
+            if (vel.size() >= 3) { info.Velocity.X = float(vel[0].toDouble()); info.Velocity.Y = float(vel[1].toDouble()); info.Velocity.Z = float(vel[2].toDouble()); }
+            auto acc = dataObj.value("ACCELERATION").toArray();
+            if (acc.size() >= 3) { info.Acceleration.X = float(acc[0].toDouble()); info.Acceleration.Y = float(acc[1].toDouble()); info.Acceleration.Z = float(acc[2].toDouble()); }
+            auto sc = dataObj.value("START_COLOR").toArray();
+            if (sc.size() >= 4) { info.StartColor.R = sc[0].toInt(); info.StartColor.G = sc[1].toInt(); info.StartColor.B = sc[2].toInt(); info.StartColor.A = sc[3].toInt(); }
+            auto ec = dataObj.value("END_COLOR").toArray();
+            if (ec.size() >= 4) { info.EndColor.R = ec[0].toInt(); info.EndColor.G = ec[1].toInt(); info.EndColor.B = ec[2].toInt(); info.EndColor.A = ec[3].toInt(); }
+            item.length = sizeof(W3dEmitterInfoStruct);
+            item.data.resize(item.length);
+            std::memcpy(item.data.data(), &info, sizeof(info));
+        }
+    };
+
+    struct EmitterInfoV2Serializer : ChunkSerializer {
+        QJsonObject toJson(const ChunkItem& item) const override {
+            QJsonObject obj;
+            if (item.data.size() >= sizeof(W3dEmitterInfoStructV2)) {
+                const auto* info = reinterpret_cast<const W3dEmitterInfoStructV2*>(item.data.data());
+                obj["BURST_SIZE"] = int(info->BurstSize);
+
+                auto volToJson = [](const W3dVolumeRandomizerStruct& v) {
+                    return QJsonObject{
+                        {"CLASS_ID", int(v.ClassID)},
+                        {"VALUE1", v.Value1},
+                        {"VALUE2", v.Value2},
+                        {"VALUE3", v.Value3}
+                    };
+                    };
+
+                obj["CREATION_VOLUME"] = volToJson(info->CreationVolume);
+                obj["VEL_RANDOM"] = volToJson(info->VelRandom);
+                obj["OUTWARD_VEL"] = info->OutwardVel;
+                obj["VEL_INHERIT"] = info->VelInherit;
+
+                QJsonObject shader;
+                shader["DEPTH_COMPARE"] = info->Shader.DepthCompare;
+                shader["DEPTH_MASK"] = info->Shader.DepthMask;
+                shader["DEST_BLEND"] = info->Shader.DestBlend;
+                shader["PRI_GRADIENT"] = info->Shader.PriGradient;
+                shader["SEC_GRADIENT"] = info->Shader.SecGradient;
+                shader["SRC_BLEND"] = info->Shader.SrcBlend;
+                shader["TEXTURING"] = info->Shader.Texturing;
+                shader["DETAIL_COLOR_FUNC"] = info->Shader.DetailColorFunc;
+                shader["DETAIL_ALPHA_FUNC"] = info->Shader.DetailAlphaFunc;
+                shader["ALPHA_TEST"] = info->Shader.AlphaTest;
+                obj["SHADER"] = shader;
+
+                obj["RENDER_MODE"] = int(info->RenderMode);
+                obj["FRAME_MODE"] = int(info->FrameMode);
+            }
+            return obj;
+        }
+
+        void fromJson(const QJsonObject& dataObj, ChunkItem& item) const override {
+            W3dEmitterInfoStructV2 info{};
+            info.BurstSize = dataObj.value("BURST_SIZE").toInt();
+
+            auto parseVol = [](const QJsonObject& o) {
+                W3dVolumeRandomizerStruct v{};
+                v.ClassID = o.value("CLASS_ID").toInt();
+                v.Value1 = float(o.value("VALUE1").toDouble());
+                v.Value2 = float(o.value("VALUE2").toDouble());
+                v.Value3 = float(o.value("VALUE3").toDouble());
+                return v;
+                };
+
+            info.CreationVolume = parseVol(dataObj.value("CREATION_VOLUME").toObject());
+            info.VelRandom = parseVol(dataObj.value("VEL_RANDOM").toObject());
+            info.OutwardVel = float(dataObj.value("OUTWARD_VEL").toDouble());
+            info.VelInherit = float(dataObj.value("VEL_INHERIT").toDouble());
+            QJsonObject shader = dataObj.value("SHADER").toObject();
+            info.Shader.DepthCompare = shader.value("DEPTH_COMPARE").toInt();
+            info.Shader.DepthMask = shader.value("DEPTH_MASK").toInt();
+            info.Shader.DestBlend = shader.value("DEST_BLEND").toInt();
+            info.Shader.PriGradient = shader.value("PRI_GRADIENT").toInt();
+            info.Shader.SecGradient = shader.value("SEC_GRADIENT").toInt();
+            info.Shader.SrcBlend = shader.value("SRC_BLEND").toInt();
+            info.Shader.Texturing = shader.value("TEXTURING").toInt();
+            info.Shader.DetailColorFunc = shader.value("DETAIL_COLOR_FUNC").toInt();
+            info.Shader.DetailAlphaFunc = shader.value("DETAIL_ALPHA_FUNC").toInt();
+            info.Shader.AlphaTest = shader.value("ALPHA_TEST").toInt();
+            info.RenderMode = dataObj.value("RENDER_MODE").toInt();
+            info.FrameMode = dataObj.value("FRAME_MODE").toInt();
+            item.length = sizeof(W3dEmitterInfoStructV2);
+            item.data.resize(item.length);
+            std::memcpy(item.data.data(), &info, sizeof(info));
+        }
+    };
+
+    struct EmitterPropsSerializer : ChunkSerializer {
+        QJsonObject toJson(const ChunkItem& item) const override {
+            QJsonObject obj;
+            if (item.data.size() >= sizeof(W3dEmitterPropertyStruct)) {
+                const auto* h = reinterpret_cast<const W3dEmitterPropertyStruct*>(item.data.data());
+                obj["COLOR_KEYFRAMES"] = int(h->ColorKeyframes);
+                obj["OPACITY_KEYFRAMES"] = int(h->OpacityKeyframes);
+                obj["SIZE_KEYFRAMES"] = int(h->SizeKeyframes);
+                obj["COLOR_RANDOM"] = QJsonArray{ h->ColorRandom.R, h->ColorRandom.G, h->ColorRandom.B, h->ColorRandom.A };
+                obj["OPACITY_RANDOM"] = h->OpacityRandom;
+                obj["SIZE_RANDOM"] = h->SizeRandom;
+
+                const uint8_t* ptr = item.data.data() + sizeof(W3dEmitterPropertyStruct);
+                size_t off = 0;
+                QJsonArray cArr;
+                for (uint32_t i = 0; i < h->ColorKeyframes; ++i) {
+                    float t; W3dRGBAStruct c{};
+                    std::memcpy(&t, ptr + off, sizeof(float)); off += sizeof(float);
+                    std::memcpy(&c, ptr + off, sizeof(W3dRGBAStruct)); off += sizeof(W3dRGBAStruct);
+                    cArr.append(QJsonObject{ {"TIME", t}, {"COLOR", QJsonArray{ c.R, c.G, c.B, c.A }} });
+                }
+                obj["COLOR_KEYS"] = cArr;
+
+                QJsonArray oArr;
+                for (uint32_t i = 0; i < h->OpacityKeyframes; ++i) {
+                    float t, v;
+                    std::memcpy(&t, ptr + off, sizeof(float)); off += sizeof(float);
+                    std::memcpy(&v, ptr + off, sizeof(float)); off += sizeof(float);
+                    oArr.append(QJsonObject{ {"TIME", t}, {"OPACITY", v} });
+                }
+                obj["OPACITY_KEYS"] = oArr;
+
+                QJsonArray sArr;
+                for (uint32_t i = 0; i < h->SizeKeyframes; ++i) {
+                    float t, v;
+                    std::memcpy(&t, ptr + off, sizeof(float)); off += sizeof(float);
+                    std::memcpy(&v, ptr + off, sizeof(float)); off += sizeof(float);
+                    sArr.append(QJsonObject{ {"TIME", t}, {"SIZE", v} });
+                }
+                obj["SIZE_KEYS"] = sArr;
+            }
+            return obj;
+        }
+
+        void fromJson(const QJsonObject& dataObj, ChunkItem& item) const override {
+            W3dEmitterPropertyStruct h{};
+            auto cArr = dataObj.value("COLOR_KEYS").toArray();
+            auto oArr = dataObj.value("OPACITY_KEYS").toArray();
+            auto sArr = dataObj.value("SIZE_KEYS").toArray();
+            h.ColorKeyframes = cArr.size();
+            h.OpacityKeyframes = oArr.size();
+            h.SizeKeyframes = sArr.size();
+            auto cr = dataObj.value("COLOR_RANDOM").toArray();
+            if (cr.size() >= 4) { h.ColorRandom.R = cr[0].toInt(); h.ColorRandom.G = cr[1].toInt(); h.ColorRandom.B = cr[2].toInt(); h.ColorRandom.A = cr[3].toInt(); }
+            h.OpacityRandom = float(dataObj.value("OPACITY_RANDOM").toDouble());
+            h.SizeRandom = float(dataObj.value("SIZE_RANDOM").toDouble());
+
+            size_t total = sizeof(W3dEmitterPropertyStruct) +
+                size_t(h.ColorKeyframes) * (sizeof(float) + sizeof(W3dRGBAStruct)) +
+                size_t(h.OpacityKeyframes) * (sizeof(float) * 2) +
+                size_t(h.SizeKeyframes) * (sizeof(float) * 2);
+            item.data.resize(total);
+            item.length = uint32_t(total);
+            std::memcpy(item.data.data(), &h, sizeof(h));
+            size_t off = sizeof(W3dEmitterPropertyStruct);
+
+            for (int i = 0; i < cArr.size(); ++i) {
+                QJsonObject o = cArr[i].toObject();
+                float t = float(o.value("TIME").toDouble());
+                auto col = o.value("COLOR").toArray();
+                W3dRGBAStruct c{};
+                if (col.size() >= 4) { c.R = col[0].toInt(); c.G = col[1].toInt(); c.B = col[2].toInt(); c.A = col[3].toInt(); }
+                std::memcpy(item.data.data() + off, &t, sizeof(float)); off += sizeof(float);
+                std::memcpy(item.data.data() + off, &c, sizeof(W3dRGBAStruct)); off += sizeof(W3dRGBAStruct);
+            }
+
+            for (int i = 0; i < oArr.size(); ++i) {
+                QJsonObject o = oArr[i].toObject();
+                float t = float(o.value("TIME").toDouble());
+                float v = float(o.value("OPACITY").toDouble());
+                std::memcpy(item.data.data() + off, &t, sizeof(float)); off += sizeof(float);
+                std::memcpy(item.data.data() + off, &v, sizeof(float)); off += sizeof(float);
+            }
+
+            for (int i = 0; i < sArr.size(); ++i) {
+                QJsonObject o = sArr[i].toObject();
+                float t = float(o.value("TIME").toDouble());
+                float v = float(o.value("SIZE").toDouble());
+                std::memcpy(item.data.data() + off, &t, sizeof(float)); off += sizeof(float);
+                std::memcpy(item.data.data() + off, &v, sizeof(float)); off += sizeof(float);
+            }
+        }
+    };
+
+    struct EmitterColorKeyframeSerializer : ChunkSerializer {
+        QJsonObject toJson(const ChunkItem& item) const override {
+            QJsonObject obj;
+            QJsonArray arr;
+            size_t count = item.data.size() / sizeof(W3dEmitterColorKeyframeStruct);
+            const auto* begin = reinterpret_cast<const W3dEmitterColorKeyframeStruct*>(item.data.data());
+            for (size_t i = 0; i < count; ++i) {
+                const auto& k = begin[i];
+                arr.append(QJsonObject{ {"TIME", k.Time}, {"COLOR", QJsonArray{ k.Color.R, k.Color.G, k.Color.B, k.Color.A }} });
+            }
+            obj["KEYFRAMES"] = arr;
+            return obj;
+        }
+
+        void fromJson(const QJsonObject& dataObj, ChunkItem& item) const override {
+            QJsonArray arr = dataObj.value("KEYFRAMES").toArray();
+            std::vector<W3dEmitterColorKeyframeStruct> temp(arr.size());
+            for (int i = 0; i < arr.size(); ++i) {
+                QJsonObject o = arr[i].toObject();
+                temp[i].Time = float(o.value("TIME").toDouble());
+                auto c = o.value("COLOR").toArray();
+                if (c.size() >= 4) { temp[i].Color.R = c[0].toInt(); temp[i].Color.G = c[1].toInt(); temp[i].Color.B = c[2].toInt(); temp[i].Color.A = c[3].toInt(); }
+            }
+            item.length = uint32_t(temp.size() * sizeof(W3dEmitterColorKeyframeStruct));
+            item.data.resize(item.length);
+            if (!temp.empty()) {
+                std::memcpy(item.data.data(), temp.data(), item.length);
+            }
+        }
+    };
+
+    struct EmitterOpacityKeyframeSerializer : ChunkSerializer {
+        QJsonObject toJson(const ChunkItem& item) const override {
+            QJsonObject obj;
+            QJsonArray arr;
+            size_t count = item.data.size() / sizeof(W3dEmitterOpacityKeyframeStruct);
+            const auto* begin = reinterpret_cast<const W3dEmitterOpacityKeyframeStruct*>(item.data.data());
+            for (size_t i = 0; i < count; ++i) {
+                arr.append(QJsonObject{ {"TIME", begin[i].Time}, {"OPACITY", begin[i].Opacity} });
+            }
+            obj["KEYFRAMES"] = arr;
+            return obj;
+        }
+
+        void fromJson(const QJsonObject& dataObj, ChunkItem& item) const override {
+            QJsonArray arr = dataObj.value("KEYFRAMES").toArray();
+            std::vector<W3dEmitterOpacityKeyframeStruct> temp(arr.size());
+            for (int i = 0; i < arr.size(); ++i) {
+                QJsonObject o = arr[i].toObject();
+                temp[i].Time = float(o.value("TIME").toDouble());
+                temp[i].Opacity = float(o.value("OPACITY").toDouble());
+            }
+            item.length = uint32_t(temp.size() * sizeof(W3dEmitterOpacityKeyframeStruct));
+            item.data.resize(item.length);
+            if (!temp.empty()) {
+                std::memcpy(item.data.data(), temp.data(), item.length);
+            }
+        }
+    };
+
+    struct EmitterSizeKeyframeSerializer : ChunkSerializer {
+        QJsonObject toJson(const ChunkItem& item) const override {
+            QJsonObject obj;
+            QJsonArray arr;
+            size_t count = item.data.size() / sizeof(W3dEmitterSizeKeyframeStruct);
+            const auto* begin = reinterpret_cast<const W3dEmitterSizeKeyframeStruct*>(item.data.data());
+            for (size_t i = 0; i < count; ++i) {
+                arr.append(QJsonObject{ {"TIME", begin[i].Time}, {"SIZE", begin[i].Size} });
+            }
+            obj["KEYFRAMES"] = arr;
+            return obj;
+        }
+
+        void fromJson(const QJsonObject& dataObj, ChunkItem& item) const override {
+            QJsonArray arr = dataObj.value("KEYFRAMES").toArray();
+            std::vector<W3dEmitterSizeKeyframeStruct> temp(arr.size());
+            for (int i = 0; i < arr.size(); ++i) {
+                QJsonObject o = arr[i].toObject();
+                temp[i].Time = float(o.value("TIME").toDouble());
+                temp[i].Size = float(o.value("SIZE").toDouble());
+            }
+            item.length = uint32_t(temp.size() * sizeof(W3dEmitterSizeKeyframeStruct));
+            item.data.resize(item.length);
+            if (!temp.empty()) {
+                std::memcpy(item.data.data(), temp.data(), item.length);
+            }
+        }
+    };
+
+    struct EmitterLinePropertiesSerializer : ChunkSerializer {
+        QJsonObject toJson(const ChunkItem& item) const override {
+            QJsonObject obj;
+            if (item.data.size() >= sizeof(W3dEmitterLinePropertiesStruct)) {
+                const auto* p = reinterpret_cast<const W3dEmitterLinePropertiesStruct*>(item.data.data());
+                obj["FLAGS"] = int(p->Flags);
+                obj["SUBDIVISION_LEVEL"] = int(p->SubdivisionLevel);
+                obj["NOISE_AMPLITUDE"] = p->NoiseAmplitude;
+                obj["MERGE_ABORT_FACTOR"] = p->MergeAbortFactor;
+                obj["TEXTURE_TILE_FACTOR"] = p->TextureTileFactor;
+                obj["U_PER_SEC"] = p->UPerSec;
+                obj["V_PER_SEC"] = p->VPerSec;
+            }
+            return obj;
+        }
+
+        void fromJson(const QJsonObject& dataObj, ChunkItem& item) const override {
+            W3dEmitterLinePropertiesStruct p{};
+            p.Flags = dataObj.value("FLAGS").toInt();
+            p.SubdivisionLevel = dataObj.value("SUBDIVISION_LEVEL").toInt();
+            p.NoiseAmplitude = float(dataObj.value("NOISE_AMPLITUDE").toDouble());
+            p.MergeAbortFactor = float(dataObj.value("MERGE_ABORT_FACTOR").toDouble());
+            p.TextureTileFactor = float(dataObj.value("TEXTURE_TILE_FACTOR").toDouble());
+            p.UPerSec = float(dataObj.value("U_PER_SEC").toDouble());
+            p.VPerSec = float(dataObj.value("V_PER_SEC").toDouble());
+            item.length = sizeof(W3dEmitterLinePropertiesStruct);
+            item.data.resize(item.length);
+            std::memcpy(item.data.data(), &p, sizeof(p));
+        }
+    };
+
+    struct EmitterRotationKeyframesSerializer : ChunkSerializer {
+        QJsonObject toJson(const ChunkItem& item) const override {
+            QJsonObject obj;
+            if (item.data.size() >= sizeof(W3dEmitterRotationHeaderStruct)) {
+                const auto* h = reinterpret_cast<const W3dEmitterRotationHeaderStruct*>(item.data.data());
+                obj["KEYFRAME_COUNT"] = int(h->KeyframeCount);
+                obj["RANDOM"] = h->Random;
+                obj["ORIENTATION_RANDOM"] = h->OrientationRandom;
+                const float* f = reinterpret_cast<const float*>(item.data.data() + sizeof(W3dEmitterRotationHeaderStruct));
+                size_t pairs = (item.data.size() - sizeof(W3dEmitterRotationHeaderStruct)) / (2 * sizeof(float));
+                QJsonArray arr;
+                for (size_t i = 0; i < pairs; ++i) {
+                    arr.append(QJsonObject{ {"TIME", f[i * 2]}, {"ROTATION", f[i * 2 + 1]} });
+                }
+                obj["KEYS"] = arr;
+            }
+            return obj;
+        }
+
+        void fromJson(const QJsonObject& dataObj, ChunkItem& item) const override {
+            W3dEmitterRotationHeaderStruct h{};
+            h.Random = float(dataObj.value("RANDOM").toDouble());
+            h.OrientationRandom = float(dataObj.value("ORIENTATION_RANDOM").toDouble());
+            QJsonArray arr = dataObj.value("KEYS").toArray();
+            h.KeyframeCount = arr.size() > 0 ? arr.size() - 1 : 0;
+            size_t total = sizeof(W3dEmitterRotationHeaderStruct) + arr.size() * 2 * sizeof(float);
+            item.data.resize(total);
+            item.length = uint32_t(total);
+            std::memcpy(item.data.data(), &h, sizeof(h));
+            float* f = reinterpret_cast<float*>(item.data.data() + sizeof(W3dEmitterRotationHeaderStruct));
+            for (int i = 0; i < arr.size(); ++i) {
+                QJsonObject o = arr[i].toObject();
+                f[i * 2] = float(o.value("TIME").toDouble());
+                f[i * 2 + 1] = float(o.value("ROTATION").toDouble());
+            }
+        }
+    };
+
+    struct EmitterFrameKeyframesSerializer : ChunkSerializer {
+        QJsonObject toJson(const ChunkItem& item) const override {
+            QJsonObject obj;
+            if (item.data.size() >= sizeof(W3dEmitterFrameHeaderStruct)) {
+                const auto* h = reinterpret_cast<const W3dEmitterFrameHeaderStruct*>(item.data.data());
+                obj["KEYFRAME_COUNT"] = int(h->KeyframeCount);
+                obj["RANDOM"] = h->Random;
+                const auto* keys = reinterpret_cast<const W3dEmitterFrameKeyframeStruct*>(item.data.data() + sizeof(W3dEmitterFrameHeaderStruct));
+                size_t count = (item.data.size() - sizeof(W3dEmitterFrameHeaderStruct)) / sizeof(W3dEmitterFrameKeyframeStruct);
+                QJsonArray arr;
+                for (size_t i = 0; i < count; ++i) {
+                    arr.append(QJsonObject{ {"TIME", keys[i].Time}, {"FRAME", keys[i].Frame} });
+                }
+                obj["KEYS"] = arr;
+            }
+            return obj;
+        }
+
+        void fromJson(const QJsonObject& dataObj, ChunkItem& item) const override {
+            W3dEmitterFrameHeaderStruct h{};
+            h.Random = float(dataObj.value("RANDOM").toDouble());
+            QJsonArray arr = dataObj.value("KEYS").toArray();
+            h.KeyframeCount = arr.size() > 0 ? arr.size() - 1 : 0;
+            size_t total = sizeof(W3dEmitterFrameHeaderStruct) + arr.size() * sizeof(W3dEmitterFrameKeyframeStruct);
+            item.data.resize(total);
+            item.length = uint32_t(total);
+            std::memcpy(item.data.data(), &h, sizeof(h));
+            auto* keys = reinterpret_cast<W3dEmitterFrameKeyframeStruct*>(item.data.data() + sizeof(W3dEmitterFrameHeaderStruct));
+            for (int i = 0; i < arr.size(); ++i) {
+                QJsonObject o = arr[i].toObject();
+                keys[i].Time = float(o.value("TIME").toDouble());
+                keys[i].Frame = float(o.value("FRAME").toDouble());
+            }
+        }
+    };
+
+    struct EmitterBlurTimeKeyframesSerializer : ChunkSerializer {
+        QJsonObject toJson(const ChunkItem& item) const override {
+            QJsonObject obj;
+            if (item.data.size() >= sizeof(W3dEmitterBlurTimeHeaderStruct)) {
+                const auto* h = reinterpret_cast<const W3dEmitterBlurTimeHeaderStruct*>(item.data.data());
+                obj["KEYFRAME_COUNT"] = int(h->KeyframeCount);
+                obj["RANDOM"] = h->Random;
+                const auto* keys = reinterpret_cast<const W3dEmitterBlurTimeKeyframeStruct*>(item.data.data() + sizeof(W3dEmitterBlurTimeHeaderStruct));
+                size_t count = (item.data.size() - sizeof(W3dEmitterBlurTimeHeaderStruct)) / sizeof(W3dEmitterBlurTimeKeyframeStruct);
+                QJsonArray arr;
+                for (size_t i = 0; i < count; ++i) {
+                    arr.append(QJsonObject{ {"TIME", keys[i].Time}, {"BLUR_TIME", keys[i].BlurTime} });
+                }
+                obj["KEYS"] = arr;
+            }
+            return obj;
+        }
+
+        void fromJson(const QJsonObject& dataObj, ChunkItem& item) const override {
+            W3dEmitterBlurTimeHeaderStruct h{};
+            h.Random = float(dataObj.value("RANDOM").toDouble());
+            QJsonArray arr = dataObj.value("KEYS").toArray();
+            h.KeyframeCount = arr.size() > 0 ? arr.size() - 1 : 0;
+            size_t total = sizeof(W3dEmitterBlurTimeHeaderStruct) + arr.size() * sizeof(W3dEmitterBlurTimeKeyframeStruct);
+            item.data.resize(total);
+            item.length = uint32_t(total);
+            std::memcpy(item.data.data(), &h, sizeof(h));
+            auto* keys = reinterpret_cast<W3dEmitterBlurTimeKeyframeStruct*>(item.data.data() + sizeof(W3dEmitterBlurTimeHeaderStruct));
+            for (int i = 0; i < arr.size(); ++i) {
+                QJsonObject o = arr[i].toObject();
+                keys[i].Time = float(o.value("TIME").toDouble());
+                keys[i].BlurTime = float(o.value("BLUR_TIME").toDouble());
+            }
+        }
+    };
+
+    struct EmitterExtraInfoSerializer : ChunkSerializer {
+        QJsonObject toJson(const ChunkItem& item) const override {
+            QJsonObject obj;
+            if (item.data.size() >= sizeof(W3dEmitterExtraInfoStruct)) {
+                const auto* info = reinterpret_cast<const W3dEmitterExtraInfoStruct*>(item.data.data());
+                obj["FUTURE_START_TIME"] = info->FutureStartTime;
+            }
+            return obj;
+        }
+
+        void fromJson(const QJsonObject& dataObj, ChunkItem& item) const override {
+            W3dEmitterExtraInfoStruct info{};
+            info.FutureStartTime = float(dataObj.value("FUTURE_START_TIME").toDouble());
+            item.length = sizeof(W3dEmitterExtraInfoStruct);
+            item.data.resize(item.length);
+            std::memcpy(item.data.data(), &info, sizeof(info));
+        }
+    };
+
+
+
 
     // static serializer instances
     static const MeshHeader1Serializer meshHeader1SerializerInstance;
@@ -2737,6 +3260,19 @@ namespace {
     static const LightAttenuationSerializer farAttenuationSerializerInstance;
     static const SpotLightInfo50Serializer spotLightInfo50SerializerInstance;
     static const LightPulseSerializer lightPulseSerializerInstance;
+    static const EmitterHeaderSerializer emitterHeaderSerializerInstance;
+    static const EmitterUserDataSerializer emitterUserDataSerializerInstance;
+    static const EmitterInfoSerializer emitterInfoSerializerInstance;
+    static const EmitterInfoV2Serializer emitterInfoV2SerializerInstance;
+    static const EmitterPropsSerializer emitterPropsSerializerInstance;
+    static const EmitterColorKeyframeSerializer emitterColorKeyframeSerializerInstance;
+    static const EmitterOpacityKeyframeSerializer emitterOpacityKeyframeSerializerInstance;
+    static const EmitterSizeKeyframeSerializer emitterSizeKeyframeSerializerInstance;
+    static const EmitterLinePropertiesSerializer emitterLinePropertiesSerializerInstance;
+    static const EmitterRotationKeyframesSerializer emitterRotationKeyframesSerializerInstance;
+    static const EmitterFrameKeyframesSerializer emitterFrameKeyframesSerializerInstance;
+    static const EmitterBlurTimeKeyframesSerializer emitterBlurTimeKeyframesSerializerInstance;
+    static const EmitterExtraInfoSerializer emitterExtraInfoSerializerInstance;
 
 } // namespace
 
@@ -2826,6 +3362,19 @@ const std::unordered_map<uint32_t, const ChunkSerializer*>& chunkSerializerRegis
         {0x0464, &farAttenuationSerializerInstance},
         {0x0465, &spotLightInfo50SerializerInstance},
         {0x0466, &lightPulseSerializerInstance},
+        {0x0501, &emitterHeaderSerializerInstance},
+        {0x0502, &emitterUserDataSerializerInstance},
+        {0x0503, &emitterInfoSerializerInstance},
+        {0x0504, &emitterInfoV2SerializerInstance},
+        {0x0505, &emitterPropsSerializerInstance},
+        {0x0506, &emitterColorKeyframeSerializerInstance},
+        {0x0507, &emitterOpacityKeyframeSerializerInstance},
+        {0x0508, &emitterSizeKeyframeSerializerInstance},
+        {0x0509, &emitterLinePropertiesSerializerInstance},
+        {0x050A, &emitterRotationKeyframesSerializerInstance},
+        {0x050B, &emitterFrameKeyframesSerializerInstance},
+        {0x050C, &emitterBlurTimeKeyframesSerializerInstance},
+        {0x050D, &emitterExtraInfoSerializerInstance},
     };
     return registry;
 }

@@ -110,6 +110,7 @@ enum class ChunkID : uint32_t {
 		W3D_CHUNK_EMITTER_ROTATION_KEYFRAMES	=0x0000050A,	//rotation keys for the particles
 		W3D_CHUNK_EMITTER_FRAME_KEYFRAMES	=0x0000050B,	//frame keys(u - v based frame animation)
 		W3D_CHUNK_EMITTER_BLUR_TIME_KEYFRAMES	=0x0000050C,	//length of tail for line groups
+		W3D_CHUNK_EMITTER_EXTRA_INFO = 0x0000050D,	//extra info for emitters
 	
 	W3D_CHUNK_AGGREGATE	=0x00000600,	//description of an aggregate object
 		W3D_CHUNK_AGGREGATE_HEADER	=0x00000601,	//general information such as name and version
