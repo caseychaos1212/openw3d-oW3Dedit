@@ -18,3 +18,8 @@ CMakeUserPresets.json
 /out/build/x64-Debug
 /.vs/openw3d-oW3Dedit/v17
 /.vs
+/Debug
+/oW3DEdit.dir/Debug
+/x64/Debug
+/oW3DDumpQt.vcxproj.user
+/UpgradeLog.htm
