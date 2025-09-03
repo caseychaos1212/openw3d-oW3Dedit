@@ -355,8 +355,89 @@ QJsonObject ChunkJson::toJson(const ChunkItem& item) {
             break;
         }
 
-        
-        
+        case 0x0022: {
+            if (item.data.size() % sizeof(uint32_t) == 0) {
+                int count = item.data.size() / sizeof(uint32_t);
+                QJsonArray arr;
+                const auto* s = reinterpret_cast<const uint32_t*>(item.data.data());
+                for (int i = 0; i < count; ++i) arr.append(int(s[i]));
+                dataObj["VERTEX_SHADE_INDICES"] = arr;
+            }
+            break;
+        }
+
+        case 0x0028: {
+            if (item.data.size() >= sizeof(W3dMaterialInfoStruct)) {
+                const auto* mi = reinterpret_cast<const W3dMaterialInfoStruct*>(item.data.data());
+                dataObj["PASSCOUNT"] = static_cast<int>(mi->PassCount);
+                dataObj["VERTEXMATERIALCOUNT"] = static_cast<int>(mi->VertexMaterialCount);
+                dataObj["SHADERCOUNT"] = static_cast<int>(mi->ShaderCount);
+                dataObj["TEXTURECOUNT"] = static_cast<int>(mi->TextureCount);
+            }
+            break;
+        }
+
+        case 0x0029: {
+            if (item.data.size() % sizeof(W3dShaderStruct) == 0) {
+                int count = item.data.size() / sizeof(W3dShaderStruct);
+                QJsonArray arr;
+                for (int i = 0; i < count; ++i) {
+                    const auto* s = reinterpret_cast<const W3dShaderStruct*>(item.data.data()) + i;
+                    QJsonObject so;
+                    so["DEPTHCOMPARE"] = static_cast<int>(s->DepthCompare);
+                    so["DEPTHMASK"] = static_cast<int>(s->DepthMask);
+                    so["COLORMASK"] = static_cast<int>(s->ColorMask);
+                    so["DESTBLEND"] = static_cast<int>(s->DestBlend);
+                    so["FOGFUNC"] = static_cast<int>(s->FogFunc);
+                    so["PRIGRADIENT"] = static_cast<int>(s->PriGradient);
+                    so["SECGRADIENT"] = static_cast<int>(s->SecGradient);
+                    so["SRCBLEND"] = static_cast<int>(s->SrcBlend);
+                    so["TEXTURING"] = static_cast<int>(s->Texturing);
+                    so["DETAILCOLORFUNC"] = static_cast<int>(s->DetailColorFunc);
+                    so["DETAILALPHAFUNC"] = static_cast<int>(s->DetailAlphaFunc);
+                    so["SHADERPRESET"] = static_cast<int>(s->ShaderPreset);
+                    so["ALPHATEST"] = static_cast<int>(s->AlphaTest);
+                    so["POSTDETAILCOLORFUNC"] = static_cast<int>(s->PostDetailColorFunc);
+                    so["POSTDETAILALPHAFUNC"] = static_cast<int>(s->PostDetailAlphaFunc);
+                    arr.append(so);
+                }
+                dataObj["SHADERS"] = arr;
+            }
+            break;
+        }
+
+        case 0x002C: {
+            const char* text = reinterpret_cast<const char*>(item.data.data());
+            dataObj["VERTEX_MATERIAL_NAME"] = QString::fromUtf8(text, strnlen(text, item.data.size()));
+            break;
+        }
+
+        case 0x002D: {
+            if (item.data.size() >= sizeof(W3dVertexMaterialStruct)) {
+                const auto* vm = reinterpret_cast<const W3dVertexMaterialStruct*>(item.data.data());
+                dataObj["ATTRIBUTES"] = static_cast<int>(vm->Attributes);
+                dataObj["AMBIENT"] = QJsonArray{ int(vm->Ambient.R), int(vm->Ambient.G), int(vm->Ambient.B) };
+                dataObj["DIFFUSE"] = QJsonArray{ int(vm->Diffuse.R), int(vm->Diffuse.G), int(vm->Diffuse.B) };
+                dataObj["SPECULAR"] = QJsonArray{ int(vm->Specular.R), int(vm->Specular.G), int(vm->Specular.B) };
+                dataObj["EMISSIVE"] = QJsonArray{ int(vm->Emissive.R), int(vm->Emissive.G), int(vm->Emissive.B) };
+                dataObj["SHININESS"] = vm->Shininess;
+                dataObj["OPACITY"] = vm->Opacity;
+                dataObj["TRANSLUCENCY"] = vm->Translucency;
+            }
+            break;
+        }
+
+        case 0x002E: {
+            const char* text = reinterpret_cast<const char*>(item.data.data());
+            dataObj["VERTEX_MAPPER_ARGS0"] = QString::fromUtf8(text, strnlen(text, item.data.size()));
+            break;
+        }
+
+        case 0x002F: {
+            const char* text = reinterpret_cast<const char*>(item.data.data());
+            dataObj["VERTEX_MAPPER_ARGS1"] = QString::fromUtf8(text, strnlen(text, item.data.size()));
+            break;
+        }         
         
         case 0x0101: {
             if (item.data.size() >= sizeof(W3dHierarchyStruct)) {
@@ -867,6 +948,101 @@ std::shared_ptr<ChunkItem> ChunkJson::fromJson(const QJsonObject& obj, ChunkItem
             break;
         }
 
+        case 0x0022: {
+            QJsonArray arr = dataObj.value("VERTEX_SHADE_INDICES").toArray();
+            std::vector<uint32_t> indices(arr.size());
+            for (int i = 0; i < arr.size(); ++i) indices[i] = arr[i].toInt();
+            item->length = indices.size() * sizeof(uint32_t);
+            item->data.resize(item->length);
+            std::memcpy(item->data.data(), indices.data(), item->length);
+            break;
+        }
+
+        case 0x0028: {
+            W3dMaterialInfoStruct mi{};
+            mi.PassCount = dataObj.value("PASSCOUNT").toInt();
+            mi.VertexMaterialCount = dataObj.value("VERTEXMATERIALCOUNT").toInt();
+            mi.ShaderCount = dataObj.value("SHADERCOUNT").toInt();
+            mi.TextureCount = dataObj.value("TEXTURECOUNT").toInt();
+            item->length = sizeof(W3dMaterialInfoStruct);
+            item->data.resize(item->length);
+            std::memcpy(item->data.data(), &mi, sizeof(mi));
+            break;
+        }
+
+        case 0x0029: {
+            QJsonArray arr = dataObj.value("SHADERS").toArray();
+            std::vector<W3dShaderStruct> shaders(arr.size());
+            for (int i = 0; i < arr.size(); ++i) {
+                QJsonObject s = arr[i].toObject();
+                shaders[i].DepthCompare = static_cast<uint8_t>(s.value("DEPTHCOMPARE").toInt());
+                shaders[i].DepthMask = static_cast<uint8_t>(s.value("DEPTHMASK").toInt());
+                shaders[i].ColorMask = static_cast<uint8_t>(s.value("COLORMASK").toInt());
+                shaders[i].DestBlend = static_cast<uint8_t>(s.value("DESTBLEND").toInt());
+                shaders[i].FogFunc = static_cast<uint8_t>(s.value("FOGFUNC").toInt());
+                shaders[i].PriGradient = static_cast<uint8_t>(s.value("PRIGRADIENT").toInt());
+                shaders[i].SecGradient = static_cast<uint8_t>(s.value("SECGRADIENT").toInt());
+                shaders[i].SrcBlend = static_cast<uint8_t>(s.value("SRCBLEND").toInt());
+                shaders[i].Texturing = static_cast<uint8_t>(s.value("TEXTURING").toInt());
+                shaders[i].DetailColorFunc = static_cast<uint8_t>(s.value("DETAILCOLORFUNC").toInt());
+                shaders[i].DetailAlphaFunc = static_cast<uint8_t>(s.value("DETAILALPHAFUNC").toInt());
+                shaders[i].ShaderPreset = static_cast<uint8_t>(s.value("SHADERPRESET").toInt());
+                shaders[i].AlphaTest = static_cast<uint8_t>(s.value("ALPHATEST").toInt());
+                shaders[i].PostDetailColorFunc = static_cast<uint8_t>(s.value("POSTDETAILCOLORFUNC").toInt());
+                shaders[i].PostDetailAlphaFunc = static_cast<uint8_t>(s.value("POSTDETAILALPHAFUNC").toInt());
+            }
+            item->length = shaders.size() * sizeof(W3dShaderStruct);
+            item->data.resize(item->length);
+            std::memcpy(item->data.data(), shaders.data(), item->length);
+            break;
+        }
+
+        case 0x002C: {
+            QByteArray name = dataObj.value("VERTEX_MATERIAL_NAME").toString().toUtf8();
+            item->length = name.size() + 1;
+            item->data.resize(item->length);
+            std::memcpy(item->data.data(), name.constData(), name.size());
+            item->data[name.size()] = 0;
+            break;
+        }
+
+        case 0x002D: {
+            W3dVertexMaterialStruct vm{};
+            vm.Attributes = dataObj.value("ATTRIBUTES").toInt();
+            QJsonArray amb = dataObj.value("AMBIENT").toArray();
+            if (amb.size() >= 3) { vm.Ambient.R = static_cast<uint8_t>(amb[0].toInt()); vm.Ambient.G = static_cast<uint8_t>(amb[1].toInt()); vm.Ambient.B = static_cast<uint8_t>(amb[2].toInt()); }
+            QJsonArray dif = dataObj.value("DIFFUSE").toArray();
+            if (dif.size() >= 3) { vm.Diffuse.R = static_cast<uint8_t>(dif[0].toInt()); vm.Diffuse.G = static_cast<uint8_t>(dif[1].toInt()); vm.Diffuse.B = static_cast<uint8_t>(dif[2].toInt()); }
+            QJsonArray spec = dataObj.value("SPECULAR").toArray();
+            if (spec.size() >= 3) { vm.Specular.R = static_cast<uint8_t>(spec[0].toInt()); vm.Specular.G = static_cast<uint8_t>(spec[1].toInt()); vm.Specular.B = static_cast<uint8_t>(spec[2].toInt()); }
+            QJsonArray emi = dataObj.value("EMISSIVE").toArray();
+            if (emi.size() >= 3) { vm.Emissive.R = static_cast<uint8_t>(emi[0].toInt()); vm.Emissive.G = static_cast<uint8_t>(emi[1].toInt()); vm.Emissive.B = static_cast<uint8_t>(emi[2].toInt()); }
+            vm.Shininess = dataObj.value("SHININESS").toDouble();
+            vm.Opacity = dataObj.value("OPACITY").toDouble();
+            vm.Translucency = dataObj.value("TRANSLUCENCY").toDouble();
+            item->length = sizeof(W3dVertexMaterialStruct);
+            item->data.resize(item->length);
+            std::memcpy(item->data.data(), &vm, sizeof(vm));
+            break;
+        }
+
+        case 0x002E: {
+            QByteArray args = dataObj.value("VERTEX_MAPPER_ARGS0").toString().toUtf8();
+            item->length = args.size() + 1;
+            item->data.resize(item->length);
+            std::memcpy(item->data.data(), args.constData(), args.size());
+            item->data[args.size()] = 0;
+            break;
+        }
+
+        case 0x002F: {
+            QByteArray args = dataObj.value("VERTEX_MAPPER_ARGS1").toString().toUtf8();
+            item->length = args.size() + 1;
+            item->data.resize(item->length);
+            std::memcpy(item->data.data(), args.constData(), args.size());
+            item->data[args.size()] = 0;
+            break;
+        }
 
         case 0x0101: {
             W3dHierarchyStruct h{};

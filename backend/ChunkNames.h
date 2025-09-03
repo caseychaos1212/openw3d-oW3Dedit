@@ -93,8 +93,8 @@ inline std::string GetChunkName(uint32_t id, uint32_t parentId = 0) {
         { 0x002B, "W3D_CHUNK_VERTEX_MATERIAL" }, 
         { 0x002C, "W3D_CHUNK_VERTEX_MATERIAL_NAME" }, // vertex material name (NULL-terminated string)
         { 0x002D, "W3D_CHUNK_VERTEX_MATERIAL_INFO" }, // W3dVertexMaterialStruct
-        { 0x002E, "W3D_CHUNK_VERTEX_MAPPER_ARGSO" }, // Null-terminated string
-        { 0x002F, "W3D_CHUNK_VERTEX_MAPPER_ARGS1 "}, // Null-terminated string
+        { 0x002E, "W3D_CHUNK_VERTEX_MAPPER_ARGS0" }, // Null-terminated string
+        { 0x002F, "W3D_CHUNK_VERTEX_MAPPER_ARGS1"}, // Null-terminated string
         { 0x0030, "W3D_CHUNK_TEXTURES" }, // wraps all of the texture info
         { 0x0031, "W3D_CHUNK_TEXTURE" }, // wraps a texture definition
         { 0x0032, "W3D_CHUNK_TEXTURE_NAME" }, // texture filename (NULL-terminated string)
