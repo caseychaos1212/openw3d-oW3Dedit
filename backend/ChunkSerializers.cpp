@@ -1081,7 +1081,12 @@ namespace {
             QJsonArray arr = dataObj.value("DCG").toArray();
             item.data = jsonArrayToStructs<W3dRGBAStruct>(arr, [](const QJsonValue& val) {
                 QJsonArray c = val.toArray();
-                W3dRGBAStruct s{ uint8_t(c.value(0).toInt()), uint8_t(c.value(1).toInt()), uint8_t(c.value(2).toInt()), uint8_t(c.value(3).toInt()) };
+                W3dRGBAStruct s{
+                    uint8_t(c.size() > 0 ? c[0].toInt() : 0),
+                    uint8_t(c.size() > 1 ? c[1].toInt() : 0),
+                    uint8_t(c.size() > 2 ? c[2].toInt() : 0),
+                    uint8_t(c.size() > 3 ? c[3].toInt() : 0)
+                };
                 return s;
                 });
             item.length = uint32_t(item.data.size());
@@ -1103,7 +1108,11 @@ namespace {
             QJsonArray arr = dataObj.value("DIG").toArray();
             item.data = jsonArrayToStructs<W3dRGBStruct>(arr, [](const QJsonValue& val) {
                 QJsonArray c = val.toArray();
-                W3dRGBStruct s{ uint8_t(c.value(0).toInt()), uint8_t(c.value(1).toInt()), uint8_t(c.value(2).toInt()) };
+                W3dRGBStruct s{
+                    uint8_t(c.size() > 0 ? c[0].toInt() : 0),
+                    uint8_t(c.size() > 1 ? c[1].toInt() : 0),
+                    uint8_t(c.size() > 2 ? c[2].toInt() : 0)
+                };
                 return s;
                 });
             item.length = uint32_t(item.data.size());
@@ -1125,7 +1134,11 @@ namespace {
             QJsonArray arr = dataObj.value("SCG").toArray();
             item.data = jsonArrayToStructs<W3dRGBStruct>(arr, [](const QJsonValue& val) {
                 QJsonArray c = val.toArray();
-                W3dRGBStruct s{ uint8_t(c.value(0).toInt()), uint8_t(c.value(1).toInt()), uint8_t(c.value(2).toInt()) };
+                W3dRGBStruct s{
+                    uint8_t(c.size() > 0 ? c[0].toInt() : 0),
+                    uint8_t(c.size() > 1 ? c[1].toInt() : 0),
+                    uint8_t(c.size() > 2 ? c[2].toInt() : 0)
+                };
                 return s;
                 });
             item.length = uint32_t(item.data.size());
@@ -1152,6 +1165,411 @@ namespace {
             for (int i = 0; i < arr.size(); ++i) temp[i] = uint32_t(arr[i].toInt());
             item.data.resize(temp.size() * sizeof(uint32_t));
             if (!temp.empty()) std::memcpy(item.data.data(), temp.data(), item.data.size());
+            item.length = uint32_t(item.data.size());
+        }
+    };
+    // Serializer for chunk 0x0049 (W3D_CHUNK_TEXTURE_IDS)
+    struct TextureIdsSerializer : ChunkSerializer {
+        QJsonObject toJson(const ChunkItem& item) const override {
+            QJsonObject obj;
+            QJsonArray arr;
+            if (item.data.size() % sizeof(uint32_t) == 0) {
+                const auto* begin = reinterpret_cast<const uint32_t*>(item.data.data());
+                int count = int(item.data.size() / sizeof(uint32_t));
+                for (int i = 0; i < count; ++i) arr.append(int(begin[i]));
+            }
+            obj["TEXTURE_IDS"] = arr;
+            return obj;
+        }
+
+        void fromJson(const QJsonObject& dataObj, ChunkItem& item) const override {
+            QJsonArray arr = dataObj.value("TEXTURE_IDS").toArray();
+            std::vector<uint32_t> temp(arr.size());
+            for (int i = 0; i < arr.size(); ++i) temp[i] = uint32_t(arr[i].toInt());
+            item.data.resize(temp.size() * sizeof(uint32_t));
+            if (!temp.empty()) std::memcpy(item.data.data(), temp.data(), item.data.size());
+            item.length = uint32_t(item.data.size());
+        }
+    };
+
+    // Serializer for chunk 0x004A (W3D_CHUNK_STAGE_TEXCOORDS)
+    struct StageTexCoordsSerializer : ChunkSerializer {
+        QJsonObject toJson(const ChunkItem& item) const override {
+            QJsonObject obj;
+            obj["STAGE_TEXCOORDS"] = structsToJsonArray<W3dTexCoordStruct>(
+                item.data,
+                [](const W3dTexCoordStruct& t) { return QJsonArray{ t.U, t.V }; }
+            );
+            return obj;
+        }
+
+        void fromJson(const QJsonObject& dataObj, ChunkItem& item) const override {
+            QJsonArray arr = dataObj.value("STAGE_TEXCOORDS").toArray();
+            item.data = jsonArrayToStructs<W3dTexCoordStruct>(arr, [](const QJsonValue& val) {
+                W3dTexCoordStruct t{};
+                QJsonArray a = val.toArray();
+                if (a.size() >= 2) { t.U = a[0].toDouble(); t.V = a[1].toDouble(); }
+                return t;
+                });
+            item.length = uint32_t(item.data.size());
+        }
+    };
+
+    // Serializer for chunk 0x004B (W3D_CHUNK_PER_FACE_TEXCOORD_IDS)
+    struct PerFaceTexCoordIdsSerializer : ChunkSerializer {
+        QJsonObject toJson(const ChunkItem& item) const override {
+            QJsonObject obj;
+            obj["PER_FACE_TEXCOORD_IDS"] = structsToJsonArray<Vector3i>(
+                item.data,
+                [](const Vector3i& v) { return QJsonArray{ v.I, v.J, v.K }; }
+            );
+            return obj;
+        }
+
+        void fromJson(const QJsonObject& dataObj, ChunkItem& item) const override {
+            QJsonArray arr = dataObj.value("PER_FACE_TEXCOORD_IDS").toArray();
+            item.data = jsonArrayToStructs<Vector3i>(arr, [](const QJsonValue& val) {
+                Vector3i v{};
+                QJsonArray a = val.toArray();
+                if (a.size() >= 3) { v.I = a[0].toInt(); v.J = a[1].toInt(); v.K = a[2].toInt(); }
+                return v;
+                });
+            item.length = uint32_t(item.data.size());
+        }
+    };
+
+    // Serializer for chunk 0x0052 (W3D_CHUNK_SHADER_MATERIAL_HEADER)
+    struct ShaderMaterialHeaderSerializer : ChunkSerializer {
+        QJsonObject toJson(const ChunkItem& item) const override {
+            QJsonObject obj;
+            if (item.data.size() >= sizeof(W3dShaderMaterialHeaderStruct)) {
+                const auto* h = reinterpret_cast<const W3dShaderMaterialHeaderStruct*>(item.data.data());
+                obj["VERSION"] = int(h->Version);
+                obj["SHADERNAME"] = QString::fromUtf8(h->ShaderName, strnlen(h->ShaderName, 32));
+                obj["TECHNIQUE"] = int(h->Technique);
+            }
+            return obj;
+        }
+
+        void fromJson(const QJsonObject& dataObj, ChunkItem& item) const override {
+            W3dShaderMaterialHeaderStruct h{};
+            h.Version = uint8_t(dataObj.value("VERSION").toInt());
+            QByteArray sn = dataObj.value("SHADERNAME").toString().toUtf8();
+            std::memset(h.ShaderName, 0, 32);
+            std::memcpy(h.ShaderName, sn.constData(), std::min<int>(sn.size(), 32));
+            h.Technique = uint8_t(dataObj.value("TECHNIQUE").toInt());
+            item.length = sizeof(W3dShaderMaterialHeaderStruct);
+            item.data.resize(item.length);
+            std::memcpy(item.data.data(), &h, sizeof(h));
+        }
+    };
+
+    // Serializer for chunk 0x0053 (W3D_CHUNK_SHADER_MATERIAL_PROPERTY)
+    struct ShaderMaterialPropertySerializer : ChunkSerializer {
+        QJsonObject toJson(const ChunkItem& item) const override {
+            QJsonObject obj;
+            const auto& data = item.data;
+            if (data.size() < 8) return obj;
+            const uint8_t* base = data.data();
+            uint32_t type = 0; std::memcpy(&type, base, 4);
+            uint32_t nameLen = 0; std::memcpy(&nameLen, base + 4, 4);
+            if (data.size() < size_t(8) + nameLen) return obj;
+            QString name = QString::fromUtf8(reinterpret_cast<const char*>(base + 8), int(nameLen));
+            int nul = name.indexOf(QChar('\0')); if (nul != -1) name.truncate(nul);
+            obj["TYPE"] = int(type);
+            obj["NAME"] = name;
+            size_t pos = 8 + nameLen;
+            switch (static_cast<ShaderMaterialFlag>(type)) {
+            case ShaderMaterialFlag::CONSTANT_TYPE_TEXTURE: {
+                if (data.size() >= pos + 4) {
+                    uint32_t texLen = 0; std::memcpy(&texLen, base + pos, 4); pos += 4;
+                    if (data.size() >= pos + texLen) {
+                        QString tex = QString::fromUtf8(reinterpret_cast<const char*>(base + pos), int(texLen));
+                        int n2 = tex.indexOf(QChar('\0')); if (n2 != -1) tex.truncate(n2);
+                        obj["TEXTURE"] = tex;
+                    }
+                }
+                break;
+            }
+            case ShaderMaterialFlag::CONSTANT_TYPE_FLOAT1:
+            case ShaderMaterialFlag::CONSTANT_TYPE_FLOAT2:
+            case ShaderMaterialFlag::CONSTANT_TYPE_FLOAT3:
+            case ShaderMaterialFlag::CONSTANT_TYPE_FLOAT4: {
+                int count = int(type) - 1;
+                if (data.size() >= pos + size_t(count) * 4) {
+                    QJsonArray arr;
+                    for (int i = 0; i < count; ++i) {
+                        float f; std::memcpy(&f, base + pos + i * 4, 4);
+                        arr.append(f);
+                    }
+                    obj["FLOATS"] = arr;
+                }
+                break;
+            }
+            case ShaderMaterialFlag::CONSTANT_TYPE_INT: {
+                if (data.size() >= pos + 4) {
+                    uint32_t v; std::memcpy(&v, base + pos, 4);
+                    obj["INT"] = int(v);
+                }
+                break;
+            }
+            case ShaderMaterialFlag::CONSTANT_TYPE_BOOL: {
+                if (data.size() >= pos + 4) {
+                    uint32_t v; std::memcpy(&v, base + pos, 4);
+                    obj["BOOL"] = (v != 0);
+                }
+                break;
+            }
+            default:
+                break;
+            }
+            return obj;
+        }
+
+        void fromJson(const QJsonObject& dataObj, ChunkItem& item) const override {
+            uint32_t type = uint32_t(dataObj.value("TYPE").toInt());
+            QByteArray nameBytes = dataObj.value("NAME").toString().toUtf8();
+            std::vector<uint8_t> buf;
+            auto appendU32 = [&](uint32_t v) {
+                size_t p = buf.size(); buf.resize(p + 4); std::memcpy(buf.data() + p, &v, 4);
+                };
+            auto appendBytes = [&](const QByteArray& b) {
+                size_t p = buf.size(); buf.resize(p + b.size()); std::memcpy(buf.data() + p, b.constData(), b.size());
+                };
+            appendU32(type);
+            appendU32(uint32_t(nameBytes.size() + 1));
+            appendBytes(nameBytes);
+            buf.push_back(0);
+
+            switch (static_cast<ShaderMaterialFlag>(type)) {
+            case ShaderMaterialFlag::CONSTANT_TYPE_TEXTURE: {
+                QByteArray texBytes = dataObj.value("TEXTURE").toString().toUtf8();
+                appendU32(uint32_t(texBytes.size() + 1));
+                appendBytes(texBytes);
+                buf.push_back(0);
+                break;
+            }
+            case ShaderMaterialFlag::CONSTANT_TYPE_FLOAT1:
+            case ShaderMaterialFlag::CONSTANT_TYPE_FLOAT2:
+            case ShaderMaterialFlag::CONSTANT_TYPE_FLOAT3:
+            case ShaderMaterialFlag::CONSTANT_TYPE_FLOAT4: {
+                int count = int(type) - 1;
+                QJsonArray arr = dataObj.value("FLOATS").toArray();
+                for (int i = 0; i < count; ++i) {
+                    float f = i < arr.size() ? float(arr[i].toDouble()) : 0.0f;
+                    size_t p = buf.size(); buf.resize(p + 4); std::memcpy(buf.data() + p, &f, 4);
+                }
+                break;
+            }
+            case ShaderMaterialFlag::CONSTANT_TYPE_INT: {
+                uint32_t v = uint32_t(dataObj.value("INT").toInt());
+                appendU32(v);
+                break;
+            }
+            case ShaderMaterialFlag::CONSTANT_TYPE_BOOL: {
+                uint32_t v = dataObj.value("BOOL").toBool() ? 1u : 0u;
+                appendU32(v);
+                break;
+            }
+            default:
+                break;
+            }
+
+            item.data = std::move(buf);
+            item.length = uint32_t(item.data.size());
+        }
+    };
+
+    // Serializer for chunk 0x0058 (W3D_CHUNK_DEFORM)
+    struct DeformSerializer : ChunkSerializer {
+        QJsonObject toJson(const ChunkItem& item) const override {
+            QJsonObject obj;
+            if (item.data.size() >= sizeof(W3dMeshDeform)) {
+                const auto* d = reinterpret_cast<const W3dMeshDeform*>(item.data.data());
+                obj["SETCOUNT"] = int(d->SetCount);
+                obj["ALPHAPASSES"] = int(d->AlphaPasses);
+            }
+            return obj;
+        }
+
+        void fromJson(const QJsonObject& dataObj, ChunkItem& item) const override {
+            W3dMeshDeform d{};
+            d.SetCount = dataObj.value("SETCOUNT").toInt();
+            d.AlphaPasses = dataObj.value("ALPHAPASSES").toInt();
+            item.length = sizeof(W3dMeshDeform);
+            item.data.resize(item.length);
+            std::memcpy(item.data.data(), &d, sizeof(d));
+        }
+    };
+
+    // Serializer for chunk 0x0059 (W3D_CHUNK_DEFORM_SET)
+    struct DeformSetSerializer : ChunkSerializer {
+        QJsonObject toJson(const ChunkItem& item) const override {
+            QJsonObject obj;
+            obj["DEFORM_SET"] = structsToJsonArray<W3dDeformSetInfo>(
+                item.data,
+                [](const W3dDeformSetInfo& s) {
+                    QJsonObject o; o["KEYFRAMECOUNT"] = int(s.KeyframeCount); o["FLAGS"] = int(s.flags); return o; }
+            );
+            return obj;
+        }
+
+        void fromJson(const QJsonObject& dataObj, ChunkItem& item) const override {
+            QJsonArray arr = dataObj.value("DEFORM_SET").toArray();
+            item.data = jsonArrayToStructs<W3dDeformSetInfo>(arr, [](const QJsonValue& val) {
+                W3dDeformSetInfo s{};
+                QJsonObject o = val.toObject();
+                s.KeyframeCount = o.value("KEYFRAMECOUNT").toInt();
+                s.flags = o.value("FLAGS").toInt();
+                return s;
+                });
+            item.length = uint32_t(item.data.size());
+        }
+    };
+
+    // Serializer for chunk 0x005A (W3D_CHUNK_DEFORM_KEYFRAME)
+    struct DeformKeyframeSerializer : ChunkSerializer {
+        QJsonObject toJson(const ChunkItem& item) const override {
+            QJsonObject obj;
+            obj["DEFORM_KEYFRAME"] = structsToJsonArray<W3dDeformKeyframeInfo>(
+                item.data,
+                [](const W3dDeformKeyframeInfo& k) {
+                    QJsonObject o; o["DEFORMPERCENT"] = k.DeformPercent; o["DATACOUNT"] = int(k.DataCount); return o; }
+            );
+            return obj;
+        }
+
+        void fromJson(const QJsonObject& dataObj, ChunkItem& item) const override {
+            QJsonArray arr = dataObj.value("DEFORM_KEYFRAME").toArray();
+            item.data = jsonArrayToStructs<W3dDeformKeyframeInfo>(arr, [](const QJsonValue& val) {
+                W3dDeformKeyframeInfo k{};
+                QJsonObject o = val.toObject();
+                k.DeformPercent = float(o.value("DEFORMPERCENT").toDouble());
+                k.DataCount = o.value("DATACOUNT").toInt();
+                return k;
+                });
+            item.length = uint32_t(item.data.size());
+        }
+    };
+
+    // Serializer for chunk 0x005B (W3D_CHUNK_DEFORM_DATA)
+    struct DeformDataSerializer : ChunkSerializer {
+        QJsonObject toJson(const ChunkItem& item) const override {
+            QJsonObject obj;
+            obj["DEFORM_DATA"] = structsToJsonArray<W3dDeformData>(
+                item.data,
+                [](const W3dDeformData& d) {
+                    QJsonObject o;
+                    o["VERTEXINDEX"] = int(d.VertexIndex);
+                    o["POSITION"] = QJsonArray{ d.Position.X, d.Position.Y, d.Position.Z };
+                    o["COLOR"] = QJsonArray{ int(d.Color.R), int(d.Color.G), int(d.Color.B), int(d.Color.A) };
+                    return o;
+                }
+            );
+            return obj;
+        }
+
+        void fromJson(const QJsonObject& dataObj, ChunkItem& item) const override {
+            QJsonArray arr = dataObj.value("DEFORM_DATA").toArray();
+            item.data = jsonArrayToStructs<W3dDeformData>(arr, [](const QJsonValue& val) {
+                W3dDeformData d{};
+                QJsonObject o = val.toObject();
+                d.VertexIndex = o.value("VERTEXINDEX").toInt();
+                QJsonArray p = o.value("POSITION").toArray();
+                if (p.size() >= 3) { d.Position.X = p[0].toDouble(); d.Position.Y = p[1].toDouble(); d.Position.Z = p[2].toDouble(); }
+                QJsonArray c = o.value("COLOR").toArray();
+                if (c.size() >= 4) { d.Color.R = uint8_t(c[0].toInt()); d.Color.G = uint8_t(c[1].toInt()); d.Color.B = uint8_t(c[2].toInt()); d.Color.A = uint8_t(c[3].toInt()); }
+                return d;
+                });
+            item.length = uint32_t(item.data.size());
+        }
+    };
+
+    // Serializer for chunk 0x0060 (W3D_CHUNK_TANGENTS)
+    struct TangentsSerializer : ChunkSerializer {
+        QJsonObject toJson(const ChunkItem& item) const override {
+            QJsonObject obj;
+            obj["TANGENTS"] = structsToJsonArray<W3dVectorStruct>(
+                item.data,
+                [](const W3dVectorStruct& v) { return QJsonArray{ v.X, v.Y, v.Z }; }
+            );
+            return obj;
+        }
+
+        void fromJson(const QJsonObject& dataObj, ChunkItem& item) const override {
+            QJsonArray arr = dataObj.value("TANGENTS").toArray();
+            item.data = jsonArrayToStructs<W3dVectorStruct>(arr, [](const QJsonValue& val) {
+                W3dVectorStruct v{};
+                QJsonArray a = val.toArray();
+                if (a.size() >= 3) { v.X = a[0].toDouble(); v.Y = a[1].toDouble(); v.Z = a[2].toDouble(); }
+                return v;
+                });
+            item.length = uint32_t(item.data.size());
+        }
+    };
+
+    // Serializer for chunk 0x0061 (W3D_CHUNK_BINORMALS)
+    struct BinormalsSerializer : ChunkSerializer {
+        QJsonObject toJson(const ChunkItem& item) const override {
+            QJsonObject obj;
+            obj["BINORMALS"] = structsToJsonArray<W3dVectorStruct>(
+                item.data,
+                [](const W3dVectorStruct& v) { return QJsonArray{ v.X, v.Y, v.Z }; }
+            );
+            return obj;
+        }
+
+        void fromJson(const QJsonObject& dataObj, ChunkItem& item) const override {
+            QJsonArray arr = dataObj.value("BINORMALS").toArray();
+            item.data = jsonArrayToStructs<W3dVectorStruct>(arr, [](const QJsonValue& val) {
+                W3dVectorStruct v{};
+                QJsonArray a = val.toArray();
+                if (a.size() >= 3) { v.X = a[0].toDouble(); v.Y = a[1].toDouble(); v.Z = a[2].toDouble(); }
+                return v;
+                });
+            item.length = uint32_t(item.data.size());
+        }
+    };
+
+    // Serializer for chunk 0x0080 (W3D_CHUNK_PS2_SHADERS)
+    struct Ps2ShadersSerializer : ChunkSerializer {
+        QJsonObject toJson(const ChunkItem& item) const override {
+            QJsonObject obj;
+            obj["PS2_SHADERS"] = structsToJsonArray<W3dPS2ShaderStruct>(
+                item.data,
+                [](const W3dPS2ShaderStruct& s) {
+                    QJsonObject o;
+                    o["DEPTH_COMPARE"] = int(s.DepthCompare);
+                    o["DEPTH_MASK"] = int(s.DepthMask);
+                    o["PRI_GRADIENT"] = int(s.PriGradient);
+                    o["TEXTURING"] = int(s.Texturing);
+                    o["ALPHA_TEST"] = int(s.AlphaTest);
+                    o["APARAM"] = int(s.AParam);
+                    o["BPARAM"] = int(s.BParam);
+                    o["CPARAM"] = int(s.CParam);
+                    o["DPARAM"] = int(s.DParam);
+                    return o;
+                }
+            );
+            return obj;
+        }
+
+        void fromJson(const QJsonObject& dataObj, ChunkItem& item) const override {
+            QJsonArray arr = dataObj.value("PS2_SHADERS").toArray();
+            item.data = jsonArrayToStructs<W3dPS2ShaderStruct>(arr, [](const QJsonValue& val) {
+                W3dPS2ShaderStruct s{};
+                QJsonObject o = val.toObject();
+                s.DepthCompare = uint8_t(o.value("DEPTH_COMPARE").toInt());
+                s.DepthMask = uint8_t(o.value("DEPTH_MASK").toInt());
+                s.PriGradient = uint8_t(o.value("PRI_GRADIENT").toInt());
+                s.Texturing = uint8_t(o.value("TEXTURING").toInt());
+                s.AlphaTest = uint8_t(o.value("ALPHA_TEST").toInt());
+                s.AParam = uint8_t(o.value("APARAM").toInt());
+                s.BParam = uint8_t(o.value("BPARAM").toInt());
+                s.CParam = uint8_t(o.value("CPARAM").toInt());
+                s.DParam = uint8_t(o.value("DPARAM").toInt());
+                return s;
+                });
             item.length = uint32_t(item.data.size());
         }
     };
@@ -1193,6 +1611,19 @@ namespace {
     static const DigSerializer digSerializerInstance;
     static const ScgSerializer scgSerializerInstance;
     static const ShaderMaterialIdSerializer shaderMaterialIdSerializerInstance;
+    static const TextureIdsSerializer textureIdsSerializerInstance;
+    static const StageTexCoordsSerializer stageTexCoordsSerializerInstance;
+    static const PerFaceTexCoordIdsSerializer perFaceTexCoordIdsSerializerInstance;
+    static const ShaderMaterialHeaderSerializer shaderMaterialHeaderSerializerInstance;
+    static const ShaderMaterialPropertySerializer shaderMaterialPropertySerializerInstance;
+    static const DeformSerializer deformSerializerInstance;
+    static const DeformSetSerializer deformSetSerializerInstance;
+    static const DeformKeyframeSerializer deformKeyframeSerializerInstance;
+    static const DeformDataSerializer deformDataSerializerInstance;
+    static const TangentsSerializer tangentsSerializerInstance;
+    static const BinormalsSerializer binormalsSerializerInstance;
+    static const Ps2ShadersSerializer ps2ShadersSerializerInstance;
+
 
 } // namespace
 
@@ -1234,6 +1665,18 @@ const std::unordered_map<uint32_t, const ChunkSerializer*>& chunkSerializerRegis
         {0x003C, &digSerializerInstance},
         {0x003E, &scgSerializerInstance},
         {0x003F, &shaderMaterialIdSerializerInstance},
+        {0x0049, &textureIdsSerializerInstance},
+        {0x004A, &stageTexCoordsSerializerInstance},
+        {0x004B, &perFaceTexCoordIdsSerializerInstance},
+        {0x0052, &shaderMaterialHeaderSerializerInstance},
+        {0x0053, &shaderMaterialPropertySerializerInstance},
+        {0x0058, &deformSerializerInstance},
+        {0x0059, &deformSetSerializerInstance},
+        {0x005A, &deformKeyframeSerializerInstance},
+        {0x005B, &deformDataSerializerInstance},
+        {0x0060, &tangentsSerializerInstance},
+        {0x0061, &binormalsSerializerInstance},
+        {0x0080, &ps2ShadersSerializerInstance},
     };
     return registry;
 }
