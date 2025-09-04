@@ -5,6 +5,7 @@
 #include <vector>
 #include <filesystem>
 #include <QJsonDocument>
+#include <QString>
 #include <nlohmann/json.hpp>
 
 using ordered_json = nlohmann::ordered_json;

@@ -54,7 +54,6 @@ std::shared_ptr<ChunkItem> ChunkJson::fromJson(const ordered_json& obj, ChunkIte
         }
     }
     else if (obj.contains("DATA")) {
-        QJsonObject dataObj = obj.value("DATA").toObject();
         const auto& registry = chunkSerializerRegistry();
         auto it = registry.find(item->id);
         if (it != registry.end()) {
