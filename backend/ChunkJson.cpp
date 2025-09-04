@@ -1,6 +1,6 @@
 #include "ChunkJson.h"
 
-#include <QJsonArray>
+#include <nlohmann/json.hpp>
 
 #include "ChunkItem.h"
 #include "ChunkNames.h"
@@ -10,45 +10,45 @@
 
 
 
-QJsonObject ChunkJson::toJson(const ChunkItem& item) {
-    QJsonObject obj;
-    obj["CHUNK_NAME"] = QString::fromStdString(LabelForChunk(item.id, const_cast<ChunkItem*>(&item)));
+ordered_json ChunkJson::toJson(const ChunkItem& item) {
+    ordered_json obj;
+    obj["CHUNK_NAME"] = LabelForChunk(item.id, const_cast<ChunkItem*>(&item));
     obj["SUBCHUNKS"] = item.hasSubChunks;
-    obj["CHUNK_ID"] = static_cast<int>(item.id);
-    obj["LENGTH"] = static_cast<int>(item.length);
+    obj["CHUNK_ID"] = item.id;
+    obj["LENGTH"] = item.length;
 
     if (!item.children.empty()) {
-        QJsonArray arr;
+        ordered_json arr = ordered_json::array();
         for (const auto& c : item.children) {
-            arr.append(ChunkJson::toJson(*c));
+            arr.push_back(ChunkJson::toJson(*c));
         }
         obj["CHILDREN"] = arr;
 
-}
- else if (!item.data.empty()) {
-     const auto& registry = chunkSerializerRegistry();
-     auto it = registry.find(item.id);
-     if (it != registry.end()) {
-         obj["DATA"] = it->second->toJson(item);
+    }
+    else if (!item.data.empty()) {
+        const auto& registry = chunkSerializerRegistry();
+        auto it = registry.find(item.id);
+        if (it != registry.end()) {
+            obj["DATA"] = it->second->toJson(item);
         }
         
     }
     return obj;
 }
 
-std::shared_ptr<ChunkItem> ChunkJson::fromJson(const QJsonObject& obj, ChunkItem* parent) {
+std::shared_ptr<ChunkItem> ChunkJson::fromJson(const ordered_json& obj, ChunkItem* parent) {
     auto item = std::make_shared<ChunkItem>();
-    item->id = obj["CHUNK_ID"].toInt();
-    item->length = obj["LENGTH"].toInt();
-    item->hasSubChunks = obj["SUBCHUNKS"].toBool();
-    item->typeName = obj.value("CHUNK_NAME").toString().toStdString();
+    item->id = obj.at("CHUNK_ID").get<uint32_t>();
+    item->length = obj.at("LENGTH").get<uint32_t>();
+    item->hasSubChunks = obj.at("SUBCHUNKS").get<bool>();
+    if (obj.contains("CHUNK_NAME"))
+        item->typeName = obj.at("CHUNK_NAME").get<std::string>();
     item->parent = parent;
 
     if (obj.contains("CHILDREN")) {
-        QJsonArray arr = obj.value("CHILDREN").toArray();
-        for (const auto& v : arr) {
-            if (v.isObject()) {
-                auto child = ChunkJson::fromJson(v.toObject(), item.get());
+        for (const auto& v : obj.at("CHILDREN")) {
+            if (v.is_object()) {
+                auto child = ChunkJson::fromJson(v, item.get());
                 item->children.push_back(child);
             }
         }
@@ -58,7 +58,7 @@ std::shared_ptr<ChunkItem> ChunkJson::fromJson(const QJsonObject& obj, ChunkItem
         const auto& registry = chunkSerializerRegistry();
         auto it = registry.find(item->id);
         if (it != registry.end()) {
-            it->second->fromJson(dataObj, *item);
+            it->second->fromJson(obj.at("DATA"), *item);
         }
     }
 

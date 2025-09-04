@@ -2,12 +2,13 @@
 #pragma once
 
 #include <memory>
-#include <QJsonObject>
+#include <nlohmann/json.hpp>
 
+using ordered_json = nlohmann::ordered_json;
 class ChunkItem;
 
 class ChunkJson {
 public:
-    static QJsonObject toJson(const ChunkItem& item);
-    static std::shared_ptr<ChunkItem> fromJson(const QJsonObject& obj, ChunkItem* parent = nullptr);
+    static ordered_json toJson(const ChunkItem& item);
+    static std::shared_ptr<ChunkItem> fromJson(const ordered_json& obj, ChunkItem* parent = nullptr);
 };

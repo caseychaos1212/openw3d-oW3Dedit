@@ -23,3 +23,7 @@ CMakeUserPresets.json
 /x64/Debug
 /oW3DDumpQt.vcxproj.user
 /UpgradeLog.htm
+/.qt
+/oW3DDumpQt.dir
+/oW3DEdit.dir/Release
+/Release

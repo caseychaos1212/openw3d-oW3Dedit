@@ -5,7 +5,9 @@
 #include <vector>
 #include <filesystem>
 #include <QJsonDocument>
-#include <QJsonArray>
+#include <nlohmann/json.hpp>
+
+using ordered_json = nlohmann::ordered_json;
 #include "ChunkData.h"
 #include "ChunkNames.h"
 #include "FormatUtils.h"
@@ -300,34 +302,34 @@ static void writeChunkStream(std::ostream& stream, const std::shared_ptr<ChunkIt
 }
 
 QJsonDocument ChunkData::toJson() const {
-    QJsonObject root;
+    ordered_json root;
     root["SCHEMA_VERSION"] = 1;
-    QJsonArray arr;
+    ordered_json arr = ordered_json::array();
     for (const auto& c : chunks)
-        arr.append(ChunkJson::toJson(*c));
-    QString key = sourceFilename.empty() ? QStringLiteral("CHUNKS")
-        : QString::fromStdString(sourceFilename);
+        arr.push_back(ChunkJson::toJson(*c));
+    std::string key = sourceFilename.empty() ? "CHUNKS" : sourceFilename;
     root[key] = arr;
-    return QJsonDocument(root);
+    auto jsonText = QString::fromStdString(root.dump());
+    return QJsonDocument::fromJson(jsonText.toUtf8());
 }
 
 bool ChunkData::fromJson(const QJsonDocument& doc) {
     if (!doc.isObject()) return false;
     clear();
-    QJsonObject root = doc.object();
-    QJsonArray arr;
+    auto root = nlohmann::ordered_json::parse(doc.toJson(QJsonDocument::Compact).toStdString());
+    ordered_json arr = ordered_json::array();
     for (auto it = root.begin(); it != root.end(); ++it) {
-        if (it.key() == QLatin1String("SCHEMA_VERSION")) continue;
-        if (it.value().isArray()) {
-            sourceFilename = it.key().toStdString();
-            arr = it.value().toArray();
+        if (it.key() == "SCHEMA_VERSION") continue;
+        if (it.value().is_array()) {
+            sourceFilename = it.key();
+            arr = it.value();
             break;
         }
     }
-    if (arr.isEmpty()) return false;
+    if (arr.empty()) return false;
     for (const auto& v : arr) {
-        if (v.isObject()) {
-            chunks.push_back(ChunkJson::fromJson(v.toObject()));
+        if (v.is_object()) {
+            chunks.push_back(ChunkJson::fromJson(v));
         }
     }
     return true;
