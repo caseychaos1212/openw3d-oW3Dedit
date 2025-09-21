@@ -3,33 +3,18 @@
 #include "ChunkItem.h"
 #include "FormatUtils.h"
 #include "W3DStructs.h"
+#include "JsonCompat.h"
 
-#include <QJsonArray>
 #include <QByteArray>
 #include <QString>
+#include <QStringList>
 #include <vector>
-#include <string>
 #include <cstring>
 #include <algorithm>
 
 namespace {
 
-    // helper function: convert array of structs to JSON array (ordered_json)
-    template <typename T, typename Converter>
-    ordered_json structsToJsonArray(const std::vector<uint8_t>& data, Converter&& conv) {
-        ordered_json arr = ordered_json::array();
-        if (data.size() % sizeof(T) != 0) {
-            return arr;
-        }
-        const auto* begin = reinterpret_cast<const T*>(data.data());
-        int count = static_cast<int>(data.size() / sizeof(T));
-        for (int i = 0; i < count; ++i) {
-            arr.push_back(conv(begin[i]));
-        }
-        return arr;
-    }
-/*
-    // Qt compatibility overload
+    // helper function: convert array of structs to QJsonArray
     template <typename T, typename Converter>
     QJsonArray structsToJsonArray(const std::vector<uint8_t>& data, Converter&& conv) {
         QJsonArray arr;
@@ -43,28 +28,13 @@ namespace {
         }
         return arr;
     }
-    */
 
-    // helper function: convert JSON array to byte vector of structs (ordered_json)
-    template <typename T, typename Converter>
-    std::vector<uint8_t> jsonArrayToStructs(const ordered_json& arr, Converter&& conv) {
-        std::vector<T> temp(arr.size());
-        for (size_t i = 0; i < arr.size(); ++i) {
-            temp[i] = conv(arr[i]);
-        }
-        std::vector<uint8_t> out(arr.size() * sizeof(T));
-        if (!out.empty()) {
-            std::memcpy(out.data(), temp.data(), out.size());
-        }
-        return out;
-    }
-/*
-    // Qt compatibility overload
+    // helper function: convert QJsonArray to byte vector of structs
     template <typename T, typename Converter>
     std::vector<uint8_t> jsonArrayToStructs(const QJsonArray& arr, Converter&& conv) {
-        std::vector<T> temp(arr.size());
+        std::vector<T> temp(static_cast<size_t>(arr.size()));
         for (int i = 0; i < arr.size(); ++i) {
-            temp[i] = conv(arr[i]);
+            temp[static_cast<size_t>(i)] = conv(arr[i]);
         }
         std::vector<uint8_t> out(arr.size() * sizeof(T));
         if (!out.empty()) {
@@ -72,15 +42,15 @@ namespace {
         }
         return out;
     }
-*/
+
     // Serializer for chunk 0x0001 (W3dMeshHeader1)
     struct MeshHeader1Serializer : ChunkSerializer {
-        ordered_json toJson(const ChunkItem& item) const override {
-            ordered_json dataObj;
+        QJsonObject toJson(const ChunkItem& item) const override {
+            QJsonObject dataObj;
             if (item.data.size() >= sizeof(W3dMeshHeader1)) {
                 const auto* h = reinterpret_cast<const W3dMeshHeader1*>(item.data.data());
-                dataObj["VERSION"] = FormatUtils::FormatVersion(h->Version);
-                dataObj["MESHNAME"] = std::string(h->MeshName, strnlen(h->MeshName, W3D_NAME_LEN));
+                dataObj["VERSION"] = QString::fromStdString(FormatUtils::FormatVersion(h->Version));
+                dataObj["MESHNAME"] = QString::fromUtf8(h->MeshName, strnlen(h->MeshName, W3D_NAME_LEN));
                 dataObj["ATTRIBUTES"] = static_cast<int>(h->Attributes);
                 dataObj["NUMTRIANGLES"] = static_cast<int>(h->NumTriangles);
                 dataObj["NUMQUADS"] = static_cast<int>(h->NumQuads);
@@ -94,87 +64,85 @@ namespace {
                 dataObj["NUMVERTCOLORS"] = static_cast<int>(h->NumVertColors);
                 dataObj["NUMVERTINFLUENCES"] = static_cast<int>(h->NumVertInfluences);
                 dataObj["NUMDAMAGESTAGES"] = static_cast<int>(h->NumDamageStages);
-                ordered_json fc = ordered_json::array();
-                for (int i = 0; i < 8; ++i) fc.push_back(static_cast<int>(h->FutureCounts[i]));
+                QJsonArray fc;
+                for (int i = 0; i < 8; ++i) fc.append(static_cast<int>(h->FutureCounts[i]));
                 dataObj["FUTURECOUNTS"] = fc;
                 dataObj["LODMIN"] = h->LODMin;
                 dataObj["LODMAX"] = h->LODMax;
-                dataObj["MIN"] = { h->Min.X, h->Min.Y, h->Min.Z };
-                dataObj["MAX"] = { h->Max.X, h->Max.Y, h->Max.Z };
-                dataObj["SPHCENTER"] = { h->SphCenter.X, h->SphCenter.Y, h->SphCenter.Z };
+                dataObj["MIN"] = QJsonArray{ h->Min.X, h->Min.Y, h->Min.Z };
+                dataObj["MAX"] = QJsonArray{ h->Max.X, h->Max.Y, h->Max.Z };
+                dataObj["SPHCENTER"] = QJsonArray{ h->SphCenter.X, h->SphCenter.Y, h->SphCenter.Z };
                 dataObj["SPHRADIUS"] = h->SphRadius;
-                dataObj["TRANSLATION"] = { h->Translation.X, h->Translation.Y, h->Translation.Z };
-                ordered_json rot = ordered_json::array();
-                for (int i = 0; i < 9; ++i) rot.push_back(h->Rotation[i]);
+                dataObj["TRANSLATION"] = QJsonArray{ h->Translation.X, h->Translation.Y, h->Translation.Z };
+                QJsonArray rot;
+                for (int i = 0; i < 9; ++i) rot.append(h->Rotation[i]);
                 dataObj["ROTATION"] = rot;
-                dataObj["MASSCENTER"] = { h->MassCenter.X, h->MassCenter.Y, h->MassCenter.Z };
-                ordered_json inertia = ordered_json::array();
-                for (int i = 0; i < 9; ++i) inertia.push_back(h->Inertia[i]);
+                dataObj["MASSCENTER"] = QJsonArray{ h->MassCenter.X, h->MassCenter.Y, h->MassCenter.Z };
+                QJsonArray inertia;
+                for (int i = 0; i < 9; ++i) inertia.append(h->Inertia[i]);
                 dataObj["INERTIA"] = inertia;
                 dataObj["VOLUME"] = h->Volume;
-                dataObj["HIERARCHYTREENAME"] = std::string(h->HierarchyTreeName, strnlen(h->HierarchyTreeName, W3D_NAME_LEN));
-                dataObj["HIERARCHYMODELNAME"] = std::string(h->HierarchyModelName, strnlen(h->HierarchyModelName, W3D_NAME_LEN));
-                ordered_json fu = ordered_json::array();
-                for (int i = 0; i < 24; ++i) fu.push_back(static_cast<int>(h->FutureUse[i]));
+                dataObj["HIERARCHYTREENAME"] = QString::fromUtf8(h->HierarchyTreeName, strnlen(h->HierarchyTreeName, W3D_NAME_LEN));
+                dataObj["HIERARCHYMODELNAME"] = QString::fromUtf8(h->HierarchyModelName, strnlen(h->HierarchyModelName, W3D_NAME_LEN));
+                QJsonArray fu;
+                for (int i = 0; i < 24; ++i) fu.append(static_cast<int>(h->FutureUse[i]));
                 dataObj["FUTUREUSE"] = fu;
             }
             return dataObj;
         }
 
-        void fromJson(const ordered_json& dataObj, ChunkItem& item) const override {
+        void fromJson(const QJsonObject& dataObj, ChunkItem& item) const override {
             W3dMeshHeader1 h{};
-            std::string verStr = dataObj.value("VERSION", "");
-            auto pos = verStr.find('.');
-            if (pos != std::string::npos) {
-                uint32_t major = std::stoul(verStr.substr(0, pos));
-                uint32_t minor = std::stoul(verStr.substr(pos + 1));
-                h.Version = (major << 16) | minor;
+            QString verStr = dataObj.value("VERSION").toString();
+            auto parts = verStr.split('.');
+            if (parts.size() == 2) {
+                h.Version = (parts[0].toUInt() << 16) | parts[1].toUInt();
             }
-            std::string meshName = dataObj.value("MESHNAME", "");
+            QByteArray meshName = dataObj.value("MESHNAME").toString().toUtf8();
             std::memset(h.MeshName, 0, 16);
-            std::memcpy(h.MeshName, meshName.c_str(), std::min<size_t>(meshName.size(), 16));
-            h.Attributes = dataObj.value("ATTRIBUTES", 0);
-            h.NumTriangles = dataObj.value("NUMTRIANGLES", 0);
-            h.NumQuads = dataObj.value("NUMQUADS", 0);
-            h.NumSrTris = dataObj.value("NUMSRTRIS", 0);
-            h.NumPovQuads = dataObj.value("NUMPOVQUADS", 0);
-            h.NumVertices = dataObj.value("NUMVERTICES", 0);
-            h.NumNormals = dataObj.value("NUMNORMALS", 0);
-            h.NumSrNormals = dataObj.value("NUMSRNORMALS", 0);
-            h.NumTexCoords = dataObj.value("NUMTEXCOORDS", 0);
-            h.NumMaterials = dataObj.value("NUMMATERIALS", 0);
-            h.NumVertColors = dataObj.value("NUMVERTCOLORS", 0);
-            h.NumVertInfluences = dataObj.value("NUMVERTINFLUENCES", 0);
-            h.NumDamageStages = dataObj.value("NUMDAMAGESTAGES", 0);
-            auto fc = dataObj.value("FUTURECOUNTS", ordered_json::array());
-            for (size_t i = 0; i < 8 && i < fc.size(); ++i)
-                h.FutureCounts[i] = fc[i].get<int>();
-            h.LODMin = dataObj.value("LODMIN", 0.0f);
-            h.LODMax = dataObj.value("LODMAX", 0.0f);
-            auto min = dataObj.value("MIN", ordered_json::array());
-            if (min.size() >= 3) { h.Min.X = min[0].get<float>(); h.Min.Y = min[1].get<float>(); h.Min.Z = min[2].get<float>(); }
-            auto max = dataObj.value("MAX", ordered_json::array());
-            if (max.size() >= 3) { h.Max.X = max[0].get<float>(); h.Max.Y = max[1].get<float>(); h.Max.Z = max[2].get<float>(); }
-            auto sph = dataObj.value("SPHCENTER", ordered_json::array());
-            if (sph.size() >= 3) { h.SphCenter.X = sph[0].get<float>(); h.SphCenter.Y = sph[1].get<float>(); h.SphCenter.Z = sph[2].get<float>(); }
-            h.SphRadius = dataObj.value("SPHRADIUS", 0.0f);
-            auto trans = dataObj.value("TRANSLATION", ordered_json::array());
-            if (trans.size() >= 3) { h.Translation.X = trans[0].get<float>(); h.Translation.Y = trans[1].get<float>(); h.Translation.Z = trans[2].get<float>(); }
-            auto rot = dataObj.value("ROTATION", ordered_json::array());
-            for (size_t i = 0; i < 9 && i < rot.size(); ++i) h.Rotation[i] = rot[i].get<float>();
-            auto mass = dataObj.value("MASSCENTER", ordered_json::array());
-            if (mass.size() >= 3) { h.MassCenter.X = mass[0].get<float>(); h.MassCenter.Y = mass[1].get<float>(); h.MassCenter.Z = mass[2].get<float>(); }
-            auto inertia = dataObj.value("INERTIA", ordered_json::array());
-            for (size_t i = 0; i < 9 && i < inertia.size(); ++i) h.Inertia[i] = inertia[i].get<float>();
-            h.Volume = dataObj.value("VOLUME", 0.0f);
-            std::string ht = dataObj.value("HIERARCHYTREENAME", "");
+            std::memcpy(h.MeshName, meshName.constData(), std::min<int>(meshName.size(), 16));
+            h.Attributes = dataObj.value("ATTRIBUTES").toInt();
+            h.NumTriangles = dataObj.value("NUMTRIANGLES").toInt();
+            h.NumQuads = dataObj.value("NUMQUADS").toInt();
+            h.NumSrTris = dataObj.value("NUMSRTRIS").toInt();
+            h.NumPovQuads = dataObj.value("NUMPOVQUADS").toInt();
+            h.NumVertices = dataObj.value("NUMVERTICES").toInt();
+            h.NumNormals = dataObj.value("NUMNORMALS").toInt();
+            h.NumSrNormals = dataObj.value("NUMSRNORMALS").toInt();
+            h.NumTexCoords = dataObj.value("NUMTEXCOORDS").toInt();
+            h.NumMaterials = dataObj.value("NUMMATERIALS").toInt();
+            h.NumVertColors = dataObj.value("NUMVERTCOLORS").toInt();
+            h.NumVertInfluences = dataObj.value("NUMVERTINFLUENCES").toInt();
+            h.NumDamageStages = dataObj.value("NUMDAMAGESTAGES").toInt();
+            QJsonArray fc = dataObj.value("FUTURECOUNTS").toArray();
+            for (int i = 0; i < 8 && i < fc.size(); ++i)
+                h.FutureCounts[i] = fc[i].toInt();
+            h.LODMin = dataObj.value("LODMIN").toDouble();
+            h.LODMax = dataObj.value("LODMAX").toDouble();
+            QJsonArray min = dataObj.value("MIN").toArray();
+            if (min.size() >= 3) { h.Min.X = min[0].toDouble(); h.Min.Y = min[1].toDouble(); h.Min.Z = min[2].toDouble(); }
+            QJsonArray max = dataObj.value("MAX").toArray();
+            if (max.size() >= 3) { h.Max.X = max[0].toDouble(); h.Max.Y = max[1].toDouble(); h.Max.Z = max[2].toDouble(); }
+            QJsonArray sph = dataObj.value("SPHCENTER").toArray();
+            if (sph.size() >= 3) { h.SphCenter.X = sph[0].toDouble(); h.SphCenter.Y = sph[1].toDouble(); h.SphCenter.Z = sph[2].toDouble(); }
+            h.SphRadius = dataObj.value("SPHRADIUS").toDouble();
+            QJsonArray trans = dataObj.value("TRANSLATION").toArray();
+            if (trans.size() >= 3) { h.Translation.X = trans[0].toDouble(); h.Translation.Y = trans[1].toDouble(); h.Translation.Z = trans[2].toDouble(); }
+            QJsonArray rot = dataObj.value("ROTATION").toArray();
+            for (int i = 0; i < 9 && i < rot.size(); ++i) h.Rotation[i] = rot[i].toDouble();
+            QJsonArray mass = dataObj.value("MASSCENTER").toArray();
+            if (mass.size() >= 3) { h.MassCenter.X = mass[0].toDouble(); h.MassCenter.Y = mass[1].toDouble(); h.MassCenter.Z = mass[2].toDouble(); }
+            QJsonArray inertia = dataObj.value("INERTIA").toArray();
+            for (int i = 0; i < 9 && i < inertia.size(); ++i) h.Inertia[i] = inertia[i].toDouble();
+            h.Volume = dataObj.value("VOLUME").toDouble();
+            QByteArray ht = dataObj.value("HIERARCHYTREENAME").toString().toUtf8();
             std::memset(h.HierarchyTreeName, 0, 16);
-            std::memcpy(h.HierarchyTreeName, ht.c_str(), std::min<size_t>(ht.size(), 16));
-            std::string hm = dataObj.value("HIERARCHYMODELNAME", "");
+            std::memcpy(h.HierarchyTreeName, ht.constData(), std::min<int>(ht.size(), 16));
+            QByteArray hm = dataObj.value("HIERARCHYMODELNAME").toString().toUtf8();
             std::memset(h.HierarchyModelName, 0, 16);
-            std::memcpy(h.HierarchyModelName, hm.c_str(), std::min<size_t>(hm.size(), 16));
-            auto fu = dataObj.value("FUTUREUSE", ordered_json::array());
-            for (size_t i = 0; i < 24 && i < fu.size(); ++i) h.FutureUse[i] = fu[i].get<int>();
+            std::memcpy(h.HierarchyModelName, hm.constData(), std::min<int>(hm.size(), 16));
+            QJsonArray fu = dataObj.value("FUTUREUSE").toArray();
+            for (int i = 0; i < 24 && i < fu.size(); ++i) h.FutureUse[i] = fu[i].toInt();
             item.length = sizeof(W3dMeshHeader1);
             item.data.resize(item.length);
             std::memcpy(item.data.data(), &h, sizeof(h));
@@ -183,20 +151,21 @@ namespace {
 
     // Serializer for chunk 0x0002 (VERTICES)
     struct VerticesSerializer : ChunkSerializer {
-        ordered_json toJson(const ChunkItem& item) const override {
-            ordered_json obj;
+        QJsonObject toJson(const ChunkItem& item) const override {
+            QJsonObject obj;
             obj["VERTICES"] = structsToJsonArray<W3dVectorStruct>(
                 item.data,
-                [](const W3dVectorStruct& v) { return ordered_json::array({ v.X, v.Y, v.Z }); }
+                [](const W3dVectorStruct& v) { return QJsonArray{ v.X, v.Y, v.Z }; }
             );
             return obj;
         }
 
-        void fromJson(const ordered_json& dataObj, ChunkItem& item) const override {
-            auto arr = dataObj.value("VERTICES", ordered_json::array());
-            item.data = jsonArrayToStructs<W3dVectorStruct>(arr, [](const ordered_json& val) {
+        void fromJson(const QJsonObject& dataObj, ChunkItem& item) const override {
+            QJsonArray arr = dataObj.value("VERTICES").toArray();
+            item.data = jsonArrayToStructs<W3dVectorStruct>(arr, [](const QJsonValue& val) {
                 W3dVectorStruct v{};
-                if (val.is_array() && val.size() >= 3) { v.X = val[0].get<float>(); v.Y = val[1].get<float>(); v.Z = val[2].get<float>(); }
+                auto a = val.toArray();
+                if (a.size() >= 3) { v.X = a[0].toDouble(); v.Y = a[1].toDouble(); v.Z = a[2].toDouble(); }
                 return v;
                 });
             item.length = uint32_t(item.data.size());
@@ -205,20 +174,21 @@ namespace {
 
     // Serializer for chunk 0x0003 (VERTEX_NORMALS)
     struct VertexNormalsSerializer : ChunkSerializer {
-        ordered_json toJson(const ChunkItem& item) const override {
-            ordered_json obj;
+        QJsonObject toJson(const ChunkItem& item) const override {
+            QJsonObject obj;
             obj["VERTEX_NORMALS"] = structsToJsonArray<W3dVectorStruct>(
                 item.data,
-                [](const W3dVectorStruct& v) { return ordered_json::array({ v.X, v.Y, v.Z }); }
+                [](const W3dVectorStruct& v) { return QJsonArray{ v.X, v.Y, v.Z }; }
             );
             return obj;
         }
 
-        void fromJson(const ordered_json& dataObj, ChunkItem& item) const override {
-            auto arr = dataObj.value("VERTEX_NORMALS", ordered_json::array());
-            item.data = jsonArrayToStructs<W3dVectorStruct>(arr, [](const ordered_json& val) {
+        void fromJson(const QJsonObject& dataObj, ChunkItem& item) const override {
+            QJsonArray arr = dataObj.value("VERTEX_NORMALS").toArray();
+            item.data = jsonArrayToStructs<W3dVectorStruct>(arr, [](const QJsonValue& val) {
                 W3dVectorStruct v{};
-                if (val.is_array() && val.size() >= 3) { v.X = val[0].get<float>(); v.Y = val[1].get<float>(); v.Z = val[2].get<float>(); }
+                auto a = val.toArray();
+                if (a.size() >= 3) { v.X = a[0].toDouble(); v.Y = a[1].toDouble(); v.Z = a[2].toDouble(); }
                 return v;
                 });
             item.length = uint32_t(item.data.size());
@@ -227,20 +197,21 @@ namespace {
 
     // Serializer for chunk 0x0004 (SURRENDER_NORMALS)
     struct SurrenderNormalsSerializer : ChunkSerializer {
-        ordered_json toJson(const ChunkItem& item) const override {
-            ordered_json obj;
+        QJsonObject toJson(const ChunkItem& item) const override {
+            QJsonObject obj;
             obj["SURRENDER_NORMALS"] = structsToJsonArray<W3dVectorStruct>(
                 item.data,
-                [](const W3dVectorStruct& v) { return ordered_json::array({ v.X, v.Y, v.Z }); }
+                [](const W3dVectorStruct& v) { return QJsonArray{ v.X, v.Y, v.Z }; }
             );
             return obj;
         }
 
-        void fromJson(const ordered_json& dataObj, ChunkItem& item) const override {
-            auto arr = dataObj.value("SURRENDER_NORMALS", ordered_json::array());
-            item.data = jsonArrayToStructs<W3dVectorStruct>(arr, [](const ordered_json& val) {
+        void fromJson(const QJsonObject& dataObj, ChunkItem& item) const override {
+            QJsonArray arr = dataObj.value("SURRENDER_NORMALS").toArray();
+            item.data = jsonArrayToStructs<W3dVectorStruct>(arr, [](const QJsonValue& val) {
                 W3dVectorStruct v{};
-                if (val.is_array() && val.size() >= 3) { v.X = val[0].get<float>(); v.Y = val[1].get<float>(); v.Z = val[2].get<float>(); }
+                auto a = val.toArray();
+                if (a.size() >= 3) { v.X = a[0].toDouble(); v.Y = a[1].toDouble(); v.Z = a[2].toDouble(); }
                 return v;
                 });
             item.length = uint32_t(item.data.size());
@@ -249,20 +220,21 @@ namespace {
 
     // Serializer for chunk 0x0005 (TEXCOORDS)
     struct TexCoordsSerializer : ChunkSerializer {
-        ordered_json toJson(const ChunkItem& item) const override {
-            ordered_json obj;
+        QJsonObject toJson(const ChunkItem& item) const override {
+            QJsonObject obj;
             obj["TEXCOORDS"] = structsToJsonArray<W3dTexCoordStruct>(
                 item.data,
-                [](const W3dTexCoordStruct& t) { return ordered_json::array({ t.U, t.V }); }
+                [](const W3dTexCoordStruct& t) { return QJsonArray{ t.U, t.V }; }
             );
             return obj;
         }
 
-        void fromJson(const ordered_json& dataObj, ChunkItem& item) const override {
-            auto arr = dataObj.value("TEXCOORDS", ordered_json::array());
-            item.data = jsonArrayToStructs<W3dTexCoordStruct>(arr, [](const ordered_json& val) {
+        void fromJson(const QJsonObject& dataObj, ChunkItem& item) const override {
+            QJsonArray arr = dataObj.value("TEXCOORDS").toArray();
+            item.data = jsonArrayToStructs<W3dTexCoordStruct>(arr, [](const QJsonValue& val) {
                 W3dTexCoordStruct t{};
-                if (val.is_array() && val.size() >= 2) { t.U = val[0].get<float>(); t.V = val[1].get<float>(); }
+                auto a = val.toArray();
+                if (a.size() >= 2) { t.U = a[0].toDouble(); t.V = a[1].toDouble(); }
                 return t;
                 });
             item.length = uint32_t(item.data.size());
@@ -271,42 +243,40 @@ namespace {
 
     // Serializer for chunk 0x0006 (MATERIALS)
     struct MaterialsSerializer : ChunkSerializer {
-        ordered_json toJson(const ChunkItem& item) const override {
-            ordered_json obj;
+        QJsonObject toJson(const ChunkItem& item) const override {
+            QJsonObject obj;
             obj["MATERIALS"] = structsToJsonArray<W3dMaterial1Struct>(
                 item.data,
                 [](const W3dMaterial1Struct& m) {
-                    ordered_json mo;
-                    mo["MATERIALNAME"] = std::string(m.MaterialName, strnlen(m.MaterialName, 16));
-                    mo["PRIMARYNAME"] = std::string(m.PrimaryName, strnlen(m.PrimaryName, 16));
-                    mo["SECONDARYNAME"] = std::string(m.SecondaryName, strnlen(m.SecondaryName, 16));
+                    QJsonObject mo;
+                    mo["MATERIALNAME"] = QString::fromUtf8(m.MaterialName, int(strnlen(m.MaterialName, 16)));
+                    mo["PRIMARYNAME"] = QString::fromUtf8(m.PrimaryName, int(strnlen(m.PrimaryName, 16)));
+                    mo["SECONDARYNAME"] = QString::fromUtf8(m.SecondaryName, int(strnlen(m.SecondaryName, 16)));
                     mo["RENDERFLAGS"] = int(m.RenderFlags);
-                    mo["COLOR"] = ordered_json::array({ int(m.Red), int(m.Green), int(m.Blue) });
+                    mo["COLOR"] = QJsonArray{ int(m.Red), int(m.Green), int(m.Blue) };
                     return mo;
                 }
             );
             return obj;
         }
 
-        void fromJson(const ordered_json& dataObj, ChunkItem& item) const override {
-            auto arr = dataObj.value("MATERIALS", ordered_json::array());
-            item.data = jsonArrayToStructs<W3dMaterial1Struct>(arr, [](const ordered_json& val) {
+        void fromJson(const QJsonObject& dataObj, ChunkItem& item) const override {
+            QJsonArray arr = dataObj.value("MATERIALS").toArray();
+            item.data = jsonArrayToStructs<W3dMaterial1Struct>(arr, [](const QJsonValue& val) {
                 W3dMaterial1Struct m{};
-                if (val.is_object()) {
-                    auto o = val;
-                    std::string mn = o.value("MATERIALNAME", "");
-                    std::memset(m.MaterialName, 0, sizeof m.MaterialName);
-                    std::memcpy(m.MaterialName, mn.c_str(), std::min<size_t>(mn.size(), sizeof m.MaterialName));
-                    std::string pn = o.value("PRIMARYNAME", "");
-                    std::memset(m.PrimaryName, 0, sizeof m.PrimaryName);
-                    std::memcpy(m.PrimaryName, pn.c_str(), std::min<size_t>(pn.size(), sizeof m.PrimaryName));
-                    std::string sn = o.value("SECONDARYNAME", "");
-                    std::memset(m.SecondaryName, 0, sizeof m.SecondaryName);
-                    std::memcpy(m.SecondaryName, sn.c_str(), std::min<size_t>(sn.size(), sizeof m.SecondaryName));
-                    m.RenderFlags = o.value("RENDERFLAGS", 0);
-                    auto c = o.value("COLOR", ordered_json::array());
-                    if (c.size() >= 3) { m.Red = c[0].get<int>(); m.Green = c[1].get<int>(); m.Blue = c[2].get<int>(); }
-                }
+                QJsonObject o = val.toObject();
+                auto mn = o.value("MATERIALNAME").toString().toUtf8();
+                std::memset(m.MaterialName, 0, sizeof m.MaterialName);
+                std::memcpy(m.MaterialName, mn.constData(), std::min<int>(mn.size(), sizeof m.MaterialName));
+                auto pn = o.value("PRIMARYNAME").toString().toUtf8();
+                std::memset(m.PrimaryName, 0, sizeof m.PrimaryName);
+                std::memcpy(m.PrimaryName, pn.constData(), std::min<int>(pn.size(), sizeof m.PrimaryName));
+                auto sn = o.value("SECONDARYNAME").toString().toUtf8();
+                std::memset(m.SecondaryName, 0, sizeof m.SecondaryName);
+                std::memcpy(m.SecondaryName, sn.constData(), std::min<int>(sn.size(), sizeof m.SecondaryName));
+                m.RenderFlags = o.value("RENDERFLAGS").toInt();
+                auto c = o.value("COLOR").toArray();
+                if (c.size() >= 3) { m.Red = c[0].toInt(); m.Green = c[1].toInt(); m.Blue = c[2].toInt(); }
                 return m;
                 });
             item.length = uint32_t(item.data.size());
@@ -317,22 +287,22 @@ namespace {
 
     // Serializer for chunk 0x0009 (O_W3D_CHUNK_SURRENDER_TRIANGLES)
     struct SurrenderTrianglesSerializer : ChunkSerializer {
-        ordered_json toJson(const ChunkItem& item) const override {
-            ordered_json obj;
+        QJsonObject toJson(const ChunkItem& item) const override {
+            QJsonObject obj;
             obj["SURRENDER_TRIANGLES"] = structsToJsonArray<W3dSurrenderTriStruct>(
                 item.data,
                 [](const W3dSurrenderTriStruct& t) {
-                    ordered_json to;
-                    ordered_json vi = ordered_json::array(); for (int i = 0; i < 3; ++i) vi.push_back(int(t.VIndex[i]));
+                    QJsonObject to;
+                    QJsonArray vi; for (int i = 0; i < 3; ++i) vi.append(int(t.VIndex[i]));
                     to["VINDEX"] = vi;
-                    ordered_json tc = ordered_json::array();
-                    for (int i = 0; i < 3; ++i) tc.push_back(ordered_json::array({ t.TexCoord[i].U, t.TexCoord[i].V }));
+                    QJsonArray tc;
+                    for (int i = 0; i < 3; ++i) tc.append(QJsonArray{ t.TexCoord[i].U, t.TexCoord[i].V });
                     to["TEXCOORD"] = tc;
                     to["MATERIALIDX"] = int(t.MaterialIDx);
-                    to["NORMAL"] = ordered_json::array({ t.Normal.X, t.Normal.Y, t.Normal.Z });
+                    to["NORMAL"] = QJsonArray{ t.Normal.X, t.Normal.Y, t.Normal.Z };
                     to["ATTRIBUTES"] = int(t.Attributes);
-                    ordered_json g = ordered_json::array();
-                    for (int i = 0; i < 3; ++i) g.push_back(ordered_json::array({ int(t.Gouraud[i].R), int(t.Gouraud[i].G), int(t.Gouraud[i].B) }));
+                    QJsonArray g;
+                    for (int i = 0; i < 3; ++i) g.append(QJsonArray{ int(t.Gouraud[i].R), int(t.Gouraud[i].G), int(t.Gouraud[i].B) });
                     to["GOURAUD"] = g;
                     return to;
                 }
@@ -340,28 +310,26 @@ namespace {
             return obj;
         }
 
-        void fromJson(const ordered_json& dataObj, ChunkItem& item) const override {
-            auto arr = dataObj.value("SURRENDER_TRIANGLES", ordered_json::array());
-            item.data = jsonArrayToStructs<W3dSurrenderTriStruct>(arr, [](const ordered_json& val) {
+        void fromJson(const QJsonObject& dataObj, ChunkItem& item) const override {
+            QJsonArray arr = dataObj.value("SURRENDER_TRIANGLES").toArray();
+            item.data = jsonArrayToStructs<W3dSurrenderTriStruct>(arr, [](const QJsonValue& val) {
                 W3dSurrenderTriStruct t{};
-                if (val.is_object()) {
-                    auto o = val;
-                    auto vi = o.value("VINDEX", ordered_json::array());
-                    for (size_t i = 0; i < 3 && i < vi.size(); ++i) t.VIndex[i] = vi[i].get<int>();
-                    auto tcArr = o.value("TEXCOORD", ordered_json::array());
-                    for (size_t i = 0; i < 3 && i < tcArr.size(); ++i) {
-                        auto a = tcArr[i];
-                        if (a.is_array() && a.size() >= 2) { t.TexCoord[i].U = a[0].get<float>(); t.TexCoord[i].V = a[1].get<float>(); }
-                    }
-                    t.MaterialIDx = o.value("MATERIALIDX", 0);
-                    auto n = o.value("NORMAL", ordered_json::array());
-                    if (n.size() >= 3) { t.Normal.X = n[0].get<float>(); t.Normal.Y = n[1].get<float>(); t.Normal.Z = n[2].get<float>(); }
-                    t.Attributes = o.value("ATTRIBUTES", 0);
-                    auto gArr = o.value("GOURAUD", ordered_json::array());
-                    for (size_t i = 0; i < 3 && i < gArr.size(); ++i) {
-                        auto ga = gArr[i];
-                        if (ga.is_array() && ga.size() >= 3) { t.Gouraud[i].R = ga[0].get<int>(); t.Gouraud[i].G = ga[1].get<int>(); t.Gouraud[i].B = ga[2].get<int>(); }
-                    }
+                QJsonObject o = val.toObject();
+                QJsonArray vi = o.value("VINDEX").toArray();
+                for (int i = 0; i < 3 && i < vi.size(); ++i) t.VIndex[i] = vi[i].toInt();
+                QJsonArray tcArr = o.value("TEXCOORD").toArray();
+                for (int i = 0; i < 3 && i < tcArr.size(); ++i) {
+                    auto a = tcArr[i].toArray();
+                    if (a.size() >= 2) { t.TexCoord[i].U = a[0].toDouble(); t.TexCoord[i].V = a[1].toDouble(); }
+                }
+                t.MaterialIDx = o.value("MATERIALIDX").toInt();
+                QJsonArray n = o.value("NORMAL").toArray();
+                if (n.size() >= 3) { t.Normal.X = n[0].toDouble(); t.Normal.Y = n[1].toDouble(); t.Normal.Z = n[2].toDouble(); }
+                t.Attributes = o.value("ATTRIBUTES").toInt();
+                QJsonArray gArr = o.value("GOURAUD").toArray();
+                for (int i = 0; i < 3 && i < gArr.size(); ++i) {
+                    auto ga = gArr[i].toArray();
+                    if (ga.size() >= 3) { t.Gouraud[i].R = ga[0].toInt(); t.Gouraud[i].G = ga[1].toInt(); t.Gouraud[i].B = ga[2].toInt(); }
                 }
                 return t;
                 });
@@ -371,38 +339,39 @@ namespace {
 
     // Serializer for chunk 0x000C (W3D_CHUNK_MESH_USER_TEXT)
     struct MeshUserTextSerializer : ChunkSerializer {
-        ordered_json toJson(const ChunkItem& item) const override {
-            ordered_json obj;
-            std::string text(reinterpret_cast<const char*>(item.data.data()), item.data.size());
+        QJsonObject toJson(const ChunkItem& item) const override {
+            QJsonObject obj;
+            QString text = QString::fromUtf8(reinterpret_cast<const char*>(item.data.data()), int(item.data.size()));
             obj["TEXT"] = text;
             return obj;
         }
 
-        void fromJson(const ordered_json& dataObj, ChunkItem& item) const override {
-            std::string text = dataObj.value("TEXT", "");
+        void fromJson(const QJsonObject& dataObj, ChunkItem& item) const override {
+            QByteArray text = dataObj.value("TEXT").toString().toUtf8();
             item.length = uint32_t(text.size() + 1);
             item.data.resize(item.length);
-            std::memcpy(item.data.data(), text.data(), text.size());
+            std::memcpy(item.data.data(), text.constData(), text.size());
             item.data[text.size()] = 0;
         }
     };
 
     // Serializer for chunk 0x000D (W3D_CHUNK_VERTEX_COLORS)
     struct VertexColorsSerializer : ChunkSerializer {
-        ordered_json toJson(const ChunkItem& item) const override {
-            ordered_json obj;
+        QJsonObject toJson(const ChunkItem& item) const override {
+            QJsonObject obj;
             obj["VERTEX_COLORS"] = structsToJsonArray<W3dRGBStruct>(
                 item.data,
-                [](const W3dRGBStruct& c) { return ordered_json::array({ int(c.R), int(c.G), int(c.B) }); }
+                [](const W3dRGBStruct& c) { return QJsonArray{ int(c.R), int(c.G), int(c.B) }; }
             );
             return obj;
         }
 
-        void fromJson(const ordered_json& dataObj, ChunkItem& item) const override {
-            auto arr = dataObj.value("VERTEX_COLORS", ordered_json::array());
-            item.data = jsonArrayToStructs<W3dRGBStruct>(arr, [](const ordered_json& val) {
+        void fromJson(const QJsonObject& dataObj, ChunkItem& item) const override {
+            QJsonArray arr = dataObj.value("VERTEX_COLORS").toArray();
+            item.data = jsonArrayToStructs<W3dRGBStruct>(arr, [](const QJsonValue& val) {
                 W3dRGBStruct c{};
-                if (val.is_array() && val.size() >= 3) { c.R = val[0].get<int>(); c.G = val[1].get<int>(); c.B = val[2].get<int>(); }
+                auto a = val.toArray();
+                if (a.size() >= 3) { c.R = a[0].toInt(); c.G = a[1].toInt(); c.B = a[2].toInt(); }
                 return c;
                 });
             item.length = uint32_t(item.data.size());
@@ -411,14 +380,14 @@ namespace {
 
     // Serializer for chunk 0x000E (W3D_CHUNK_VERTEX_INFLUENCES)
     struct VertexInfluencesSerializer : ChunkSerializer {
-        ordered_json toJson(const ChunkItem& item) const override {
-            ordered_json obj;
+        QJsonObject toJson(const ChunkItem& item) const override {
+            QJsonObject obj;
             obj["VERTEX_INFLUENCES"] = structsToJsonArray<W3dVertInfStruct>(
                 item.data,
                 [](const W3dVertInfStruct& v) {
-                    ordered_json o;
-                    ordered_json b = ordered_json::array(); for (int i = 0; i < 2; ++i) b.push_back(int(v.BoneIdx[i]));
-                    ordered_json w = ordered_json::array(); for (int i = 0; i < 2; ++i) w.push_back(int(v.Weight[i]));
+                    QJsonObject o;
+                    QJsonArray b; for (int i = 0; i < 2; ++i) b.append(int(v.BoneIdx[i]));
+                    QJsonArray w; for (int i = 0; i < 2; ++i) w.append(int(v.Weight[i]));
                     o["BONEIDX"] = b;
                     o["WEIGHT"] = w;
                     return o;
@@ -427,17 +396,15 @@ namespace {
             return obj;
         }
 
-        void fromJson(const ordered_json& dataObj, ChunkItem& item) const override {
-            auto arr = dataObj.value("VERTEX_INFLUENCES", ordered_json::array());
-            item.data = jsonArrayToStructs<W3dVertInfStruct>(arr, [](const ordered_json& val) {
+        void fromJson(const QJsonObject& dataObj, ChunkItem& item) const override {
+            QJsonArray arr = dataObj.value("VERTEX_INFLUENCES").toArray();
+            item.data = jsonArrayToStructs<W3dVertInfStruct>(arr, [](const QJsonValue& val) {
                 W3dVertInfStruct v{};
-                if (val.is_object()) {
-                    auto o = val;
-                    auto b = o.value("BONEIDX", ordered_json::array());
-                    for (size_t i = 0; i < 2 && i < b.size(); ++i) v.BoneIdx[i] = static_cast<uint16_t>(b[i].get<int>());
-                    auto w = o.value("WEIGHT", ordered_json::array());
-                    for (size_t i = 0; i < 2 && i < w.size(); ++i) v.Weight[i] = static_cast<uint16_t>(w[i].get<int>());
-                }
+                QJsonObject o = val.toObject();
+                QJsonArray b = o.value("BONEIDX").toArray();
+                for (int i = 0; i < 2 && i < b.size(); ++i) v.BoneIdx[i] = uint16_t(b[i].toInt());
+                QJsonArray w = o.value("WEIGHT").toArray();
+                for (int i = 0; i < 2 && i < w.size(); ++i) v.Weight[i] = uint16_t(w[i].toInt());
                 return v;
                 });
             item.length = uint32_t(item.data.size());
@@ -3880,285 +3847,8 @@ namespace {
 
             item.length = out.size();
             item.data.assign(out.begin(), out.end());
-}
-};
-
-
-struct ShdMeshNameSerializer : ChunkSerializer {
-    QJsonObject toJson(const ChunkItem& item) const override {
-        QJsonObject obj;
-        QString text = QString::fromUtf8(reinterpret_cast<const char*>(item.data.data()), int(item.data.size()));
-        obj["NAME"] = text;
-        return obj;
-    }
-    void fromJson(const QJsonObject& dataObj, ChunkItem& item) const override {
-        QByteArray text = dataObj.value("NAME").toString().toUtf8();
-        item.length = uint32_t(text.size() + 1);
-        item.data.resize(item.length);
-        std::memcpy(item.data.data(), text.constData(), text.size());
-        item.data[text.size()] = 0;
-    }
-};
-
-struct ShdMeshHeaderSerializer : ChunkSerializer {
-    QJsonObject toJson(const ChunkItem& item) const override {
-        QJsonObject obj;
-        if (item.data.size() >= sizeof(W3dShdMeshHeaderStruct)) {
-            const auto* h = reinterpret_cast<const W3dShdMeshHeaderStruct*>(item.data.data());
-            obj["VERSION"] = QString::fromStdString(FormatUtils::FormatVersion(h->Version));
-            obj["MESHFLAGS"] = int(h->MeshFlags);
-            obj["NUMTRIANGLES"] = int(h->NumTriangles);
-            obj["NUMVERTICES"] = int(h->NumVertices);
-            obj["NUMSUBMESHES"] = int(h->NumSubMeshes);
-            QJsonArray fc; for (int i = 0; i < 5; ++i) fc.append(int(h->FutureCounts[i]));
-            obj["FUTURECOUNTS"] = fc;
-            obj["BOXMIN"] = QJsonArray{ h->BoxMin.X, h->BoxMin.Y, h->BoxMin.Z };
-            obj["BOXMAX"] = QJsonArray{ h->BoxMax.X, h->BoxMax.Y, h->BoxMax.Z };
-            obj["SPHCENTER"] = QJsonArray{ h->SphCenter.X, h->SphCenter.Y, h->SphCenter.Z };
-            obj["SPHRADIUS"] = h->SphRadius;
         }
-        return obj;
-    }
-    void fromJson(const QJsonObject& dataObj, ChunkItem& item) const override {
-        W3dShdMeshHeaderStruct h{};
-        QString verStr = dataObj.value("VERSION").toString();
-        auto parts = verStr.split('.');
-        if (parts.size() == 2) h.Version = (parts[0].toUInt() << 16) | parts[1].toUInt();
-        h.MeshFlags = dataObj.value("MESHFLAGS").toInt();
-        h.NumTriangles = dataObj.value("NUMTRIANGLES").toInt();
-        h.NumVertices = dataObj.value("NUMVERTICES").toInt();
-        h.NumSubMeshes = dataObj.value("NUMSUBMESHES").toInt();
-        QJsonArray fc = dataObj.value("FUTURECOUNTS").toArray();
-        for (int i = 0; i < 5 && i < fc.size(); ++i) h.FutureCounts[i] = fc[i].toInt();
-        QJsonArray bmin = dataObj.value("BOXMIN").toArray();
-        if (bmin.size() >= 3) { h.BoxMin.X = bmin[0].toDouble(); h.BoxMin.Y = bmin[1].toDouble(); h.BoxMin.Z = bmin[2].toDouble(); }
-        QJsonArray bmax = dataObj.value("BOXMAX").toArray();
-        if (bmax.size() >= 3) { h.BoxMax.X = bmax[0].toDouble(); h.BoxMax.Y = bmax[1].toDouble(); h.BoxMax.Z = bmax[2].toDouble(); }
-        QJsonArray sph = dataObj.value("SPHCENTER").toArray();
-        if (sph.size() >= 3) { h.SphCenter.X = sph[0].toDouble(); h.SphCenter.Y = sph[1].toDouble(); h.SphCenter.Z = sph[2].toDouble(); }
-        h.SphRadius = dataObj.value("SPHRADIUS").toDouble();
-        item.length = sizeof(W3dShdMeshHeaderStruct);
-        item.data.resize(item.length);
-        std::memcpy(item.data.data(), &h, sizeof(h));
-    }
-};
-
-struct ShdSubMeshHeaderSerializer : ChunkSerializer {
-    QJsonObject toJson(const ChunkItem& item) const override {
-        QJsonObject obj;
-        if (item.data.size() >= sizeof(W3dShdSubMeshHeaderStruct)) {
-            const auto* h = reinterpret_cast<const W3dShdSubMeshHeaderStruct*>(item.data.data());
-            obj["NUMTRIANGLES"] = int(h->NumTriangles);
-            obj["NUMVERTICES"] = int(h->NumVertices);
-            QJsonArray fc; for (int i = 0; i < 2; ++i) fc.append(int(h->FutureCounts[i]));
-            obj["FUTURECOUNTS"] = fc;
-            obj["BOXMIN"] = QJsonArray{ h->BoxMin.X, h->BoxMin.Y, h->BoxMin.Z };
-            obj["BOXMAX"] = QJsonArray{ h->BoxMax.X, h->BoxMax.Y, h->BoxMax.Z };
-            obj["SPHCENTER"] = QJsonArray{ h->SphCenter.X, h->SphCenter.Y, h->SphCenter.Z };
-            obj["SPHRADIUS"] = h->SphRadius;
-        }
-        return obj;
-    }
-    void fromJson(const QJsonObject& dataObj, ChunkItem& item) const override {
-        W3dShdSubMeshHeaderStruct h{};
-        h.NumTriangles = dataObj.value("NUMTRIANGLES").toInt();
-        h.NumVertices = dataObj.value("NUMVERTICES").toInt();
-        QJsonArray fc = dataObj.value("FUTURECOUNTS").toArray();
-        for (int i = 0; i < 2 && i < fc.size(); ++i) h.FutureCounts[i] = fc[i].toInt();
-        QJsonArray bmin = dataObj.value("BOXMIN").toArray();
-        if (bmin.size() >= 3) { h.BoxMin.X = bmin[0].toDouble(); h.BoxMin.Y = bmin[1].toDouble(); h.BoxMin.Z = bmin[2].toDouble(); }
-        QJsonArray bmax = dataObj.value("BOXMAX").toArray();
-        if (bmax.size() >= 3) { h.BoxMax.X = bmax[0].toDouble(); h.BoxMax.Y = bmax[1].toDouble(); h.BoxMax.Z = bmax[2].toDouble(); }
-        QJsonArray sph = dataObj.value("SPHCENTER").toArray();
-        if (sph.size() >= 3) { h.SphCenter.X = sph[0].toDouble(); h.SphCenter.Y = sph[1].toDouble(); h.SphCenter.Z = sph[2].toDouble(); }
-        h.SphRadius = dataObj.value("SPHRADIUS").toDouble();
-        item.length = sizeof(W3dShdSubMeshHeaderStruct);
-        item.data.resize(item.length);
-        std::memcpy(item.data.data(), &h, sizeof(h));
-    }
-};
-
-struct ShdSubMeshShaderClassIdSerializer : ChunkSerializer {
-    QJsonObject toJson(const ChunkItem& item) const override {
-        QJsonObject obj;
-        if (item.data.size() >= sizeof(W3dShdSubMeshShaderClassIdStruct)) {
-            const auto* s = reinterpret_cast<const W3dShdSubMeshShaderClassIdStruct*>(item.data.data());
-            obj["CLASSID"] = int(s->ShaderClass);
-        }
-        return obj;
-    }
-    void fromJson(const QJsonObject& dataObj, ChunkItem& item) const override {
-        W3dShdSubMeshShaderClassIdStruct s{};
-        s.ShaderClass = dataObj.value("CLASSID").toInt();
-        item.length = sizeof(W3dShdSubMeshShaderClassIdStruct);
-        item.data.resize(item.length);
-        std::memcpy(item.data.data(), &s, sizeof(s));
-    }
-};
-
-struct ShdSubMeshTrianglesSerializer : ChunkSerializer {
-    struct W3dTri16Struct { uint16_t I, J, K; };
-    QJsonObject toJson(const ChunkItem& item) const override {
-        QJsonObject obj;
-        obj["TRIANGLES"] = structsToJsonArray<W3dTri16Struct>(
-            item.data,
-            [](const W3dTri16Struct& t) {
-                QJsonArray arr; arr.append(int(t.I)); arr.append(int(t.J)); arr.append(int(t.K));
-                return QJsonValue(arr);
-            }
-        );
-        return obj;
-    }
-    void fromJson(const QJsonObject& dataObj, ChunkItem& item) const override {
-        QJsonArray arr = dataObj.value("TRIANGLES").toArray();
-        item.data = jsonArrayToStructs<W3dTri16Struct>(arr, [](const QJsonValue& val) {
-            W3dTri16Struct t{}; QJsonArray a = val.toArray();
-            if (a.size() >= 3) { t.I = uint16_t(a[0].toInt()); t.J = uint16_t(a[1].toInt()); t.K = uint16_t(a[2].toInt()); }
-            return t;
-            });
-        item.length = uint32_t(item.data.size());
-    }
-};
-
-struct ShdSubMeshUV0Serializer : ChunkSerializer {
-    QJsonObject toJson(const ChunkItem& item) const override {
-        QJsonObject obj;
-        obj["UV0"] = structsToJsonArray<W3dTexCoordStruct>(
-            item.data,
-            [](const W3dTexCoordStruct& t) { return QJsonArray{ t.U, t.V }; }
-        );
-        return obj;
-    }
-    void fromJson(const QJsonObject& dataObj, ChunkItem& item) const override {
-        QJsonArray arr = dataObj.value("UV0").toArray();
-        item.data = jsonArrayToStructs<W3dTexCoordStruct>(arr, [](const QJsonValue& val) {
-            W3dTexCoordStruct t{}; QJsonArray a = val.toArray();
-            if (a.size() >= 2) { t.U = a[0].toDouble(); t.V = a[1].toDouble(); }
-            return t;
-            });
-        item.length = uint32_t(item.data.size());
-    }
-};
-
-struct ShdSubMeshUV1Serializer : ChunkSerializer {
-    QJsonObject toJson(const ChunkItem& item) const override {
-        QJsonObject obj;
-        obj["UV1"] = structsToJsonArray<W3dTexCoordStruct>(
-            item.data,
-            [](const W3dTexCoordStruct& t) { return QJsonArray{ t.U, t.V }; }
-        );
-        return obj;
-    }
-    void fromJson(const QJsonObject& dataObj, ChunkItem& item) const override {
-        QJsonArray arr = dataObj.value("UV1").toArray();
-        item.data = jsonArrayToStructs<W3dTexCoordStruct>(arr, [](const QJsonValue& val) {
-            W3dTexCoordStruct t{}; QJsonArray a = val.toArray();
-            if (a.size() >= 2) { t.U = a[0].toDouble(); t.V = a[1].toDouble(); }
-            return t;
-            });
-        item.length = uint32_t(item.data.size());
-    }
-};
-
-struct ShdSubMeshTangentBasisSSerializer : ChunkSerializer {
-    QJsonObject toJson(const ChunkItem& item) const override {
-        QJsonObject obj;
-        obj["TANGENT_BASIS_S"] = structsToJsonArray<W3dVectorStruct>(
-            item.data,
-            [](const W3dVectorStruct& v) { return QJsonArray{ v.X, v.Y, v.Z }; }
-        );
-        return obj;
-    }
-    void fromJson(const QJsonObject& dataObj, ChunkItem& item) const override {
-        QJsonArray arr = dataObj.value("TANGENT_BASIS_S").toArray();
-        item.data = jsonArrayToStructs<W3dVectorStruct>(arr, [](const QJsonValue& val) {
-            W3dVectorStruct v{}; QJsonArray a = val.toArray();
-            if (a.size() >= 3) { v.X = a[0].toDouble(); v.Y = a[1].toDouble(); v.Z = a[2].toDouble(); }
-            return v;
-            });
-        item.length = uint32_t(item.data.size());
-    }
-};
-
-struct ShdSubMeshTangentBasisTSerializer : ChunkSerializer {
-    QJsonObject toJson(const ChunkItem& item) const override {
-        QJsonObject obj;
-        obj["TANGENT_BASIS_T"] = structsToJsonArray<W3dVectorStruct>(
-            item.data,
-            [](const W3dVectorStruct& v) { return QJsonArray{ v.X, v.Y, v.Z }; }
-        );
-        return obj;
-    }
-    void fromJson(const QJsonObject& dataObj, ChunkItem& item) const override {
-        QJsonArray arr = dataObj.value("TANGENT_BASIS_T").toArray();
-        item.data = jsonArrayToStructs<W3dVectorStruct>(arr, [](const QJsonValue& val) {
-            W3dVectorStruct v{}; QJsonArray a = val.toArray();
-            if (a.size() >= 3) { v.X = a[0].toDouble(); v.Y = a[1].toDouble(); v.Z = a[2].toDouble(); }
-            return v;
-            });
-        item.length = uint32_t(item.data.size());
-    }
-};
-
-struct ShdSubMeshTangentBasisSXTSerializer : ChunkSerializer {
-    QJsonObject toJson(const ChunkItem& item) const override {
-        QJsonObject obj;
-        obj["TANGENT_BASIS_SXT"] = structsToJsonArray<W3dVectorStruct>(
-            item.data,
-            [](const W3dVectorStruct& v) { return QJsonArray{ v.X, v.Y, v.Z }; }
-        );
-        return obj;
-    }
-    void fromJson(const QJsonObject& dataObj, ChunkItem& item) const override {
-        QJsonArray arr = dataObj.value("TANGENT_BASIS_SXT").toArray();
-        item.data = jsonArrayToStructs<W3dVectorStruct>(arr, [](const QJsonValue& val) {
-            W3dVectorStruct v{}; QJsonArray a = val.toArray();
-            if (a.size() >= 3) { v.X = a[0].toDouble(); v.Y = a[1].toDouble(); v.Z = a[2].toDouble(); }
-            return v;
-            });
-        item.length = uint32_t(item.data.size());
-    }
-};
-
-struct SecondaryVerticesSerializer : ChunkSerializer {
-    QJsonObject toJson(const ChunkItem& item) const override {
-        QJsonObject obj;
-        obj["SECONDARY_VERTICES"] = structsToJsonArray<W3dVectorStruct>(
-            item.data,
-            [](const W3dVectorStruct& v) { return QJsonArray{ v.X, v.Y, v.Z }; }
-        );
-        return obj;
-    }
-    void fromJson(const QJsonObject& dataObj, ChunkItem& item) const override {
-        QJsonArray arr = dataObj.value("SECONDARY_VERTICES").toArray();
-        item.data = jsonArrayToStructs<W3dVectorStruct>(arr, [](const QJsonValue& val) {
-            W3dVectorStruct v{}; QJsonArray a = val.toArray();
-            if (a.size() >= 3) { v.X = a[0].toDouble(); v.Y = a[1].toDouble(); v.Z = a[2].toDouble(); }
-            return v;
-            });
-        item.length = uint32_t(item.data.size());
-    }
-};
-
-struct SecondaryVertexNormalsSerializer : ChunkSerializer {
-    QJsonObject toJson(const ChunkItem& item) const override {
-        QJsonObject obj;
-        obj["SECONDARY_VERTEX_NORMALS"] = structsToJsonArray<W3dVectorStruct>(
-            item.data,
-            [](const W3dVectorStruct& v) { return QJsonArray{ v.X, v.Y, v.Z }; }
-        );
-        return obj;
-    }
-    void fromJson(const QJsonObject& dataObj, ChunkItem& item) const override {
-        QJsonArray arr = dataObj.value("SECONDARY_VERTEX_NORMALS").toArray();
-        item.data = jsonArrayToStructs<W3dVectorStruct>(arr, [](const QJsonValue& val) {
-            W3dVectorStruct v{}; QJsonArray a = val.toArray();
-            if (a.size() >= 3) { v.X = a[0].toDouble(); v.Y = a[1].toDouble(); v.Z = a[2].toDouble(); }
-            return v;
-            });
-        item.length = uint32_t(item.data.size());
-    }
-};
+    };
 
 
 
@@ -4279,18 +3969,6 @@ struct SecondaryVertexNormalsSerializer : ChunkSerializer {
     static const DazzleTypenameSerializer dazzleTypenameSerializerInstance;
     static const SoundRObjHeaderSerializer soundRObjHeaderSerializerInstance;
     static const SoundRObjDefinitionSerializer soundRObjDefinitionSerializerInstance;
-    static const ShdMeshNameSerializer shdMeshNameSerializerInstance;
-    static const ShdMeshHeaderSerializer shdMeshHeaderSerializerInstance;
-    static const ShdSubMeshHeaderSerializer shdSubMeshHeaderSerializerInstance;
-    static const ShdSubMeshShaderClassIdSerializer shdSubMeshShaderClassIdSerializerInstance;
-    static const ShdSubMeshTrianglesSerializer shdSubMeshTrianglesSerializerInstance;
-    static const ShdSubMeshUV0Serializer shdSubMeshUV0SerializerInstance;
-    static const ShdSubMeshUV1Serializer shdSubMeshUV1SerializerInstance;
-    static const ShdSubMeshTangentBasisSSerializer shdSubMeshTangentBasisSSerializerInstance;
-    static const ShdSubMeshTangentBasisTSerializer shdSubMeshTangentBasisTSerializerInstance;
-    static const ShdSubMeshTangentBasisSXTSerializer shdSubMeshTangentBasisSXTSerializerInstance;
-    static const SecondaryVerticesSerializer secondaryVerticesSerializerInstance;
-    static const SecondaryVertexNormalsSerializer secondaryVertexNormalsSerializerInstance;
 } // namespace
 
 const std::unordered_map<uint32_t, const ChunkSerializer*>& chunkSerializerRegistry() {
@@ -4408,24 +4086,6 @@ const std::unordered_map<uint32_t, const ChunkSerializer*>& chunkSerializerRegis
         {0x0902, &dazzleTypenameSerializerInstance},
         {0x0A01, &soundRObjHeaderSerializerInstance},
         {0x0A02, &soundRObjDefinitionSerializerInstance},
-        {0x0B01, &shdMeshNameSerializerInstance },
-        {0x0B02, &shdMeshHeaderSerializerInstance },
-        {0x0B03, &meshUserTextSerializerInstance },
-        {0x0B21, &shdSubMeshHeaderSerializerInstance },
-        {0x0B41, &shdSubMeshShaderClassIdSerializerInstance },
-        {0x0B43, &verticesSerializerInstance },
-        {0x0B44, &vertexNormalsSerializerInstance },
-        {0x0B45, &shdSubMeshTrianglesSerializerInstance },
-        {0x0B46, &vertexShadeIndicesSerializerInstance },
-        {0x0B47, &shdSubMeshUV0SerializerInstance },
-        {0x0B48, &shdSubMeshUV1SerializerInstance },
-        {0x0B49, &shdSubMeshTangentBasisSSerializerInstance },
-        {0x0B4A, &shdSubMeshTangentBasisTSerializerInstance },
-        {0x0B4B, &shdSubMeshTangentBasisSXTSerializerInstance },
-        {0x0B4C, &vertexColorsSerializerInstance },
-        {0x0B4D, &vertexInfluencesSerializerInstance },
-        {0x0C00, &secondaryVerticesSerializerInstance },
-        {0x0C01, &secondaryVertexNormalsSerializerInstance },
     };
     return registry;
 }

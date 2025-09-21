@@ -1,6 +1,7 @@
 #include "ChunkJson.h"
 
 #include <nlohmann/json.hpp>
+#include "JsonCompat.h"
 
 #include "ChunkItem.h"
 #include "ChunkNames.h"
@@ -29,7 +30,7 @@ ordered_json ChunkJson::toJson(const ChunkItem& item) {
         const auto& registry = chunkSerializerRegistry();
         auto it = registry.find(item.id);
         if (it != registry.end()) {
-            obj["DATA"] = it->second->toJson(item);
+            obj["DATA"] = toOrdered(it->second->toJson(item));
         }
         
     }
@@ -57,7 +58,7 @@ std::shared_ptr<ChunkItem> ChunkJson::fromJson(const ordered_json& obj, ChunkIte
         const auto& registry = chunkSerializerRegistry();
         auto it = registry.find(item->id);
         if (it != registry.end()) {
-            it->second->fromJson(obj.at("DATA"), *item);
+            it->second->fromJson(toQJsonObject(obj.at("DATA")), *item);
         }
     }
 
