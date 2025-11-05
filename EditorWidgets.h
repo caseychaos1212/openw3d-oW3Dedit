@@ -13,9 +13,14 @@ class QCheckBox;
 class QComboBox;
 class QSpinBox;
 class QDoubleSpinBox;
+class QLabel;
+class QFormLayout;
+class QVBoxLayout;
+
+#include "backend/W3DStructs.h"
+#include "backend/ChunkItem.h"
 
 class ChunkItem;
-struct W3dRGBStruct;
 
 class MeshEditorWidget : public QWidget {
     Q_OBJECT
@@ -101,4 +106,45 @@ private:
     void populateStageCombo(QComboBox* combo, int stage);
     void setColor(const W3dRGBStruct& src, ColorControls& dest);
     void readColor(W3dRGBStruct& dest, const ColorControls& src) const;
+};
+
+class ShaderEditorWidget : public QWidget {
+    Q_OBJECT
+public:
+    explicit ShaderEditorWidget(QWidget* parent = nullptr);
+    void setChunk(const std::shared_ptr<ChunkItem>& chunk);
+
+signals:
+    void chunkEdited();
+
+private slots:
+    void applyChanges();
+
+private:
+    void loadShader(int index);
+    void updateControls(const W3dShaderStruct& shader);
+    W3dShaderStruct captureCurrent() const;
+
+    std::weak_ptr<ChunkItem> chunk;
+    std::vector<W3dShaderStruct> shaders;
+
+    QComboBox* shaderIndexCombo = nullptr;
+    QComboBox* depthCompareCombo = nullptr;
+    QComboBox* depthMaskCombo = nullptr;
+    QComboBox* destBlendCombo = nullptr;
+    QComboBox* priGradientCombo = nullptr;
+    QComboBox* secGradientCombo = nullptr;
+    QComboBox* srcBlendCombo = nullptr;
+    QComboBox* texturingCombo = nullptr;
+    QComboBox* detailColorCombo = nullptr;
+    QComboBox* detailAlphaCombo = nullptr;
+    QComboBox* alphaTestCombo = nullptr;
+    QComboBox* postDetailColorCombo = nullptr;
+    QComboBox* postDetailAlphaCombo = nullptr;
+
+    QSpinBox* colorMaskSpin = nullptr;
+    QSpinBox* fogFuncSpin = nullptr;
+    QSpinBox* shaderPresetSpin = nullptr;
+
+    QPushButton* applyButton = nullptr;
 };

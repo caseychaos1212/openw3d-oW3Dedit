@@ -11,6 +11,7 @@ class QStackedWidget;
 class MeshEditorWidget;
 class StringEditorWidget;
 class MaterialEditorWidget;
+class ShaderEditorWidget;
 
 
 
@@ -50,6 +51,7 @@ private:
     StringEditorWidget* textureNameEditor = nullptr;
     StringEditorWidget* materialNameEditor = nullptr;
     MaterialEditorWidget* materialEditor = nullptr;
+    ShaderEditorWidget* shaderEditor = nullptr;
     QWidget* editorPlaceholder = nullptr;
     std::shared_ptr<ChunkItem> currentChunk;
     QString currentFilePath;

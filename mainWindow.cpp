@@ -41,6 +41,8 @@
 #include <vector>
 #include <cstring>
 #include <variant>
+#include <type_traits>
+#include <QSignalBlocker>
 
 static std::size_t TruncatedLength(const char* data, std::size_t maxLen) {
     std::size_t len = 0;
@@ -59,6 +61,33 @@ constexpr uint32_t MeshAttrValue(MeshAttr attr) {
 }
 
 constexpr int kMeshNameMax = static_cast<int>(W3D_NAME_LEN) - 1;
+
+template <typename Enum>
+static void PopulateEnumCombo(QComboBox* combo) {
+    combo->clear();
+    using Under = std::underlying_type_t<Enum>;
+    for (Under i = 0; i < static_cast<Under>(Enum::MAX); ++i) {
+        const auto name = ToString(static_cast<Enum>(i));
+        combo->addItem(QString::fromUtf8(name), static_cast<int>(i));
+    }
+}
+
+static void SetComboValue(QComboBox* combo, int value) {
+    int idx = combo->findData(value);
+    if (idx == -1) {
+        combo->addItem(QString::fromLatin1("Unknown (%1)").arg(value), value);
+        idx = combo->count() - 1;
+    }
+    combo->setCurrentIndex(idx);
+}
+
+static uint8_t ComboValue(const QComboBox* combo) {
+    const QVariant data = combo->currentData();
+    if (!data.isValid()) {
+        return static_cast<uint8_t>(combo->currentIndex());
+    }
+    return static_cast<uint8_t>(data.toInt());
+}
 
 Q_DECLARE_METATYPE(void*)
 
@@ -166,6 +195,222 @@ void MeshEditorWidget::applyChanges() {
         return;
     }
 
+    emit chunkEdited();
+}
+
+ShaderEditorWidget::ShaderEditorWidget(QWidget* parent)
+    : QWidget(parent) {
+    setEnabled(false);
+
+    auto* layout = new QVBoxLayout(this);
+    layout->setContentsMargins(0, 0, 0, 0);
+    layout->setSpacing(6);
+
+    auto* headerForm = new QFormLayout();
+    shaderIndexCombo = new QComboBox(this);
+    headerForm->addRow(tr("Shader"), shaderIndexCombo);
+    layout->addLayout(headerForm);
+
+    auto* form = new QFormLayout();
+
+    depthCompareCombo = new QComboBox(this);
+    PopulateEnumCombo<DepthCompare>(depthCompareCombo);
+    form->addRow(tr("Depth Compare"), depthCompareCombo);
+
+    depthMaskCombo = new QComboBox(this);
+    PopulateEnumCombo<DepthMask>(depthMaskCombo);
+    form->addRow(tr("Depth Mask"), depthMaskCombo);
+
+    destBlendCombo = new QComboBox(this);
+    PopulateEnumCombo<DestBlend>(destBlendCombo);
+    form->addRow(tr("Dest Blend"), destBlendCombo);
+
+    priGradientCombo = new QComboBox(this);
+    PopulateEnumCombo<PriGradient>(priGradientCombo);
+    form->addRow(tr("Primary Gradient"), priGradientCombo);
+
+    secGradientCombo = new QComboBox(this);
+    PopulateEnumCombo<SecGradient>(secGradientCombo);
+    form->addRow(tr("Secondary Gradient"), secGradientCombo);
+
+    srcBlendCombo = new QComboBox(this);
+    PopulateEnumCombo<SrcBlend>(srcBlendCombo);
+    form->addRow(tr("Source Blend"), srcBlendCombo);
+
+    texturingCombo = new QComboBox(this);
+    PopulateEnumCombo<Texturing>(texturingCombo);
+    form->addRow(tr("Texturing"), texturingCombo);
+
+    detailColorCombo = new QComboBox(this);
+    PopulateEnumCombo<DetailColorFunc>(detailColorCombo);
+    form->addRow(tr("Detail Color Func"), detailColorCombo);
+
+    detailAlphaCombo = new QComboBox(this);
+    PopulateEnumCombo<DetailAlphaFunc>(detailAlphaCombo);
+    form->addRow(tr("Detail Alpha Func"), detailAlphaCombo);
+
+    alphaTestCombo = new QComboBox(this);
+    PopulateEnumCombo<AlphaTest>(alphaTestCombo);
+    form->addRow(tr("Alpha Test"), alphaTestCombo);
+
+    postDetailColorCombo = new QComboBox(this);
+    PopulateEnumCombo<DetailColorFunc>(postDetailColorCombo);
+    form->addRow(tr("Post Detail Color"), postDetailColorCombo);
+
+    postDetailAlphaCombo = new QComboBox(this);
+    PopulateEnumCombo<DetailAlphaFunc>(postDetailAlphaCombo);
+    form->addRow(tr("Post Detail Alpha"), postDetailAlphaCombo);
+
+    colorMaskSpin = new QSpinBox(this);
+    colorMaskSpin->setRange(0, 255);
+    form->addRow(tr("Color Mask"), colorMaskSpin);
+
+    fogFuncSpin = new QSpinBox(this);
+    fogFuncSpin->setRange(0, 255);
+    form->addRow(tr("Fog Func"), fogFuncSpin);
+
+    shaderPresetSpin = new QSpinBox(this);
+    shaderPresetSpin->setRange(0, 255);
+    form->addRow(tr("Shader Preset"), shaderPresetSpin);
+
+    layout->addLayout(form);
+
+    applyButton = new QPushButton(tr("Apply Shader Changes"), this);
+    layout->addStretch();
+    layout->addWidget(applyButton, 0, Qt::AlignRight);
+
+    connect(shaderIndexCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
+        this, [this](int idx) { loadShader(idx); });
+    connect(applyButton, &QPushButton::clicked,
+        this, &ShaderEditorWidget::applyChanges);
+}
+
+void ShaderEditorWidget::setChunk(const std::shared_ptr<ChunkItem>& chunkPtr) {
+    chunk = chunkPtr;
+    shaders.clear();
+
+    const QSignalBlocker blocker(shaderIndexCombo);
+    shaderIndexCombo->clear();
+
+    if (!chunkPtr) {
+        setEnabled(false);
+        return;
+    }
+
+    auto parsed = ParseChunkArray<W3dShaderStruct>(chunkPtr);
+    if (auto err = std::get_if<std::string>(&parsed)) {
+        Q_UNUSED(err);
+        setEnabled(false);
+        return;
+    }
+
+    shaders = std::get<std::vector<W3dShaderStruct>>(parsed);
+    if (shaders.empty()) {
+        setEnabled(false);
+        return;
+    }
+
+    for (int i = 0; i < static_cast<int>(shaders.size()); ++i) {
+        shaderIndexCombo->addItem(tr("Shader %1").arg(i), i);
+    }
+
+    setEnabled(true);
+    shaderIndexCombo->setCurrentIndex(0);
+    loadShader(0);
+}
+
+void ShaderEditorWidget::loadShader(int index) {
+    if (index < 0 || index >= static_cast<int>(shaders.size())) {
+        return;
+    }
+    updateControls(shaders[static_cast<std::size_t>(index)]);
+}
+
+void ShaderEditorWidget::updateControls(const W3dShaderStruct& shader) {
+    const QSignalBlocker block0(depthCompareCombo);
+    const QSignalBlocker block1(depthMaskCombo);
+    const QSignalBlocker block2(destBlendCombo);
+    const QSignalBlocker block3(priGradientCombo);
+    const QSignalBlocker block4(secGradientCombo);
+    const QSignalBlocker block5(srcBlendCombo);
+    const QSignalBlocker block6(texturingCombo);
+    const QSignalBlocker block7(detailColorCombo);
+    const QSignalBlocker block8(detailAlphaCombo);
+    const QSignalBlocker block9(alphaTestCombo);
+    const QSignalBlocker block10(postDetailColorCombo);
+    const QSignalBlocker block11(postDetailAlphaCombo);
+    const QSignalBlocker block12(colorMaskSpin);
+    const QSignalBlocker block13(fogFuncSpin);
+    const QSignalBlocker block14(shaderPresetSpin);
+
+    SetComboValue(depthCompareCombo, shader.DepthCompare);
+    SetComboValue(depthMaskCombo, shader.DepthMask);
+    SetComboValue(destBlendCombo, shader.DestBlend);
+    SetComboValue(priGradientCombo, shader.PriGradient);
+    SetComboValue(secGradientCombo, shader.SecGradient);
+    SetComboValue(srcBlendCombo, shader.SrcBlend);
+    SetComboValue(texturingCombo, shader.Texturing);
+    SetComboValue(detailColorCombo, shader.DetailColorFunc);
+    SetComboValue(detailAlphaCombo, shader.DetailAlphaFunc);
+    SetComboValue(alphaTestCombo, shader.AlphaTest);
+    SetComboValue(postDetailColorCombo, shader.PostDetailColorFunc);
+    SetComboValue(postDetailAlphaCombo, shader.PostDetailAlphaFunc);
+
+    colorMaskSpin->setValue(shader.ColorMask);
+    fogFuncSpin->setValue(shader.FogFunc);
+    shaderPresetSpin->setValue(shader.ShaderPreset);
+}
+
+W3dShaderStruct ShaderEditorWidget::captureCurrent() const {
+    W3dShaderStruct shader{};
+    const int idx = shaderIndexCombo->currentIndex();
+    if (idx >= 0 && idx < static_cast<int>(shaders.size())) {
+        shader = shaders[static_cast<std::size_t>(idx)];
+    }
+
+    shader.DepthCompare = ComboValue(depthCompareCombo);
+    shader.DepthMask = ComboValue(depthMaskCombo);
+    shader.DestBlend = ComboValue(destBlendCombo);
+    shader.PriGradient = ComboValue(priGradientCombo);
+    shader.SecGradient = ComboValue(secGradientCombo);
+    shader.SrcBlend = ComboValue(srcBlendCombo);
+    shader.Texturing = ComboValue(texturingCombo);
+    shader.DetailColorFunc = ComboValue(detailColorCombo);
+    shader.DetailAlphaFunc = ComboValue(detailAlphaCombo);
+    shader.AlphaTest = ComboValue(alphaTestCombo);
+    shader.PostDetailColorFunc = ComboValue(postDetailColorCombo);
+    shader.PostDetailAlphaFunc = ComboValue(postDetailAlphaCombo);
+
+    shader.ColorMask = static_cast<uint8_t>(colorMaskSpin->value());
+    shader.FogFunc = static_cast<uint8_t>(fogFuncSpin->value());
+    shader.ShaderPreset = static_cast<uint8_t>(shaderPresetSpin->value());
+
+    return shader;
+}
+
+void ShaderEditorWidget::applyChanges() {
+    auto chunkPtr = chunk.lock();
+    if (!chunkPtr) return;
+
+    const int idx = shaderIndexCombo->currentIndex();
+    if (idx < 0 || idx >= static_cast<int>(shaders.size())) return;
+
+    W3dShaderStruct updated = captureCurrent();
+
+    std::string error;
+    const bool ok = W3DEdit::MutateStructAtIndex<W3dShaderStruct>(
+        chunkPtr,
+        static_cast<std::size_t>(idx),
+        [&](W3dShaderStruct& target) { target = updated; },
+        &error);
+
+    if (!ok) {
+        QMessageBox::warning(this, tr("Error"),
+            QString::fromStdString(error.empty() ? "Failed to update shader." : error));
+        return;
+    }
+
+    shaders[static_cast<std::size_t>(idx)] = updated;
     emit chunkEdited();
 }
 
@@ -459,6 +704,9 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     materialEditor = new MaterialEditorWidget(editorStack);
     editorStack->addWidget(materialEditor);
 
+    shaderEditor = new ShaderEditorWidget(editorStack);
+    editorStack->addWidget(shaderEditor);
+
     editorStack->setCurrentWidget(editorPlaceholder);
     editorStack->setVisible(false);
     detailLayout->addWidget(editorStack);
@@ -475,6 +723,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     connect(textureNameEditor, &StringEditorWidget::chunkEdited, this, &MainWindow::onChunkEdited);
     connect(materialNameEditor, &StringEditorWidget::chunkEdited, this, &MainWindow::onChunkEdited);
     connect(materialEditor, &MaterialEditorWidget::chunkEdited, this, &MainWindow::onChunkEdited);
+    connect(shaderEditor, &ShaderEditorWidget::chunkEdited, this, &MainWindow::onChunkEdited);
 
     updateWindowTitle();
     recentFilesPath = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation) + "/recent_files.txt";
@@ -999,6 +1248,7 @@ void MainWindow::updateEditorForChunk(const std::shared_ptr<ChunkItem>& chunk) {
     textureNameEditor->setChunk(nullptr);
     materialNameEditor->setChunk(nullptr);
     materialEditor->setChunk(nullptr);
+    shaderEditor->setChunk(nullptr);
 
     if (!chunk) {
         editorStack->setCurrentWidget(editorPlaceholder);
@@ -1025,6 +1275,11 @@ void MainWindow::updateEditorForChunk(const std::shared_ptr<ChunkItem>& chunk) {
     case 0x002D: // W3D_CHUNK_VERTEX_MATERIAL_INFO
         materialEditor->setChunk(chunk);
         editorStack->setCurrentWidget(materialEditor);
+        editorStack->setVisible(true);
+        break;
+    case 0x0029: // W3D_CHUNK_SHADERS
+        shaderEditor->setChunk(chunk);
+        editorStack->setCurrentWidget(shaderEditor);
         editorStack->setVisible(true);
         break;
     default:

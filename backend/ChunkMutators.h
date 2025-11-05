@@ -56,4 +56,35 @@ bool MutateStructChunk(const std::shared_ptr<ChunkItem>& chunk, Func&& mutator, 
     return true;
 }
 
+template <typename T, typename Func>
+bool MutateStructAtIndex(const std::shared_ptr<ChunkItem>& chunk, std::size_t index, Func&& mutator, std::string* error = nullptr) {
+    static_assert(std::is_trivially_copyable_v<T>, "T must be trivially copyable");
+    if (!chunk) {
+        if (error) *error = "null chunk";
+        return false;
+    }
+    auto& buf = chunk->data;
+    if (buf.size() % sizeof(T) != 0) {
+        if (error) {
+            *error = "chunk size " + std::to_string(buf.size()) + " is not a multiple of " + std::to_string(sizeof(T));
+        }
+        return false;
+    }
+    const std::size_t count = buf.size() / sizeof(T);
+    if (index >= count) {
+        if (error) {
+            *error = "index " + std::to_string(index) + " out of range (count=" + std::to_string(count) + ")";
+        }
+        return false;
+    }
+
+    T value{};
+    std::memcpy(&value, buf.data() + index * sizeof(T), sizeof(T));
+
+    mutator(value);
+
+    std::memcpy(buf.data() + index * sizeof(T), &value, sizeof(T));
+    return true;
+}
+
 } // namespace W3DEdit
