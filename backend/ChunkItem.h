@@ -11,6 +11,7 @@ public:
     uint32_t length = 0;
     std::string typeName; 
     bool hasSubChunks;  // high bit of the raw length
+    bool isMicro = false;
     std::vector<uint8_t> data;
     std::vector<std::shared_ptr<ChunkItem>> children;
     ChunkItem* parent = nullptr; 

@@ -7,6 +7,10 @@
 
 class QTreeWidget;
 class QTableWidget;
+class QStackedWidget;
+class MeshEditorWidget;
+class StringEditorWidget;
+class MaterialEditorWidget;
 
 
 
@@ -22,6 +26,9 @@ private slots:
     void openFile(const QString& path = QString());
     void ClearChunkTree();
     void handleTreeSelection();
+    void saveFile();
+    void saveFileAs();
+    void onChunkEdited();
     void LoadRecentFiles();
     void SaveRecentFiles();
     void UpdateRecentFilesMenu();
@@ -38,5 +45,19 @@ private:
     QStringList recentFiles;
     QMenu* recentFilesMenu = nullptr;
     QString lastDirectory;
-};
+    QStackedWidget* editorStack = nullptr;
+    MeshEditorWidget* meshEditor = nullptr;
+    StringEditorWidget* textureNameEditor = nullptr;
+    StringEditorWidget* materialNameEditor = nullptr;
+    MaterialEditorWidget* materialEditor = nullptr;
+    QWidget* editorPlaceholder = nullptr;
+    std::shared_ptr<ChunkItem> currentChunk;
+    QString currentFilePath;
+    bool dirty = false;
 
+    void updateEditorForChunk(const std::shared_ptr<ChunkItem>& chunk);
+    void setDirty(bool value);
+    void updateWindowTitle();
+    bool confirmDiscardChanges();
+    void clearDetails();
+};

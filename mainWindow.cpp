@@ -11,6 +11,20 @@
 #include <QSplitter>
 #include <QTreeWidget>
 #include <QTableWidget>
+#include <QAbstractItemView>
+#include <QStackedWidget>
+#include <QVBoxLayout>
+#include <QFormLayout>
+#include <QLineEdit>
+#include <QPushButton>
+#include <QCheckBox>
+#include <QGroupBox>
+#include <QComboBox>
+#include <QSpinBox>
+#include <QDoubleSpinBox>
+#include <QLabel>
+#include <QGridLayout>
+#include <QKeySequence>
 #include <iostream>
 #include <QStandardPaths>
 #include <QTextStream>
@@ -18,35 +32,451 @@
 #include <QDir>
 #include <QFileInfo>
 #include "backend/W3DMesh.h"
+#include "backend/W3DStructs.h"
+#include "backend/ChunkMutators.h"
+#include "backend/ParseUtils.h"
+#include "EditorWidgets.h"
 #include <map>
+#include <array>
+#include <vector>
+#include <cstring>
+#include <variant>
+
+static std::size_t TruncatedLength(const char* data, std::size_t maxLen) {
+    std::size_t len = 0;
+    while (len < maxLen && data[len] != '\0') {
+        ++len;
+    }
+    return len;
+}
+
+static QString ReadFixedString(const char* data, std::size_t maxLen) {
+    return QString::fromLatin1(data, static_cast<int>(TruncatedLength(data, maxLen)));
+}
+
+constexpr uint32_t MeshAttrValue(MeshAttr attr) {
+    return static_cast<uint32_t>(attr);
+}
+
+constexpr int kMeshNameMax = static_cast<int>(W3D_NAME_LEN) - 1;
 
 Q_DECLARE_METATYPE(void*)
 
+MeshEditorWidget::MeshEditorWidget(QWidget* parent) : QWidget(parent) {
+    setEnabled(false);
+    auto* layout = new QVBoxLayout(this);
+    layout->setContentsMargins(0, 0, 0, 0);
+    layout->setSpacing(6);
+
+    auto* form = new QFormLayout();
+    meshNameEdit = new QLineEdit(this);
+    meshNameEdit->setMaxLength(kMeshNameMax);
+    containerNameEdit = new QLineEdit(this);
+    containerNameEdit->setMaxLength(kMeshNameMax);
+    form->addRow(tr("Mesh Name"), meshNameEdit);
+    form->addRow(tr("Container Name"), containerNameEdit);
+    layout->addLayout(form);
+
+    auto* collisionGroup = new QGroupBox(tr("Collision Flags"), this);
+    auto* collisionLayout = new QGridLayout(collisionGroup);
+    const std::array<std::pair<MeshAttr, const char*>, 5> kFlags = { {
+        { MeshAttr::W3D_MESH_FLAG_COLLISION_TYPE_PHYSICAL,   "Physical" },
+        { MeshAttr::W3D_MESH_FLAG_COLLISION_TYPE_PROJECTILE, "Projectile" },
+        { MeshAttr::W3D_MESH_FLAG_COLLISION_TYPE_VIS,        "Visibility" },
+        { MeshAttr::W3D_MESH_FLAG_COLLISION_TYPE_CAMERA,     "Camera" },
+        { MeshAttr::W3D_MESH_FLAG_COLLISION_TYPE_VEHICLE,    "Vehicle" },
+    } };
+    int row = 0;
+    for (const auto& [flag, label] : kFlags) {
+        auto* check = new QCheckBox(QString::fromLatin1(label), collisionGroup);
+        collisionLayout->addWidget(check, row / 2, row % 2);
+        collisionControls.push_back({ MeshAttrValue(flag), check });
+        ++row;
+    }
+    layout->addWidget(collisionGroup);
+
+    applyButton = new QPushButton(tr("Apply Mesh Changes"), this);
+    connect(applyButton, &QPushButton::clicked,
+        this, &MeshEditorWidget::applyChanges);
+
+    layout->addStretch();
+    layout->addWidget(applyButton, 0, Qt::AlignRight);
+}
+
+void MeshEditorWidget::setChunk(const std::shared_ptr<ChunkItem>& chunkPtr) {
+    chunk = chunkPtr;
+    meshNameEdit->clear();
+    containerNameEdit->clear();
+    for (auto& ctrl : collisionControls) {
+        if (ctrl.box) ctrl.box->setChecked(false);
+    }
+    if (!chunkPtr) {
+        setEnabled(false);
+        return;
+    }
+
+    auto parsed = ParseChunkStruct<W3dMeshHeader3Struct>(chunkPtr);
+    if (auto err = std::get_if<std::string>(&parsed)) {
+        Q_UNUSED(err);
+        setEnabled(false);
+        return;
+    }
+    const auto& header = std::get<W3dMeshHeader3Struct>(parsed);
+    meshNameEdit->setText(ReadFixedString(header.MeshName, W3D_NAME_LEN));
+    containerNameEdit->setText(ReadFixedString(header.ContainerName, W3D_NAME_LEN));
+
+    const uint32_t attr = header.Attributes;
+    for (auto& ctrl : collisionControls) {
+        ctrl.box->setChecked((attr & ctrl.mask) != 0);
+    }
+
+    setEnabled(true);
+}
+
+void MeshEditorWidget::applyChanges() {
+    auto chunkPtr = chunk.lock();
+    if (!chunkPtr) return;
+
+    const std::string meshName = meshNameEdit->text().toStdString();
+    const std::string containerName = containerNameEdit->text().toStdString();
+    uint32_t clearMask = 0;
+    for (const auto& ctrl : collisionControls) {
+        clearMask |= ctrl.mask;
+    }
+
+    std::string error;
+    const bool ok = W3DEdit::MutateStructChunk<W3dMeshHeader3Struct>(
+        chunkPtr,
+        [&](W3dMeshHeader3Struct& header) {
+            W3DEdit::WriteFixedString(header.MeshName, W3D_NAME_LEN, meshName);
+            W3DEdit::WriteFixedString(header.ContainerName, W3D_NAME_LEN, containerName);
+            uint32_t attr = header.Attributes & ~clearMask;
+            for (const auto& ctrl : collisionControls) {
+                if (ctrl.box->isChecked()) {
+                    attr |= ctrl.mask;
+                }
+            }
+            header.Attributes = attr;
+        },
+        &error);
+
+    if (!ok) {
+        QMessageBox::warning(this, tr("Error"),
+            QString::fromStdString(error.empty() ? "Failed to update mesh header." : error));
+        return;
+    }
+
+    emit chunkEdited();
+}
+
+StringEditorWidget::StringEditorWidget(const QString& label, QWidget* parent, int maxLength)
+    : QWidget(parent) {
+    setEnabled(false);
+    auto* layout = new QVBoxLayout(this);
+    layout->setContentsMargins(0, 0, 0, 0);
+    layout->setSpacing(6);
+
+    auto* form = new QFormLayout();
+    lineEdit = new QLineEdit(this);
+    if (maxLength > 0) {
+        lineEdit->setMaxLength(maxLength);
+    }
+    form->addRow(label, lineEdit);
+    layout->addLayout(form);
+
+    applyButton = new QPushButton(tr("Apply"), this);
+    connect(applyButton, &QPushButton::clicked,
+        this, &StringEditorWidget::applyChanges);
+
+    layout->addStretch();
+    layout->addWidget(applyButton, 0, Qt::AlignRight);
+}
+
+void StringEditorWidget::setChunk(const std::shared_ptr<ChunkItem>& chunkPtr) {
+    chunk = chunkPtr;
+    if (!chunkPtr) {
+        lineEdit->clear();
+        setEnabled(false);
+        return;
+    }
+
+    const char* raw = reinterpret_cast<const char*>(chunkPtr->data.data());
+    const auto len = chunkPtr->data.empty()
+        ? 0
+        : TruncatedLength(raw, chunkPtr->data.size());
+    lineEdit->setText(QString::fromLatin1(raw, static_cast<int>(len)));
+    setEnabled(true);
+}
+
+void StringEditorWidget::applyChanges() {
+    auto chunkPtr = chunk.lock();
+    if (!chunkPtr) return;
+
+    if (!W3DEdit::UpdateNullTermStringChunk(chunkPtr, lineEdit->text().toStdString())) {
+        QMessageBox::warning(this, tr("Error"), tr("Failed to update string chunk."));
+        return;
+    }
+    emit chunkEdited();
+}
+
+MaterialEditorWidget::MaterialEditorWidget(QWidget* parent)
+    : QWidget(parent) {
+    setEnabled(false);
+    auto* layout = new QVBoxLayout(this);
+    layout->setContentsMargins(0, 0, 0, 0);
+    layout->setSpacing(6);
+
+    auto* flagsGroup = new QGroupBox(tr("Basic Flags"), this);
+    auto* flagsLayout = new QVBoxLayout(flagsGroup);
+    for (const auto& [mask, name] : VERTMAT_BASIC_FLAGS) {
+        auto* box = new QCheckBox(QString::fromLatin1(name.data(), static_cast<int>(name.size())), flagsGroup);
+        flagsLayout->addWidget(box);
+        basicFlagControls.push_back({ static_cast<uint32_t>(mask), box });
+    }
+    layout->addWidget(flagsGroup);
+
+    auto* stageGroup = new QGroupBox(tr("Stage Mapping"), this);
+    auto* stageLayout = new QGridLayout(stageGroup);
+    stage0Combo = new QComboBox(stageGroup);
+    stage1Combo = new QComboBox(stageGroup);
+    populateStageCombo(stage0Combo, 0);
+    populateStageCombo(stage1Combo, 1);
+    stageLayout->addWidget(new QLabel(tr("Stage 0"), stageGroup), 0, 0);
+    stageLayout->addWidget(stage0Combo, 0, 1);
+    stageLayout->addWidget(new QLabel(tr("Stage 1"), stageGroup), 1, 0);
+    stageLayout->addWidget(stage1Combo, 1, 1);
+    layout->addWidget(stageGroup);
+
+    auto makeColorGroup = [&](const QString& title, ColorControls& controls) {
+        auto* group = new QGroupBox(title, this);
+        auto* grid = new QGridLayout(group);
+        controls.r = new QSpinBox(group);
+        controls.g = new QSpinBox(group);
+        controls.b = new QSpinBox(group);
+        for (auto* spin : { controls.r, controls.g, controls.b }) {
+            spin->setRange(0, 255);
+        }
+        grid->addWidget(new QLabel(tr("R"), group), 0, 0);
+        grid->addWidget(controls.r, 0, 1);
+        grid->addWidget(new QLabel(tr("G"), group), 0, 2);
+        grid->addWidget(controls.g, 0, 3);
+        grid->addWidget(new QLabel(tr("B"), group), 0, 4);
+        grid->addWidget(controls.b, 0, 5);
+        layout->addWidget(group);
+    };
+    makeColorGroup(tr("Ambient"), ambient);
+    makeColorGroup(tr("Diffuse"), diffuse);
+    makeColorGroup(tr("Specular"), specular);
+    makeColorGroup(tr("Emissive"), emissive);
+
+    auto* floatForm = new QFormLayout();
+    shininessSpin = new QDoubleSpinBox(this);
+    shininessSpin->setRange(0.0, 1000.0);
+    shininessSpin->setDecimals(2);
+    shininessSpin->setSingleStep(1.0);
+
+    opacitySpin = new QDoubleSpinBox(this);
+    opacitySpin->setRange(0.0, 1.0);
+    opacitySpin->setDecimals(3);
+    opacitySpin->setSingleStep(0.05);
+
+    translucencySpin = new QDoubleSpinBox(this);
+    translucencySpin->setRange(0.0, 1.0);
+    translucencySpin->setDecimals(3);
+    translucencySpin->setSingleStep(0.05);
+
+    floatForm->addRow(tr("Shininess"), shininessSpin);
+    floatForm->addRow(tr("Opacity"), opacitySpin);
+    floatForm->addRow(tr("Translucency"), translucencySpin);
+    layout->addLayout(floatForm);
+
+    applyButton = new QPushButton(tr("Apply Material Changes"), this);
+    connect(applyButton, &QPushButton::clicked,
+        this, &MaterialEditorWidget::applyChanges);
+
+    layout->addStretch();
+    layout->addWidget(applyButton, 0, Qt::AlignRight);
+}
+
+void MaterialEditorWidget::populateStageCombo(QComboBox* combo, int stage) {
+    combo->clear();
+    for (const auto& entry : VERTMAT_STAGE_MAPPING_CODES) {
+        combo->addItem(QString::fromStdString(StageMappingName(entry.first, stage)),
+            static_cast<int>(entry.first));
+    }
+}
+
+void MaterialEditorWidget::setColor(const W3dRGBStruct& src, ColorControls& dest) {
+    dest.r->setValue(static_cast<int>(src.R));
+    dest.g->setValue(static_cast<int>(src.G));
+    dest.b->setValue(static_cast<int>(src.B));
+}
+
+void MaterialEditorWidget::readColor(W3dRGBStruct& dest, const ColorControls& src) const {
+    dest.R = static_cast<uint8_t>(src.r->value());
+    dest.G = static_cast<uint8_t>(src.g->value());
+    dest.B = static_cast<uint8_t>(src.b->value());
+}
+
+void MaterialEditorWidget::setChunk(const std::shared_ptr<ChunkItem>& chunkPtr) {
+    chunk = chunkPtr;
+    if (!chunkPtr) {
+        setEnabled(false);
+        return;
+    }
+
+    auto parsed = ParseChunkStruct<W3dVertexMaterialStruct>(chunkPtr);
+    if (auto err = std::get_if<std::string>(&parsed)) {
+        Q_UNUSED(err);
+        setEnabled(false);
+        return;
+    }
+
+    const auto& data = std::get<W3dVertexMaterialStruct>(parsed);
+    for (auto& ctrl : basicFlagControls) {
+        ctrl.box->setChecked((data.Attributes & ctrl.mask) != 0);
+    }
+
+    auto applyStage = [&](QComboBox* combo, int stage) {
+        const uint8_t code = ExtractStageMapping(data.Attributes, stage);
+        const int idx = combo->findData(static_cast<int>(code));
+        if (idx >= 0) combo->setCurrentIndex(idx);
+    };
+    applyStage(stage0Combo, 0);
+    applyStage(stage1Combo, 1);
+
+    setColor(data.Ambient, ambient);
+    setColor(data.Diffuse, diffuse);
+    setColor(data.Specular, specular);
+    setColor(data.Emissive, emissive);
+    shininessSpin->setValue(data.Shininess);
+    opacitySpin->setValue(data.Opacity);
+    translucencySpin->setValue(data.Translucency);
+
+    setEnabled(true);
+}
+
+void MaterialEditorWidget::applyChanges() {
+    auto chunkPtr = chunk.lock();
+    if (!chunkPtr) return;
+
+    std::string error;
+    const bool ok = W3DEdit::MutateStructChunk<W3dVertexMaterialStruct>(
+        chunkPtr,
+        [&](W3dVertexMaterialStruct& data) {
+            uint32_t basicMask = 0;
+            for (const auto& ctrl : basicFlagControls) {
+                basicMask |= ctrl.mask;
+            }
+            uint32_t attr = data.Attributes & ~basicMask;
+            attr &= ~VERTMAT_STAGE0_MAPPING_MASK;
+            attr &= ~VERTMAT_STAGE1_MAPPING_MASK;
+
+            for (const auto& ctrl : basicFlagControls) {
+                if (ctrl.box->isChecked()) {
+                    attr |= ctrl.mask;
+                }
+            }
+
+            const uint32_t stage0 = static_cast<uint32_t>(stage0Combo->currentData().toInt() & 0xFF);
+            const uint32_t stage1 = static_cast<uint32_t>(stage1Combo->currentData().toInt() & 0xFF);
+            attr |= (stage0 << VERTMAT_STAGE0_MAPPING_SHIFT);
+            attr |= (stage1 << VERTMAT_STAGE1_MAPPING_SHIFT);
+            data.Attributes = attr;
+
+            readColor(data.Ambient, ambient);
+            readColor(data.Diffuse, diffuse);
+            readColor(data.Specular, specular);
+            readColor(data.Emissive, emissive);
+            data.Shininess = static_cast<float>(shininessSpin->value());
+            data.Opacity = static_cast<float>(opacitySpin->value());
+            data.Translucency = static_cast<float>(translucencySpin->value());
+        },
+        &error);
+
+    if (!ok) {
+        QMessageBox::warning(this, tr("Error"),
+            QString::fromStdString(error.empty() ? "Failed to update material." : error));
+        return;
+    }
+
+    emit chunkEdited();
+}
+
 
 MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
-    // Menu bar
-    QMenu* fileMenu = menuBar()->addMenu("&File");
-    QAction* openAction = fileMenu->addAction("&Open");
+    QMenu* fileMenu = menuBar()->addMenu(tr("&File"));
+    QAction* openAction = fileMenu->addAction(tr("&Open"));
+    openAction->setShortcut(QKeySequence::Open);
     connect(openAction, &QAction::triggered, this, [this]() {
         openFile("");
         });
 
+    QAction* saveAction = fileMenu->addAction(tr("&Save"));
+    saveAction->setShortcut(QKeySequence::Save);
+    connect(saveAction, &QAction::triggered, this, &MainWindow::saveFile);
+
+    QAction* saveAsAction = fileMenu->addAction(tr("Save &As..."));
+    saveAsAction->setShortcut(QKeySequence::SaveAs);
+    connect(saveAsAction, &QAction::triggered, this, &MainWindow::saveFileAs);
 
     auto* splitter = new QSplitter(this);
 
     treeWidget = new QTreeWidget(splitter);
-    treeWidget->setHeaderLabel("Chunk Tree");
+    treeWidget->setHeaderLabel(tr("Chunk Tree"));
 
-    tableWidget = new QTableWidget(splitter);
+    auto* detailContainer = new QWidget(splitter);
+    auto* detailLayout = new QVBoxLayout(detailContainer);
+    detailLayout->setContentsMargins(0, 0, 0, 0);
+    detailLayout->setSpacing(6);
+
+    tableWidget = new QTableWidget(detailContainer);
     tableWidget->setColumnCount(3);
-    tableWidget->setHorizontalHeaderLabels({ "Field", "Type", "Value" });
+    tableWidget->setHorizontalHeaderLabels({ tr("Field"), tr("Type"), tr("Value") });
+    tableWidget->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    detailLayout->addWidget(tableWidget);
+
+    editorStack = new QStackedWidget(detailContainer);
+    editorStack->setContentsMargins(0, 0, 0, 0);
+    editorPlaceholder = new QWidget(editorStack);
+    auto* placeholderLayout = new QVBoxLayout(editorPlaceholder);
+    placeholderLayout->addStretch();
+    auto* placeholderLabel = new QLabel(tr("Select a mesh, texture, or material chunk to edit."), editorPlaceholder);
+    placeholderLabel->setAlignment(Qt::AlignCenter);
+    placeholderLayout->addWidget(placeholderLabel);
+    placeholderLayout->addStretch();
+    editorStack->addWidget(editorPlaceholder);
+
+    meshEditor = new MeshEditorWidget(editorStack);
+    editorStack->addWidget(meshEditor);
+
+    textureNameEditor = new StringEditorWidget(tr("Texture Name"), editorStack);
+    editorStack->addWidget(textureNameEditor);
+
+    materialNameEditor = new StringEditorWidget(tr("Material Name"), editorStack);
+    editorStack->addWidget(materialNameEditor);
+
+    materialEditor = new MaterialEditorWidget(editorStack);
+    editorStack->addWidget(materialEditor);
+
+    editorStack->setCurrentWidget(editorPlaceholder);
+    editorStack->setVisible(false);
+    detailLayout->addWidget(editorStack);
+
+    splitter->addWidget(treeWidget);
+    splitter->addWidget(detailContainer);
+    splitter->setStretchFactor(1, 1);
+
+    setCentralWidget(splitter);
 
     chunkData = std::make_unique<ChunkData>();
 
-    splitter->addWidget(treeWidget);
-    splitter->addWidget(tableWidget);
-    setCentralWidget(splitter);
-    setWindowTitle("oW3DEdit");
+    connect(meshEditor, &MeshEditorWidget::chunkEdited, this, &MainWindow::onChunkEdited);
+    connect(textureNameEditor, &StringEditorWidget::chunkEdited, this, &MainWindow::onChunkEdited);
+    connect(materialNameEditor, &StringEditorWidget::chunkEdited, this, &MainWindow::onChunkEdited);
+    connect(materialEditor, &MaterialEditorWidget::chunkEdited, this, &MainWindow::onChunkEdited);
+
+    updateWindowTitle();
     recentFilesPath = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation) + "/recent_files.txt";
     recentFilesMenu = fileMenu->addMenu("Open Recent");
     LoadRecentFiles();
@@ -68,6 +498,8 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
 
 
 void MainWindow::openFile(const QString& path) {
+    if (!confirmDiscardChanges()) return;
+
     QString filePath = path;
     if (filePath.isEmpty()) {
         QString startDir = lastDirectory.isEmpty() ? QDir::homePath() : lastDirectory;
@@ -81,6 +513,9 @@ void MainWindow::openFile(const QString& path) {
     }
 
     ClearChunkTree();
+    currentFilePath = filePath;
+    setDirty(false);
+    clearDetails();
     populateTree();
     AddRecentFile(filePath);
     lastDirectory = QFileInfo(filePath).absolutePath();
@@ -165,14 +600,23 @@ constexpr uint32_t SOUNDROBJ_DEFINITION = 0x0A02;
 
 void MainWindow::handleTreeSelection() {
     const auto selectedItems = treeWidget->selectedItems();
-    if (selectedItems.isEmpty()) return;
+    if (selectedItems.isEmpty()) {
+        clearDetails();
+        return;
+    }
 
     QTreeWidgetItem* selected = selectedItems.first();
     const QVariant ptrVar = selected->data(0, Qt::UserRole);
-    if (!ptrVar.isValid()) return;
+    if (!ptrVar.isValid()) {
+        clearDetails();
+        return;
+    }
 
     void* targetPtr = ptrVar.value<void*>();
-    if (!targetPtr) return;
+    if (!targetPtr) {
+        clearDetails();
+        return;
+    }
 
     // Resolve ChunkItem*
     std::shared_ptr<ChunkItem> target;
@@ -193,7 +637,10 @@ void MainWindow::handleTreeSelection() {
 
     tableWidget->clearContents();
     tableWidget->setRowCount(0);
-    if (!target) return;
+    if (!target) {
+        clearDetails();
+        return;
+    }
 
     std::vector<ChunkField> fields;
 
@@ -486,6 +933,140 @@ void MainWindow::handleTreeSelection() {
         tableWidget->setItem(i, 1, new QTableWidgetItem(QString::fromStdString(fields[i].type)));
         tableWidget->setItem(i, 2, new QTableWidgetItem(QString::fromStdString(fields[i].value)));
     }
+
+    updateEditorForChunk(target);
+}
+
+void MainWindow::saveFile() {
+    if (!chunkData || chunkData->getChunks().empty()) {
+        return;
+    }
+
+    if (currentFilePath.isEmpty()) {
+        saveFileAs();
+        return;
+    }
+
+    if (!chunkData->saveToFile(currentFilePath.toStdString())) {
+        QMessageBox::warning(this, tr("Error"), tr("Failed to save file."));
+        return;
+    }
+
+    setDirty(false);
+}
+
+void MainWindow::saveFileAs() {
+    if (!chunkData || chunkData->getChunks().empty()) {
+        return;
+    }
+
+    QString startDir;
+    if (!currentFilePath.isEmpty()) {
+        startDir = QFileInfo(currentFilePath).absolutePath();
+    }
+    else {
+        startDir = lastDirectory.isEmpty() ? QDir::homePath() : lastDirectory;
+    }
+
+    QString filePath = QFileDialog::getSaveFileName(
+        this,
+        tr("Save W3D File"),
+        startDir,
+        tr("W3D Files (*.w3d);;All Files (*)"));
+
+    if (filePath.isEmpty()) return;
+
+    if (!chunkData->saveToFile(filePath.toStdString())) {
+        QMessageBox::warning(this, tr("Error"), tr("Failed to save file."));
+        return;
+    }
+
+    currentFilePath = filePath;
+    AddRecentFile(filePath);
+    lastDirectory = QFileInfo(filePath).absolutePath();
+    setDirty(false);
+}
+
+void MainWindow::onChunkEdited() {
+    setDirty(true);
+    handleTreeSelection();
+}
+
+void MainWindow::updateEditorForChunk(const std::shared_ptr<ChunkItem>& chunk) {
+    currentChunk = chunk;
+
+    meshEditor->setChunk(nullptr);
+    textureNameEditor->setChunk(nullptr);
+    materialNameEditor->setChunk(nullptr);
+    materialEditor->setChunk(nullptr);
+
+    if (!chunk) {
+        editorStack->setCurrentWidget(editorPlaceholder);
+        editorStack->setVisible(false);
+        return;
+    }
+
+    switch (chunk->id) {
+    case 0x001F: // W3D_CHUNK_MESH_HEADER3
+        meshEditor->setChunk(chunk);
+        editorStack->setCurrentWidget(meshEditor);
+        editorStack->setVisible(true);
+        break;
+    case 0x0032: // W3D_CHUNK_TEXTURE_NAME
+        textureNameEditor->setChunk(chunk);
+        editorStack->setCurrentWidget(textureNameEditor);
+        editorStack->setVisible(true);
+        break;
+    case 0x002C: // W3D_CHUNK_VERTEX_MATERIAL_NAME
+        materialNameEditor->setChunk(chunk);
+        editorStack->setCurrentWidget(materialNameEditor);
+        editorStack->setVisible(true);
+        break;
+    case 0x002D: // W3D_CHUNK_VERTEX_MATERIAL_INFO
+        materialEditor->setChunk(chunk);
+        editorStack->setCurrentWidget(materialEditor);
+        editorStack->setVisible(true);
+        break;
+    default:
+        editorStack->setCurrentWidget(editorPlaceholder);
+        editorStack->setVisible(false);
+        break;
+    }
+}
+
+void MainWindow::setDirty(bool value) {
+    if (dirty == value) return;
+    dirty = value;
+    updateWindowTitle();
+}
+
+void MainWindow::updateWindowTitle() {
+    QString title = tr("oW3DEdit");
+    if (!currentFilePath.isEmpty()) {
+        title += QStringLiteral(" - ") + QFileInfo(currentFilePath).fileName();
+    }
+    if (dirty) {
+        title += QLatin1Char('*');
+    }
+    setWindowTitle(title);
+}
+
+bool MainWindow::confirmDiscardChanges() {
+    if (!dirty) return true;
+
+    const auto reply = QMessageBox::question(
+        this,
+        tr("Unsaved Changes"),
+        tr("Discard unsaved changes?"),
+        QMessageBox::Yes | QMessageBox::No,
+        QMessageBox::No);
+    return reply == QMessageBox::Yes;
+}
+
+void MainWindow::clearDetails() {
+    tableWidget->clearContents();
+    tableWidget->setRowCount(0);
+    updateEditorForChunk(nullptr);
 }
 
 
@@ -548,6 +1129,7 @@ void MainWindow::AddRecentFile(const QString& path) {
 
 void MainWindow::ClearChunkTree() {
     treeWidget->clear();
+    clearDetails();
 }
 
 void MainWindow::OpenRecentFile() {
@@ -660,5 +1242,4 @@ void MainWindow::on_actionExportChunkList_triggered()
     QMessageBox::information(this, tr("Done"),
         tr("Chunk list exported to %1").arg(outPath));
 }
-
 

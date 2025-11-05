@@ -68,6 +68,55 @@ inline bool IsForcedWrapper(uint32_t id, uint32_t parent = 0)
     }
 }
 
+static void AppendUint32LE(std::vector<uint8_t>& out, uint32_t value) {
+    out.push_back(static_cast<uint8_t>(value & 0xFF));
+    out.push_back(static_cast<uint8_t>((value >> 8) & 0xFF));
+    out.push_back(static_cast<uint8_t>((value >> 16) & 0xFF));
+    out.push_back(static_cast<uint8_t>((value >> 24) & 0xFF));
+}
+
+static bool SerializeChunk(ChunkItem& chunk, std::vector<uint8_t>& out) {
+    out.clear();
+
+    if (chunk.isMicro) {
+        if (chunk.data.size() > 0xFF) {
+            std::cerr << "Micro chunk 0x" << std::hex << unsigned(chunk.id) << std::dec
+                << " exceeds 255 bytes (" << chunk.data.size() << ")\n";
+            return false;
+        }
+        chunk.length = static_cast<uint32_t>(chunk.data.size());
+        out.reserve(2 + chunk.data.size());
+        out.push_back(static_cast<uint8_t>(chunk.id & 0xFF));
+        out.push_back(static_cast<uint8_t>(chunk.length & 0xFF));
+        out.insert(out.end(), chunk.data.begin(), chunk.data.end());
+        return true;
+    }
+
+    if (!chunk.children.empty()) {
+        chunk.data.clear();
+        std::vector<uint8_t> childBuffer;
+        for (auto& child : chunk.children) {
+            if (!SerializeChunk(*child, childBuffer)) {
+                return false;
+            }
+            chunk.data.insert(chunk.data.end(), childBuffer.begin(), childBuffer.end());
+        }
+    }
+
+    chunk.length = static_cast<uint32_t>(chunk.data.size());
+
+    out.reserve(8 + chunk.data.size());
+    AppendUint32LE(out, chunk.id);
+
+    const bool hasChildren = !chunk.children.empty();
+    const bool markHasSubChunks = chunk.hasSubChunks || (hasChildren && !IsForcedWrapper(chunk.id));
+    const uint32_t lengthField = chunk.length | (markHasSubChunks ? 0x80000000u : 0u);
+    AppendUint32LE(out, lengthField);
+    out.insert(out.end(), chunk.data.begin(), chunk.data.end());
+
+    return true;
+}
+
 
 bool ChunkData::loadFromFile(const std::string& filename) {
     // Ensure previous data does not persist between loads
@@ -195,6 +244,7 @@ bool ChunkData::parseChunk(std::istream& stream, std::shared_ptr<ChunkItem>& par
             auto child = std::make_shared<ChunkItem>();
             child->id = mid;
             child->length = mlen;
+            child->isMicro = true;
             child->data.resize(mlen);
             stream.read(reinterpret_cast<char*>(child->data.data()), mlen);
 
@@ -237,6 +287,33 @@ bool ChunkData::parseChunk(std::istream& stream, std::shared_ptr<ChunkItem>& par
     }
 
     return true;
+}
+
+bool ChunkData::saveToFile(const std::string& filename) {
+    std::ofstream out(filename, std::ios::binary | std::ios::trunc);
+    if (!out) {
+        std::cerr << "Failed to open file for writing: " << filename << "\n";
+        return false;
+    }
+
+    std::vector<uint8_t> buffer;
+    for (auto& chunk : chunks) {
+        if (!SerializeChunk(*chunk, buffer)) {
+            std::cerr << "Failed to serialize chunk 0x"
+                << std::hex << chunk->id << std::dec << "\n";
+            return false;
+        }
+        out.write(reinterpret_cast<const char*>(buffer.data()),
+            static_cast<std::streamsize>(buffer.size()));
+        if (!out) {
+            std::cerr << "Failed to write chunk 0x"
+                << std::hex << chunk->id << std::dec << " to file.\n";
+            return false;
+        }
+    }
+
+    out.flush();
+    return static_cast<bool>(out);
 }
 
 
