@@ -25,6 +25,9 @@
 #include <QLabel>
 #include <QGridLayout>
 #include <QKeySequence>
+#include <QDialog>
+#include <QDialogButtonBox>
+#include <QHeaderView>
 #include <iostream>
 #include <QStandardPaths>
 #include <QTextStream>
@@ -42,6 +45,10 @@
 #include <cstring>
 #include <variant>
 #include <type_traits>
+#include <unordered_map>
+#include <algorithm>
+#include <functional>
+#include <cctype>
 #include <QSignalBlocker>
 
 static std::size_t TruncatedLength(const char* data, std::size_t maxLen) {
@@ -90,6 +97,531 @@ static uint8_t ComboValue(const QComboBox* combo) {
 }
 
 Q_DECLARE_METATYPE(void*)
+
+namespace {
+struct PivotInfo {
+    QString name;
+    int parent = -1;
+};
+
+struct MeshBinding {
+    QString displayName;
+    QString typeLabel;
+    int pivotIndex = -1;
+    QString pivotName;
+    std::shared_ptr<ChunkItem> chunk;
+};
+
+struct HierarchyInfo {
+    QString name;
+    std::vector<PivotInfo> pivots;
+    std::vector<MeshBinding> meshes;
+};
+
+static std::string ToLower(const std::string& in) {
+    std::string out = in;
+    std::transform(out.begin(), out.end(), out.begin(), [](unsigned char c) {
+        return static_cast<char>(std::tolower(c));
+        });
+    return out;
+}
+
+static std::string NormalizeName(const std::string& in) {
+    std::string lowered = ToLower(in);
+    auto strip = [&](std::string& s) {
+        const std::string ext = ".w3d";
+        if (s.size() >= ext.size() && s.compare(s.size() - ext.size(), ext.size(), ext) == 0) {
+            s.erase(s.size() - ext.size());
+        }
+        while (!s.empty() && std::isspace(static_cast<unsigned char>(s.back()))) {
+            s.pop_back();
+        }
+    };
+    strip(lowered);
+    return lowered;
+}
+} // namespace
+
+class HierarchyBrowserDialog : public QDialog {
+public:
+    HierarchyBrowserDialog(const std::vector<HierarchyInfo>& data,
+        std::function<void(void*)> meshHandler,
+        std::function<void*(const QString&)> resolver,
+        QWidget* parent = nullptr)
+        : QDialog(parent)
+        , hierarchies(data)
+        , onMeshActivated(std::move(meshHandler))
+        , resolveChunk(std::move(resolver)) {
+        setWindowTitle(tr("Hierarchy Browser"));
+
+        auto* layout = new QVBoxLayout(this);
+        auto* hint = new QLabel(tr("Select a mesh and click \"Select Mesh\" to jump to its chunk."), this);
+        layout->addWidget(hint);
+
+        tree = new QTreeWidget(this);
+        tree->setHeaderLabels({ tr("Item"), tr("Details") });
+        tree->header()->setSectionResizeMode(0, QHeaderView::ResizeToContents);
+        tree->header()->setSectionResizeMode(1, QHeaderView::Stretch);
+        layout->addWidget(tree, 1);
+
+        auto* buttons = new QDialogButtonBox(QDialogButtonBox::Close, this);
+        selectButton = buttons->addButton(tr("Select Mesh"), QDialogButtonBox::ActionRole);
+        selectButton->setEnabled(false);
+        connect(buttons, &QDialogButtonBox::rejected, this, &QDialog::reject);
+        layout->addWidget(buttons);
+
+        populate();
+        connect(tree, &QTreeWidget::itemSelectionChanged,
+            this, &HierarchyBrowserDialog::onSelectionChanged);
+        connect(selectButton, &QPushButton::clicked,
+            this, &HierarchyBrowserDialog::activateSelection);
+    }
+
+private:
+    static constexpr int RoleIsMesh = Qt::UserRole + 1;
+    static constexpr int RoleName = Qt::UserRole + 2;
+
+    void populate() {
+        tree->clear();
+        for (const auto& h : hierarchies) {
+            auto* root = new QTreeWidgetItem(tree, { h.name, tr("Hierarchy") });
+            root->setData(0, RoleIsMesh, false);
+
+            // Build pivot items recursively so parent ordering does not matter
+            std::vector<QTreeWidgetItem*> pivotItems(h.pivots.size(), nullptr);
+            std::function<QTreeWidgetItem * (int)> ensurePivot = [&](int idx) -> QTreeWidgetItem* {
+                if (idx < 0 || idx >= static_cast<int>(h.pivots.size())) return root;
+                if (pivotItems[idx]) return pivotItems[idx];
+                const auto& p = h.pivots[static_cast<std::size_t>(idx)];
+                QTreeWidgetItem* parentItem = root;
+                if (p.parent >= 0 && p.parent < static_cast<int>(h.pivots.size())) {
+                    parentItem = ensurePivot(p.parent);
+                }
+                const QString label = p.name.isEmpty()
+                    ? tr("Pivot %1").arg(idx)
+                    : p.name;
+                QString parentName;
+                if (p.parent >= 0 && p.parent < static_cast<int>(h.pivots.size())) {
+                    parentName = h.pivots[static_cast<std::size_t>(p.parent)].name;
+                }
+                QString detail = p.parent >= 0
+                    ? tr("Parent: %1").arg(parentName.isEmpty()
+                        ? tr("#%1").arg(p.parent)
+                        : parentName)
+                    : tr("Root");
+                auto* item = new QTreeWidgetItem(parentItem, { label, detail });
+                item->setData(0, RoleIsMesh, false);
+                pivotItems[static_cast<std::size_t>(idx)] = item;
+                return item;
+                };
+
+            for (int i = 0; i < static_cast<int>(h.pivots.size()); ++i) {
+                (void)ensurePivot(i);
+            }
+
+            for (auto mesh : h.meshes) {
+                QTreeWidgetItem* parent = root;
+                int pivotIdx = mesh.pivotIndex;
+                if ((pivotIdx < 0 || pivotIdx >= static_cast<int>(pivotItems.size())) && !mesh.pivotName.isEmpty()) {
+                    const QString target = mesh.pivotName.toLower();
+                    for (int i = 0; i < static_cast<int>(h.pivots.size()); ++i) {
+                        if (h.pivots[static_cast<std::size_t>(i)].name.toLower() == target) {
+                            pivotIdx = i;
+                            break;
+                        }
+                    }
+                }
+                if (pivotIdx >= 0
+                    && pivotIdx < static_cast<int>(pivotItems.size())
+                    && pivotItems[static_cast<std::size_t>(pivotIdx)]) {
+                    parent = pivotItems[static_cast<std::size_t>(pivotIdx)];
+                    if (mesh.pivotName.isEmpty()) {
+                        mesh.pivotName = h.pivots[static_cast<std::size_t>(pivotIdx)].name;
+                    }
+                }
+
+                QString detail = mesh.typeLabel;
+                if (!mesh.pivotName.isEmpty()) {
+                    detail += tr(" @ %1").arg(mesh.pivotName);
+                }
+                auto* meshItem = new QTreeWidgetItem(parent, { mesh.displayName, detail });
+                meshItem->setData(0, Qt::UserRole,
+                    QVariant::fromValue<void*>(mesh.chunk ? mesh.chunk.get() : nullptr));
+                meshItem->setData(0, RoleIsMesh, true);
+                meshItem->setData(0, RoleName, mesh.displayName);
+            }
+
+            tree->expandItem(root);
+        }
+    }
+
+    void onSelectionChanged() {
+        const auto items = tree->selectedItems();
+        if (items.isEmpty()) {
+            selectButton->setEnabled(false);
+            return;
+        }
+        QTreeWidgetItem* item = items.first();
+        const void* ptr = item->data(0, Qt::UserRole).value<void*>();
+        const bool isMesh = item->data(0, RoleIsMesh).toBool();
+        selectButton->setEnabled(isMesh || ptr);
+    }
+
+    void activateSelection() {
+        const auto items = tree->selectedItems();
+        if (items.isEmpty()) return;
+        QTreeWidgetItem* item = items.first();
+        void* ptr = item->data(0, Qt::UserRole).value<void*>();
+        if (!ptr && resolveChunk) {
+            const QString name = item->data(0, RoleName).toString();
+            ptr = resolveChunk(name);
+            if (ptr) {
+                item->setData(0, Qt::UserRole, QVariant::fromValue<void*>(ptr));
+            }
+        }
+        if (ptr && onMeshActivated) {
+            onMeshActivated(const_cast<void*>(ptr));
+        }
+    }
+
+    QTreeWidget* tree = nullptr;
+    QPushButton* selectButton = nullptr;
+    std::vector<HierarchyInfo> hierarchies;
+    std::function<void(void*)> onMeshActivated;
+    std::function<void*(const QString&)> resolveChunk;
+};
+
+static std::unordered_multimap<std::string, std::shared_ptr<ChunkItem>> BuildMeshIndex(
+    const std::vector<std::shared_ptr<ChunkItem>>& roots) {
+    std::unordered_multimap<std::string, std::shared_ptr<ChunkItem>> index;
+
+    std::function<void(const std::shared_ptr<ChunkItem>&)> dfs = [&](const std::shared_ptr<ChunkItem>& node) {
+        if (!node) return;
+
+        if (node->id == 0x001F) { // W3D_CHUNK_MESH_HEADER3
+            auto parsed = ParseChunkStruct<W3dMeshHeader3Struct>(node);
+            if (auto header = std::get_if<W3dMeshHeader3Struct>(&parsed)) {
+                const QString meshName = ReadFixedString(header->MeshName, W3D_NAME_LEN);
+                const QString containerName = ReadFixedString(header->ContainerName, W3D_NAME_LEN);
+                const QString combined = containerName.isEmpty()
+                    ? meshName
+                    : containerName + QLatin1Char('.') + meshName;
+
+                const auto addName = [&](const QString& name) {
+                    const std::string key = ToLower(name.toStdString());
+                    if (!key.empty()) {
+                        index.emplace(key, node);
+                    }
+                    const std::string norm = NormalizeName(name.toStdString());
+                    if (!norm.empty()) {
+                        index.emplace(norm, node);
+                    }
+                    };
+
+                addName(meshName);
+                addName(containerName);
+                addName(combined);
+            }
+        }
+
+        for (const auto& child : node->children) {
+            dfs(child);
+        }
+        };
+
+    for (const auto& root : roots) {
+        dfs(root);
+    }
+
+    return index;
+}
+
+namespace {
+struct HModelNodeData {
+    std::string renderName;
+    uint16_t pivotIdx = 0;
+    uint32_t chunkId = 0;
+};
+
+struct HModelData {
+    std::string name;
+    std::string hierarchyName;
+    std::vector<HModelNodeData> nodes;
+};
+} // namespace
+
+static std::unordered_map<std::string, std::vector<MeshBinding>> CollectHlodBindings(
+    const std::vector<std::shared_ptr<ChunkItem>>& roots,
+    const std::unordered_multimap<std::string, std::shared_ptr<ChunkItem>>& meshIndex) {
+
+    std::unordered_map<std::string, std::vector<MeshBinding>> result;
+
+    auto findMeshChunk = [&](const std::string& name) -> std::shared_ptr<ChunkItem> {
+        const std::string key = NormalizeName(name);
+        auto range = meshIndex.equal_range(key);
+        if (range.first != range.second) {
+            return range.first->second;
+        }
+        return nullptr;
+        };
+
+    std::function<void(const std::shared_ptr<ChunkItem>&)> dfs =
+        [&](const std::shared_ptr<ChunkItem>& node) {
+        if (!node) return;
+
+        if (node->id == 0x0700) { // HLOD wrapper
+            std::string hlodName;
+            std::string hierarchyName;
+
+            for (const auto& child : node->children) {
+                if (child->id == 0x0701) { // header
+                    auto parsed = ParseChunkStruct<W3dHLodHeaderStruct>(child);
+                    if (auto h = std::get_if<W3dHLodHeaderStruct>(&parsed)) {
+                        hlodName = ReadFixedString(h->Name, W3D_NAME_LEN).toStdString();
+                        hierarchyName = ReadFixedString(h->HierarchyName, W3D_NAME_LEN).toStdString();
+                    }
+                }
+            }
+
+            const std::string primaryKey = NormalizeName(!hierarchyName.empty() ? hierarchyName : hlodName);
+            const std::string secondaryKey = NormalizeName(hlodName);
+
+            auto addBinding = [&](const MeshBinding& b) {
+                if (!primaryKey.empty()) {
+                    result[primaryKey].push_back(b);
+                }
+                if (!secondaryKey.empty() && secondaryKey != primaryKey) {
+                    result[secondaryKey].push_back(b);
+                }
+                };
+
+            std::function<void(const std::shared_ptr<ChunkItem>&)> scanSub =
+                [&](const std::shared_ptr<ChunkItem>& n) {
+                if (!n) return;
+                if (n->id == 0x0704) { // subobject
+                    auto parsed = ParseChunkStruct<W3dHLodSubObjectStruct>(n);
+                    if (auto s = std::get_if<W3dHLodSubObjectStruct>(&parsed)) {
+                        MeshBinding b;
+                        b.displayName = ReadFixedString(s->Name, W3D_NAME_LEN * 2);
+                        b.typeLabel = QStringLiteral("HLOD");
+                        b.pivotIndex = static_cast<int>(s->BoneIndex);
+                        // Attempt several name variants
+                        const std::string base = b.displayName.toStdString();
+                        const std::string hdot = hlodName.empty() ? base : (hlodName + "." + base);
+                        const std::string hhdot = hierarchyName.empty() ? base : (hierarchyName + "." + base);
+
+                        b.chunk = findMeshChunk(base);
+                        if (!b.chunk && !hdot.empty()) b.chunk = findMeshChunk(hdot);
+                        if (!b.chunk && !hhdot.empty()) b.chunk = findMeshChunk(hhdot);
+
+                        addBinding(b);
+                    }
+                }
+                for (const auto& c : n->children) scanSub(c);
+                };
+
+            scanSub(node);
+        }
+
+        for (const auto& child : node->children) {
+            dfs(child);
+        }
+        };
+
+    for (const auto& root : roots) {
+        dfs(root);
+    }
+
+    return result;
+}
+
+static std::vector<HModelData> CollectHModels(const std::vector<std::shared_ptr<ChunkItem>>& roots) {
+    std::vector<HModelData> hmodels;
+
+    std::function<void(const std::shared_ptr<ChunkItem>&)> dfs = [&](const std::shared_ptr<ChunkItem>& node) {
+        if (!node) return;
+
+        if (node->id == 0x0300) { // W3D_CHUNK_HMODEL wrapper
+            HModelData current;
+            bool hasHeader = false;
+
+            for (const auto& child : node->children) {
+                if (child->id == 0x0301) { // header
+                    auto parsed = ParseChunkStruct<W3dHModelHeaderStruct>(child);
+                    if (auto header = std::get_if<W3dHModelHeaderStruct>(&parsed)) {
+                        current.name = ReadFixedString(header->Name, W3D_NAME_LEN).toStdString();
+                        current.hierarchyName = ReadFixedString(header->HierarchyName, W3D_NAME_LEN).toStdString();
+                        hasHeader = true;
+                    }
+                }
+                else if (child->id == 0x0302 || child->id == 0x0303 ||
+                    child->id == 0x0304 || child->id == 0x0306) {
+                    auto parsed = ParseChunkStruct<W3dHModelNodeStruct>(child);
+                    if (auto nodeStruct = std::get_if<W3dHModelNodeStruct>(&parsed)) {
+                        HModelNodeData nd;
+                        nd.chunkId = child->id;
+                        nd.renderName = ReadFixedString(nodeStruct->RenderObjName, W3D_NAME_LEN).toStdString();
+                        nd.pivotIdx = nodeStruct->PivotIdx;
+                        current.nodes.push_back(std::move(nd));
+                    }
+                }
+            }
+
+            if (hasHeader) {
+                hmodels.push_back(std::move(current));
+            }
+        }
+
+        for (const auto& child : node->children) {
+            dfs(child);
+        }
+        };
+
+    for (const auto& root : roots) {
+        dfs(root);
+    }
+
+    return hmodels;
+}
+
+static std::vector<HierarchyInfo> CollectHierarchies(
+    const std::vector<std::shared_ptr<ChunkItem>>& roots,
+    const std::vector<HModelData>& hmodels,
+    const std::unordered_multimap<std::string, std::shared_ptr<ChunkItem>>& meshIndex,
+    const std::unordered_map<std::string, std::vector<MeshBinding>>& hlodBindings) {
+
+    std::vector<HierarchyInfo> hierarchies;
+
+    auto findMatches = [&](const std::string& hierarchyName) -> std::vector<size_t> {
+        std::vector<size_t> matches;
+        const std::string key = NormalizeName(hierarchyName);
+        for (size_t i = 0; i < hmodels.size(); ++i) {
+            const auto& h = hmodels[i];
+            const std::string hn = NormalizeName(h.hierarchyName);
+            const std::string nameNorm = NormalizeName(h.name);
+            if ((!hn.empty() && hn == key) || (!nameNorm.empty() && nameNorm == key)) {
+                matches.push_back(i);
+            }
+        }
+        return matches;
+        };
+
+    auto findMeshChunk = [&](const std::string& name) -> std::shared_ptr<ChunkItem> {
+        const std::string key = NormalizeName(name);
+        auto range = meshIndex.equal_range(key);
+        if (range.first != range.second) {
+            return range.first->second;
+        }
+        return nullptr;
+        };
+
+    std::function<void(const std::shared_ptr<ChunkItem>&)> dfs = [&](const std::shared_ptr<ChunkItem>& node) {
+        if (!node) return;
+
+        if (node->id == 0x0100) { // W3D_CHUNK_HIERARCHY
+            HierarchyInfo info;
+            bool hasHeader = false;
+
+            for (const auto& child : node->children) {
+                if (child->id == 0x0101) { // header
+                    auto parsed = ParseChunkStruct<W3dHierarchyStruct>(child);
+                    if (auto header = std::get_if<W3dHierarchyStruct>(&parsed)) {
+                        info.name = ReadFixedString(header->Name, W3D_NAME_LEN);
+                        hasHeader = true;
+                    }
+                }
+                else if (child->id == 0x0102) { // pivots
+                    auto parsed = ParseChunkArray<W3dPivotStruct>(child);
+                    if (auto pivots = std::get_if<std::vector<W3dPivotStruct>>(&parsed)) {
+                        info.pivots.reserve(pivots->size());
+                        for (const auto& p : *pivots) {
+                            PivotInfo pi;
+                            pi.name = ReadFixedString(p.Name, W3D_NAME_LEN);
+                            pi.parent = (p.ParentIdx == 0xFFFFFFFFu)
+                                ? -1
+                                : static_cast<int>(p.ParentIdx);
+                            info.pivots.push_back(std::move(pi));
+                        }
+                    }
+                }
+            }
+
+            if (hasHeader) {
+                // Attach meshes that use this hierarchy
+                auto hMatches = findMatches(info.name.toStdString());
+                if (hMatches.empty() && !hmodels.empty()) {
+                    for (size_t i = 0; i < hmodels.size(); ++i) hMatches.push_back(i); // fallback: show all
+                }
+
+                for (size_t idx : hMatches) {
+                    if (idx >= hmodels.size()) continue;
+                    const auto& hModel = hmodels[idx];
+                    for (const auto& nodeData : hModel.nodes) {
+                        MeshBinding binding;
+
+                        const QString renderName = QString::fromStdString(nodeData.renderName);
+                        if (!hModel.name.empty()) {
+                            binding.displayName = QString::fromStdString(hModel.name) + QLatin1Char('.') + renderName;
+                        }
+                        else {
+                            binding.displayName = renderName;
+                        }
+
+                        binding.typeLabel = [id = nodeData.chunkId]() {
+                            switch (id) {
+                            case 0x0302: return QStringLiteral("Mesh");
+                            case 0x0303: return QStringLiteral("Collision");
+                            case 0x0304: return QStringLiteral("Skin");
+                            case 0x0306: return QStringLiteral("Shadow");
+                            default: return QStringLiteral("Mesh");
+                            }
+                            }();
+
+                        binding.pivotIndex = static_cast<int>(nodeData.pivotIdx);
+                        if (binding.pivotIndex >= 0 && binding.pivotIndex < static_cast<int>(info.pivots.size())) {
+                            binding.pivotName = info.pivots[static_cast<std::size_t>(binding.pivotIndex)].name;
+                        }
+
+                        // Try to locate the mesh chunk by full name first, then by render name
+                        std::shared_ptr<ChunkItem> meshChunk = findMeshChunk(binding.displayName.toStdString());
+                        if (!meshChunk) {
+                            meshChunk = findMeshChunk(renderName.toStdString());
+                        }
+                        binding.chunk = meshChunk;
+
+                        info.meshes.push_back(std::move(binding));
+                    }
+                }
+
+                hierarchies.push_back(std::move(info));
+            }
+        }
+
+        for (const auto& child : node->children) {
+            dfs(child);
+        }
+        };
+
+    for (const auto& root : roots) {
+        dfs(root);
+    }
+
+    // Merge HLOD-only bindings into matching hierarchies (if any)
+    for (auto& info : hierarchies) {
+        const std::string norm = NormalizeName(info.name.toStdString());
+        auto it = hlodBindings.find(norm);
+        if (it != hlodBindings.end()) {
+            for (auto b : it->second) {
+                if (b.pivotIndex >= 0 && b.pivotIndex < static_cast<int>(info.pivots.size())) {
+                    b.pivotName = info.pivots[static_cast<std::size_t>(b.pivotIndex)].name;
+                }
+                info.meshes.push_back(std::move(b));
+            }
+        }
+    }
+
+    return hierarchies;
+}
 
 MeshEditorWidget::MeshEditorWidget(QWidget* parent) : QWidget(parent) {
     setEnabled(false);
@@ -713,7 +1245,10 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
 
     splitter->addWidget(treeWidget);
     splitter->addWidget(detailContainer);
+    splitter->setStretchFactor(0, 3);
     splitter->setStretchFactor(1, 1);
+    splitter->setChildrenCollapsible(false);
+    splitter->setSizes({ 1120, 400 }); // approx 75% tree / 25% editor starting layout
 
     setCentralWidget(splitter);
 
@@ -738,6 +1273,8 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     QAction* collapseAllAction = viewMenu->addAction("Collapse All");
     connect(expandAllAction, &QAction::triggered, treeWidget, &QTreeWidget::expandAll);
     connect(collapseAllAction, &QAction::triggered, treeWidget, &QTreeWidget::collapseAll);
+    QAction* hierarchyBrowserAction = viewMenu->addAction(tr("Hierarchy Browser..."));
+    connect(hierarchyBrowserAction, &QAction::triggered, this, &MainWindow::showHierarchyBrowser);
     auto batchMenu = menuBar()->addMenu(tr("Batch Tools"));
     auto exportChunksAct = new QAction(tr("Export Chunk List..."), this);
     batchMenu->addAction(exportChunksAct);
@@ -1380,6 +1917,65 @@ void MainWindow::AddRecentFile(const QString& path) {
         recentFiles.removeLast();
     SaveRecentFiles();
     UpdateRecentFilesMenu();
+}
+
+void MainWindow::selectChunkInTree(void* chunkPtr) {
+    if (!chunkPtr || !treeWidget) return;
+
+    std::function<QTreeWidgetItem * (QTreeWidgetItem*)> dfs =
+        [&](QTreeWidgetItem* item) -> QTreeWidgetItem* {
+        if (!item) return nullptr;
+        if (item->data(0, Qt::UserRole).value<void*>() == chunkPtr) {
+            return item;
+        }
+        for (int i = 0; i < item->childCount(); ++i) {
+            if (auto* r = dfs(item->child(i))) return r;
+        }
+        return nullptr;
+        };
+
+    QTreeWidgetItem* found = nullptr;
+    for (int i = 0; i < treeWidget->topLevelItemCount() && !found; ++i) {
+        found = dfs(treeWidget->topLevelItem(i));
+    }
+
+    if (found) {
+        treeWidget->setCurrentItem(found);
+        treeWidget->scrollToItem(found);
+    }
+}
+
+void MainWindow::showHierarchyBrowser() {
+    if (!chunkData || chunkData->getChunks().empty()) {
+        QMessageBox::information(this, tr("No File Loaded"),
+            tr("Load a W3D file to inspect hierarchy data."));
+        return;
+    }
+
+    const auto meshIndex = BuildMeshIndex(chunkData->getChunks());
+    const auto hmodels = CollectHModels(chunkData->getChunks());
+    const auto hlodBindings = CollectHlodBindings(chunkData->getChunks(), meshIndex);
+    auto hierarchies = CollectHierarchies(chunkData->getChunks(), hmodels, meshIndex, hlodBindings);
+
+    if (hierarchies.empty()) {
+        QMessageBox::information(this, tr("No Hierarchy Found"),
+            tr("This file does not contain hierarchy/pivot data."));
+        return;
+    }
+
+    HierarchyBrowserDialog dlg(
+        hierarchies,
+        [this](void* ptr) { selectChunkInTree(ptr); },
+        [meshIndex](const QString& name) -> void* {
+            const std::string key = NormalizeName(name.toStdString());
+            auto range = meshIndex.equal_range(key);
+            if (range.first != range.second) {
+                return range.first->second.get();
+            }
+            return nullptr;
+        },
+        this);
+    dlg.exec();
 }
 
 void MainWindow::ClearChunkTree() {
