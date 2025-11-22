@@ -5,6 +5,12 @@
 #include <string>
 #include <memory>
 
+enum class ChunkFileKind {
+    Unknown = 0,
+    W3D,
+    DefinitionDB,
+};
+
 class ChunkItem {
 public:
     uint32_t id = 0;
@@ -14,6 +20,7 @@ public:
     std::vector<uint8_t> data;
     std::vector<std::shared_ptr<ChunkItem>> children;
     ChunkItem* parent = nullptr; 
+    ChunkFileKind fileKind = ChunkFileKind::Unknown;
 
     ChunkItem() = default;
 };

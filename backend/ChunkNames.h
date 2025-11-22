@@ -1,7 +1,34 @@
 #pragma once
 #include <unordered_map>
 #include <string>
+#include <sstream>
+#include <algorithm>
+#include "ChunkItem.h"
 
+constexpr uint32_t COMMON_VARIABLE_CHUNK_ID = 0x00000100;
+constexpr uint32_t SIMPLEFACTORY_CHUNKID_OBJPOINTER = 0x00100100;
+constexpr uint32_t SIMPLEFACTORY_CHUNKID_OBJDATA = 0x00100101;
+constexpr uint32_t CHUNKID_SAVELOAD_DEFMGR = 0x00000101;
+constexpr uint32_t CHUNKID_COMMANDO_EDITOR_BEGIN = 0x00050000;
+
+inline std::unordered_map<uint32_t, std::string>& ExternalChunkNameMap() {
+    static std::unordered_map<uint32_t, std::string> map;
+    return map;
+}
+
+inline void RegisterExternalChunkName(uint32_t id, const std::string& name) {
+    ExternalChunkNameMap()[id] = name;
+}
+
+inline const std::string& LookupExternalChunkName(uint32_t id) {
+    auto& map = ExternalChunkNameMap();
+    auto it = map.find(id);
+    if (it != map.end()) {
+        return it->second;
+    }
+    static const std::string empty;
+    return empty;
+}
 
 inline std::string GetChunkName(uint32_t id, uint32_t parentId = 0) {
     if (parentId == 0x0741 && id == 0x0001) {
@@ -37,16 +64,15 @@ inline std::string GetChunkName(uint32_t id, uint32_t parentId = 0) {
     if (parentId == 0x31550809 && id == 0x1) {
         return "ChunkID_FRAME";
     }
-    if (parentId == 0xA02 && id == 0x100) {
+    if (parentId == 0x0A02 && id == COMMON_VARIABLE_CHUNK_ID) {
         return "CHUNKID_VARIABLES";
     }
-    if (parentId == 0xA02 && id == 0x200) {
+    if (parentId == 0x0A02 && id == 0x00000200) {
         return "CHUNKID_BASE_CLASS";
     }
-    if (parentId == 0x200 && id == 0x100) {
+    if (parentId == 0x00000200 && id == COMMON_VARIABLE_CHUNK_ID) {
         return "CHUNKID_VARIABLES";
     }
- 
     static const std::unordered_map<uint32_t, std::string> chunkNames = {
         { 0x0000, "W3D_CHUNK_MESH" }, // Mesh definition
         { 0x0001, "W3D_CHUNK_MESH_HEADER" }, // Header for mesh (Legacy)
@@ -240,8 +266,145 @@ inline std::string GetChunkName(uint32_t id, uint32_t parentId = 0) {
     if (it != chunkNames.end()) return it->second;
     return "UNKNOWN";
 }
-inline std::string LabelForChunk(uint32_t id, ChunkItem* item) {
+
+inline const std::unordered_map<uint32_t, std::string>& GetEditorChunkNameMap() {
+    static const std::unordered_map<uint32_t, std::string> editorNames = {
+        { 0x00050000, "CHUNKID_TERRAIN_DEF" },
+        { 0x00050001, "CHUNKID_TILE_DEF" },
+        { 0x00050002, "CHUNKID_LIGHT_DEF" },
+        { 0x00050003, "CHUNKID_WAYPATH_DEF" },
+        { 0x00050004, "CHUNKID_EDITOR_ZONE_DEF" },
+        { 0x00050005, "CHUNKID_TRANSITION_DEF" },
+        { 0x00050006, "CHUNKID_EDITOR_PHYS" },
+        { 0x00050007, "CHUNKID_PRESET" },
+        { 0x00050008, "CHUNKID_PRESETMGR" },
+        { 0x00050009, "CHUNKID_NODEMGR" },
+        { 0x0005000A, "CHUNKID_NODE_TERRAIN" },
+        { 0x0005000B, "CHUNKID_NODE_TILE" },
+        { 0x0005000C, "CHUNKID_NODE_OBJECTS" },
+        { 0x0005000D, "CHUNKID_NODE_LIGHT" },
+        { 0x0005000E, "CHUNKID_NODE_OLD_SOUND" },
+        { 0x0005000F, "CHUNKID_NODE_WAYPATH" },
+        { 0x00050010, "CHUNKID_NODE_ZONE" },
+        { 0x00050011, "CHUNKID_NODE_TRANSITION" },
+        { 0x00050012, "CHUNKID_EDITOR_SAVELOAD" },
+        { 0x00050013, "CHUNKID_EDITOR_MISC" },
+        { 0x00050014, "CHUNKID_NODE_TERRAIN_SECTION" },
+        { 0x00050015, "CHUNKID_NODE_VIS_POINT" },
+        { 0x00050016, "CHUNKID_VIS_POINT_DEF" },
+        { 0x00050017, "CHUNKID_NODE_PATHFIND_START" },
+        { 0x00050018, "CHUNKID_PATHFIND_START_DEF" },
+        { 0x00050019, "CHUNKID_DUMMY_OBJECT_DEF" },
+        { 0x0005001A, "CHUNKID_DUMMY_OBJECT" },
+        { 0x0005001B, "CHUNKID_NODE_WAYPOINT" },
+        { 0x0005001C, "CHUNKID_COVERSPOT_DEF" },
+        { 0x0005001D, "CHUNKID_NODE_COVER_ATTACK_POINT" },
+        { 0x0005001E, "CHUNKID_NODE_COVER_SPOT" },
+        { 0x0005001F, "CHUNKID_NODE_DAMAGE_ZONE" },
+        { 0x00050020, "CHUNKID_NODE_BUILDING_LEGACY" },
+        { 0x00050021, "CHUNKID_NODE_SPAWN_POINT" },
+        { 0x00050022, "CHUNKID_NODE_SPAWNER" },
+        { 0x00050023, "CHUNKID_NODE_BUILDING" },
+        { 0x00050024, "CHUNKID_NODE_BUILDING_CHILD" },
+        { 0x00050025, "CHUNKID_NODE_NEW_SOUND" },
+        { 0x00050026, "CHUNKID_EDITOR_ONLY_OBJECTS_DEF" },
+        { 0x00050027, "CHUNKID_EDITOR_ONLY_OBJECTS" },
+        { 0x00050028, "CHUNKID_EDITOR_PATHFIND_IMPORT_EXPORT" },
+        { 0x00050029, "CHUNKID_EDITOR_LIGHT_SOLVE_SAVELOAD" },
+        { 0x0005002A, "CHUNKID_HEIGHTFIELD_MGR" },
+        { 0x08040528, "CHUNKID_OPTION_VARIABLES" },
+        { 0x08040529, "CHUNKID_DIALOGUE_VARIABLES" },
+        { 0x0804052A, "CHUNKID_DIALOGUE_OPTION" }
+    };
+    return editorNames;
+}
+
+inline const std::unordered_map<uint32_t, std::string>& GetSaveLoadChunkNameMap() {
+    static const std::unordered_map<uint32_t, std::string> saveLoadNames = {
+        { 0x00000100, "CHUNKID_SAVELOAD_BEGIN" },
+        { 0x00000101, "CHUNKID_SAVELOAD_DEFMGR" },
+        { 0x00000102, "CHUNKID_TWIDDLER" },
+        { 0x00030000, "CHUNKID_WWAUDIO_BEGIN" }
+    };
+    return saveLoadNames;
+}
+
+inline const std::unordered_map<uint32_t, std::string>& GetFactoryChunkNameMap() {
+    static const std::unordered_map<uint32_t, std::string> factoryNames = {
+        { SIMPLEFACTORY_CHUNKID_OBJPOINTER, "SIMPLEFACTORY_CHUNKID_OBJPOINTER" },
+        { SIMPLEFACTORY_CHUNKID_OBJDATA, "SIMPLEFACTORY_CHUNKID_OBJDATA" }
+    };
+    return factoryNames;
+}
+
+inline const std::unordered_map<uint32_t, std::string>& GetPhysicsChunkNameMap() {
+    static const std::unordered_map<uint32_t, std::string> physicsNames = {
+        { 0x01070002, "STATICPHYSDEF_CHUNK_PHYSDEF" },
+        { 0x01070003, "STATICPHYSDEF_CHUNK_VARIABLES" }
+    };
+    return physicsNames;
+}
+
+inline std::string LookupDefinitionDBChunkName(uint32_t id, uint32_t parentId) {
+    const auto& saveLoadNames = GetSaveLoadChunkNameMap();
+    if (auto it = saveLoadNames.find(id); it != saveLoadNames.end()) {
+        return it->second;
+    }
+
+    const auto& editorNames = GetEditorChunkNameMap();
+    if (auto it = editorNames.find(id); it != editorNames.end()) {
+        return it->second;
+    }
+
+    const auto& factoryNames = GetFactoryChunkNameMap();
+    if (auto it = factoryNames.find(id); it != factoryNames.end()) {
+        return it->second;
+    }
+
+    const auto& physicsNames = GetPhysicsChunkNameMap();
+    if (auto it = physicsNames.find(id); it != physicsNames.end()) {
+        return it->second;
+    }
+
+    if (id == COMMON_VARIABLE_CHUNK_ID) {
+        if (parentId == 0 ||
+            parentId == CHUNKID_SAVELOAD_DEFMGR ||
+            parentId == SIMPLEFACTORY_CHUNKID_OBJDATA ||
+            parentId == SIMPLEFACTORY_CHUNKID_OBJPOINTER ||
+            parentId >= CHUNKID_COMMANDO_EDITOR_BEGIN ||
+            parentId == 0x00000200)
+        {
+            return "CHUNKID_VARIABLES";
+        }
+    }
+
+    if (id == 0x00000200 &&
+        (parentId >= CHUNKID_COMMANDO_EDITOR_BEGIN ||
+            parentId == SIMPLEFACTORY_CHUNKID_OBJDATA))
+    {
+        return "CHUNKID_BASE_CLASS";
+    }
+
+    return {};
+}
+
+inline std::string LabelForChunk(uint32_t id, ChunkItem* item, ChunkFileKind kindHint = ChunkFileKind::Unknown) {
+    ChunkFileKind context = kindHint;
+    if (context == ChunkFileKind::Unknown && item != nullptr) {
+        context = item->fileKind;
+    }
     uint32_t parentId = item && item->parent ? item->parent->id : 0;
+
+    if (const auto& ext = LookupExternalChunkName(id); !ext.empty()) {
+        return ext;
+    }
+
+    if (context == ChunkFileKind::DefinitionDB) {
+        std::string dbName = LookupDefinitionDBChunkName(id, parentId);
+        if (!dbName.empty()) {
+            return dbName;
+        }
+    }
 
     // Special case: label microchunks inside CHUNKID_DATA as frame array entries
     if (parentId == 0x03150809) {

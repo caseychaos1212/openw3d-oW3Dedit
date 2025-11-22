@@ -17,10 +17,305 @@
 #include <QFile>
 #include <QDir>
 #include <QFileInfo>
+#include <QCoreApplication>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QJsonValue>
+#include <QDebug>
 #include "backend/W3DMesh.h"
 #include <map>
+#include <optional>
+#include <sstream>
+#include <iomanip>
+#include <cctype>
+#include <cstring>
+#include <algorithm>
 
 Q_DECLARE_METATYPE(void*)
+
+namespace {
+
+constexpr uint32_t CHUNKID_PRESET = 0x00050007;
+constexpr uint32_t CHUNKID_PRESETMGR = 0x00050008;
+constexpr uint32_t CHUNKID_EDITOR_RANGE_START = 0x00050000;
+constexpr uint32_t CHUNKID_EDITOR_RANGE_END = 0x0005FFFF;
+
+std::string FormatHex(uint32_t value, int width = 8) {
+    std::ostringstream oss;
+    oss << "0x" << std::uppercase << std::hex << std::setw(width) << std::setfill('0') << value;
+    return oss.str();
+}
+
+std::string FormatUIntWithHex(uint32_t value) {
+    std::ostringstream oss;
+    oss << value << " (" << FormatHex(value) << ")";
+    return oss.str();
+}
+
+std::optional<uint32_t> ReadUInt32(const std::vector<uint8_t>& data) {
+    if (data.size() < sizeof(uint32_t)) return std::nullopt;
+    uint32_t value = 0;
+    std::memcpy(&value, data.data(), sizeof(uint32_t));
+    return value;
+}
+
+std::string BytesToHexString(const std::vector<uint8_t>& data) {
+    if (data.empty()) return {};
+    std::ostringstream oss;
+    oss << std::uppercase << std::hex << std::setfill('0');
+    for (size_t i = 0; i < data.size(); ++i) {
+        if (i) oss << ' ';
+        oss << std::setw(2) << static_cast<int>(data[i]);
+    }
+    return oss.str();
+}
+
+std::string DecodeCString(const std::vector<uint8_t>& data) {
+    if (data.empty()) return {};
+    auto zeroIt = std::find(data.begin(), data.end(), 0);
+    return std::string(reinterpret_cast<const char*>(data.data()),
+        static_cast<size_t>(zeroIt - data.begin()));
+}
+
+bool LooksPrintableAscii(const std::vector<uint8_t>& data) {
+    if (data.empty()) return false;
+    for (auto byte : data) {
+        if (byte == 0) continue;
+        if (!std::isprint(byte) && !std::isspace(byte)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+std::shared_ptr<ChunkItem> FindChildById(const std::shared_ptr<ChunkItem>& chunk, uint32_t id) {
+    for (const auto& child : chunk->children) {
+        if (child->id == id) {
+            return child;
+        }
+    }
+    return nullptr;
+}
+
+bool IsEditorPersistChunk(uint32_t id) {
+    if (id == CHUNKID_PRESET || id == CHUNKID_PRESETMGR) return false;
+    return id >= CHUNKID_EDITOR_RANGE_START && id <= CHUNKID_EDITOR_RANGE_END;
+}
+
+struct DefinitionVarsSummary {
+    std::optional<uint32_t> instanceId;
+    std::optional<std::string> name;
+};
+
+DefinitionVarsSummary SummarizeDefinitionVars(const std::shared_ptr<ChunkItem>& chunk) {
+    DefinitionVarsSummary summary;
+    for (const auto& micro : chunk->children) {
+        const uint8_t microId = static_cast<uint8_t>(micro->id & 0xFF);
+        if (microId == 0x01) {
+            summary.instanceId = ReadUInt32(micro->data);
+        } else if (microId == 0x03) {
+            summary.name = DecodeCString(micro->data);
+        }
+    }
+    return summary;
+}
+
+struct PresetVarsSummary {
+    std::optional<uint32_t> definitionId;
+    std::optional<bool> isTemporary;
+    std::optional<uint32_t> parentId;
+    std::vector<std::string> manualDependencies;
+};
+
+PresetVarsSummary SummarizePresetVars(const std::shared_ptr<ChunkItem>& chunk) {
+    PresetVarsSummary summary;
+    for (const auto& micro : chunk->children) {
+        const uint8_t microId = static_cast<uint8_t>(micro->id & 0xFF);
+        switch (microId) {
+        case 0x01:
+            summary.definitionId = ReadUInt32(micro->data);
+            break;
+        case 0x02:
+            if (!micro->data.empty()) {
+                summary.isTemporary = micro->data[0] != 0;
+            }
+            break;
+        case 0x07:
+            summary.parentId = ReadUInt32(micro->data);
+            break;
+        case 0x08:
+            summary.manualDependencies.emplace_back(DecodeCString(micro->data));
+            break;
+        default:
+            break;
+        }
+    }
+    return summary;
+}
+
+std::string DefinitionMicroChunkLabel(uint8_t id) {
+    switch (id) {
+    case 0x01: return "VARID_INSTANCEID";
+    case 0x02: return "VARID_PARENTID";
+    case 0x03: return "VARID_NAME";
+    default:
+    {
+        std::ostringstream oss;
+        oss << "MicroChunk[" << FormatHex(id, 2) << "]";
+        return oss.str();
+    }
+    }
+}
+
+std::string PresetMicroChunkLabel(uint8_t id) {
+    switch (id) {
+    case 0x01: return "VARID_DEFINITIONID";
+    case 0x02: return "VARID_ISTEMPORARY";
+    case 0x03: return "VARID_COMMENTS";
+    case 0x04: return "VARID_PARENTPTR";
+    case 0x05: return "VARID_THISPTR";
+    case 0x06: return "VARID_FILEDEPENDENCY";
+    case 0x07: return "VARID_PARENT_ID";
+    case 0x08: return "VARID_MANUALDEPENDENCY";
+    default:
+    {
+        std::ostringstream oss;
+        oss << "MicroChunk[" << FormatHex(id, 2) << "]";
+        return oss.str();
+    }
+    }
+}
+
+std::string FormatDefinitionMicroValue(uint8_t microId, const std::vector<uint8_t>& data) {
+    if (microId == 0x01) {
+        if (auto value = ReadUInt32(data)) return FormatUIntWithHex(*value);
+    }
+    if (microId == 0x03 && !data.empty()) {
+        return DecodeCString(data);
+    }
+    if (LooksPrintableAscii(data)) return DecodeCString(data);
+    return BytesToHexString(data);
+}
+
+std::string FormatPresetMicroValue(uint8_t microId, const std::vector<uint8_t>& data) {
+    switch (microId) {
+    case 0x01:
+    case 0x07:
+    case 0x04:
+    case 0x05:
+        if (auto value = ReadUInt32(data)) return FormatUIntWithHex(*value);
+        break;
+    case 0x02:
+        if (!data.empty()) return data[0] ? "true" : "false";
+        break;
+    case 0x03:
+    case 0x08:
+        return DecodeCString(data);
+    default:
+        break;
+    }
+    if (LooksPrintableAscii(data)) return DecodeCString(data);
+    return BytesToHexString(data);
+}
+
+std::vector<ChunkField> DescribeDefinitionChunk(const std::shared_ptr<ChunkItem>& chunk) {
+    std::vector<ChunkField> fields;
+    fields.push_back({ "Chunk ID", "hex", FormatHex(chunk->id) });
+    if (auto vars = FindChildById(chunk, COMMON_VARIABLE_CHUNK_ID)) {
+        auto summary = SummarizeDefinitionVars(vars);
+        if (summary.instanceId) {
+            fields.push_back({ "Definition ID", "uint32", FormatUIntWithHex(*summary.instanceId) });
+        }
+        if (summary.name && !summary.name->empty()) {
+            fields.push_back({ "Name", "string", *summary.name });
+        }
+    } else {
+        fields.push_back({ "Variables", "info", "No CHUNKID_VARIABLES child was found." });
+    }
+    return fields;
+}
+
+std::vector<ChunkField> DescribeDefinitionVariablesChunk(const std::shared_ptr<ChunkItem>& chunk) {
+    std::vector<ChunkField> fields;
+    for (const auto& micro : chunk->children) {
+        const uint8_t microId = static_cast<uint8_t>(micro->id & 0xFF);
+        fields.push_back({
+            DefinitionMicroChunkLabel(microId),
+            "microchunk",
+            FormatDefinitionMicroValue(microId, micro->data)
+            });
+    }
+    if (fields.empty()) {
+        fields.push_back({ "MicroChunks", "info", "This block does not contain any micro-chunks." });
+    }
+    return fields;
+}
+
+std::vector<ChunkField> DescribePresetChunk(const std::shared_ptr<ChunkItem>& chunk) {
+    std::vector<ChunkField> fields;
+    fields.push_back({ "Chunk ID", "hex", FormatHex(chunk->id) });
+    if (auto vars = FindChildById(chunk, COMMON_VARIABLE_CHUNK_ID)) {
+        auto summary = SummarizePresetVars(vars);
+        if (summary.definitionId) {
+            fields.push_back({ "Definition ID", "uint32", FormatUIntWithHex(*summary.definitionId) });
+        }
+        if (summary.isTemporary) {
+            fields.push_back({ "Is Temporary", "bool", *summary.isTemporary ? "true" : "false" });
+        }
+        if (summary.parentId) {
+            fields.push_back({ "Parent ID", "uint32", FormatUIntWithHex(*summary.parentId) });
+        }
+        if (!summary.manualDependencies.empty()) {
+            std::ostringstream oss;
+            for (size_t i = 0; i < summary.manualDependencies.size(); ++i) {
+                if (i) oss << "\n";
+                oss << summary.manualDependencies[i];
+            }
+            fields.push_back({ "Manual Dependencies", "string", oss.str() });
+        }
+    } else {
+        fields.push_back({ "Variables", "info", "No CHUNKID_VARIABLES child was found." });
+    }
+    return fields;
+}
+
+std::vector<ChunkField> DescribePresetVariablesChunk(const std::shared_ptr<ChunkItem>& chunk) {
+    std::vector<ChunkField> fields;
+    for (const auto& micro : chunk->children) {
+        const uint8_t microId = static_cast<uint8_t>(micro->id & 0xFF);
+        fields.push_back({
+            PresetMicroChunkLabel(microId),
+            "microchunk",
+            FormatPresetMicroValue(microId, micro->data)
+            });
+    }
+    if (fields.empty()) {
+        fields.push_back({ "MicroChunks", "info", "This block does not contain any micro-chunks." });
+    }
+    return fields;
+}
+
+std::vector<ChunkField> DescribeDefinitionMicroChunk(const std::shared_ptr<ChunkItem>& chunk) {
+    std::vector<ChunkField> fields;
+    const uint8_t microId = static_cast<uint8_t>(chunk->id & 0xFF);
+    fields.push_back({ "MicroChunk ID", "hex", FormatHex(microId, 2) });
+    fields.push_back({ "Label", "string", DefinitionMicroChunkLabel(microId) });
+    fields.push_back({ "Value", "data", FormatDefinitionMicroValue(microId, chunk->data) });
+    fields.push_back({ "Raw Bytes", "hex", BytesToHexString(chunk->data) });
+    return fields;
+}
+
+std::vector<ChunkField> DescribePresetMicroChunk(const std::shared_ptr<ChunkItem>& chunk) {
+    std::vector<ChunkField> fields;
+    const uint8_t microId = static_cast<uint8_t>(chunk->id & 0xFF);
+    fields.push_back({ "MicroChunk ID", "hex", FormatHex(microId, 2) });
+    fields.push_back({ "Label", "string", PresetMicroChunkLabel(microId) });
+    fields.push_back({ "Value", "data", FormatPresetMicroValue(microId, chunk->data) });
+    fields.push_back({ "Raw Bytes", "hex", BytesToHexString(chunk->data) });
+    return fields;
+}
+
+}
 
 
 MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
@@ -42,6 +337,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     tableWidget->setHorizontalHeaderLabels({ "Field", "Type", "Value" });
 
     chunkData = std::make_unique<ChunkData>();
+    loadHashNameOverrides();
 
     splitter->addWidget(treeWidget);
     splitter->addWidget(tableWidget);
@@ -71,7 +367,11 @@ void MainWindow::openFile(const QString& path) {
     QString filePath = path;
     if (filePath.isEmpty()) {
         QString startDir = lastDirectory.isEmpty() ? QDir::homePath() : lastDirectory;
-        filePath = QFileDialog::getOpenFileName(this, "Open W3D File", startDir, "W3D Files (*.w3d);;All Files (*)");
+        filePath = QFileDialog::getOpenFileName(
+            this,
+            "Open Chunk-Based File",
+            startDir,
+            "W3D / Definition Databases (*.w3d *.ddb);;W3D Files (*.w3d);;Definition Databases (*.ddb);;All Files (*)");
         if (filePath.isEmpty()) return;
     }
 
@@ -84,7 +384,47 @@ void MainWindow::openFile(const QString& path) {
     populateTree();
     AddRecentFile(filePath);
     lastDirectory = QFileInfo(filePath).absolutePath();
+    currentFilePath = filePath;
      
+}
+
+void MainWindow::loadHashNameOverrides() {
+    const QString jsonPath = QCoreApplication::applicationDirPath() + "/objects_hashes.json";
+    QFile file(jsonPath);
+    if (!file.exists()) {
+        return;
+    }
+    if (!file.open(QIODevice::ReadOnly)) {
+        qWarning() << "Failed to open hash map" << jsonPath;
+        return;
+    }
+    const QByteArray raw = file.readAll();
+    file.close();
+
+    QJsonParseError parseError;
+    const QJsonDocument doc = QJsonDocument::fromJson(raw, &parseError);
+    if (parseError.error != QJsonParseError::NoError || !doc.isObject()) {
+        qWarning() << "Invalid JSON in" << jsonPath << ":" << parseError.errorString();
+        return;
+    }
+
+    const QJsonObject obj = doc.object();
+    int loaded = 0;
+    for (auto it = obj.begin(); it != obj.end(); ++it) {
+        QString key = it.key().trimmed();
+        if (key.startsWith("0x", Qt::CaseInsensitive)) {
+            key = key.mid(2);
+        }
+        bool ok = false;
+        uint32_t id = key.toUInt(&ok, 16);
+        if (!ok) {
+            continue;
+        }
+        const QString value = it.value().toString();
+        RegisterExternalChunkName(id, value.toStdString());
+        ++loaded;
+    }
+    qInfo() << "Loaded" << loaded << "hash override names from" << jsonPath;
 }
 
 
@@ -271,7 +611,34 @@ void MainWindow::handleTreeSelection() {
             target->parent && target->parent->id == 0x0B42)
         {
             fields = InterpretShdSubMeshShaderDefVariables50(target);
-        
+
+        }
+    }
+
+    // --- Definition / Preset (DDB) helpers ---
+    if (fields.empty()) {
+        if (target->id == CHUNKID_PRESET) {
+            fields = DescribePresetChunk(target);
+        }
+        else if (IsEditorPersistChunk(target->id)) {
+            fields = DescribeDefinitionChunk(target);
+        }
+        else if (target->id == COMMON_VARIABLE_CHUNK_ID && target->parent) {
+            if (target->parent->id == CHUNKID_PRESET) {
+                fields = DescribePresetVariablesChunk(target);
+            } else if (IsEditorPersistChunk(target->parent->id)) {
+                fields = DescribeDefinitionVariablesChunk(target);
+            }
+        }
+        else if (target->parent && target->parent->id == COMMON_VARIABLE_CHUNK_ID) {
+            const auto* grandParent = target->parent->parent;
+            if (grandParent) {
+                if (grandParent->id == CHUNKID_PRESET) {
+                    fields = DescribePresetMicroChunk(target);
+                } else if (IsEditorPersistChunk(grandParent->id)) {
+                    fields = DescribeDefinitionMicroChunk(target);
+                }
+            }
         }
     }
 
@@ -569,7 +936,7 @@ void MainWindow::OpenRecentFile() {
 static void recursePrint(const std::shared_ptr<ChunkItem>& c,
     int depth,
     QTextStream& out,
-    std::map<uint32_t, int>& counts)
+    std::map<std::pair<int, uint32_t>, int>& counts)
 {
     // 1) Skip raw micro chunks under the channel wrapper
     if (c->id == MICRO_ID && c->parent && c->parent->id == CHANNEL_WRAPPER)
@@ -584,7 +951,7 @@ static void recursePrint(const std::shared_ptr<ChunkItem>& c,
         return;
 
     // 3) Count this chunk
-    ++counts[c->id];
+    ++counts[{static_cast<int>(c->fileKind), c->id}];
 
     // 4) Print "0x######## NAME"
     out
@@ -601,16 +968,53 @@ static void recursePrint(const std::shared_ptr<ChunkItem>& c,
 
 void MainWindow::on_actionExportChunkList_triggered()
 {
-    // 1) pick source folder
-    QString srcDir = QFileDialog::getExistingDirectory(
-        this,
-        tr("Select W3D Directory"),
-        QString(),
-        QFileDialog::ShowDirsOnly | QFileDialog::DontResolveSymlinks
-    );
-    if (srcDir.isEmpty()) return;
+    QStringList filesToDump;
 
-    // 2) pick output file
+    if (!currentFilePath.isEmpty() && chunkData && !chunkData->getChunks().empty()) {
+        auto choice = QMessageBox::question(
+            this,
+            tr("Export Chunk List"),
+            tr("Use the currently opened file?\n%1").arg(currentFilePath),
+            QMessageBox::Yes | QMessageBox::No | QMessageBox::Cancel,
+            QMessageBox::Yes);
+        if (choice == QMessageBox::Yes) {
+            filesToDump << currentFilePath;
+        } else if (choice == QMessageBox::Cancel) {
+            return;
+        }
+    }
+
+    if (filesToDump.isEmpty()) {
+        QFileDialog fileDialog(this, tr("Select Chunk Files"));
+        fileDialog.setFileMode(QFileDialog::ExistingFiles);
+        fileDialog.setNameFilter(tr("Chunk Files (*.w3d *.W3D *.wlt *.ddb *.DDB);;All Files (*)"));
+        if (fileDialog.exec() == QDialog::Accepted) {
+            filesToDump = fileDialog.selectedFiles();
+        }
+    }
+
+    if (filesToDump.isEmpty()) {
+        QString srcDir = QFileDialog::getExistingDirectory(
+            this,
+            tr("Select Directory with Chunk Files"),
+            QString(),
+            QFileDialog::ShowDirsOnly | QFileDialog::DontResolveSymlinks
+        );
+        if (srcDir.isEmpty()) return;
+
+        QDir dir(srcDir);
+        auto fileList = dir.entryList(QStringList{ "*.w3d", "*.W3D", "*.wlt", "*.ddb", "*.DDB" },
+            QDir::Files | QDir::NoSymLinks);
+        for (const auto& fn : fileList) {
+            filesToDump << dir.absoluteFilePath(fn);
+        }
+        if (filesToDump.isEmpty()) {
+            QMessageBox::information(this, tr("No Files Found"),
+                tr("The selected directory does not contain any supported files."));
+            return;
+        }
+    }
+
     QString outPath = QFileDialog::getSaveFileName(
         this,
         tr("Save Chunk List As..."),
@@ -619,40 +1023,45 @@ void MainWindow::on_actionExportChunkList_triggered()
     );
     if (outPath.isEmpty()) return;
 
-    // 3) open output file
     QFile file(outPath);
     if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) {
         QMessageBox::warning(this, tr("Error"),
             tr("Cannot write to %1").arg(outPath));
         return;
     }
-    QTextStream txt(&file);
 
-    // 4) iterate .w3d files and collect counts
-    std::map<uint32_t, int> counts;
-    QDir dir(srcDir);
-    auto w3dFiles = dir.entryList(QStringList{ "*.w3d", "*.W3D", "*.wlt" },
-        QDir::Files | QDir::NoSymLinks);
-    for (auto& fn : w3dFiles) {
-        QString full = dir.absoluteFilePath(fn);
-        txt << "=== " << full << " ===\n";
+    QTextStream txt(&file);
+    std::map<std::pair<int, uint32_t>, int> counts;
+
+    for (const auto& fullPath : filesToDump) {
+        txt << "=== " << fullPath << " ===\n";
 
         ChunkData cd;
-        if (!cd.loadFromFile(full.toStdString())) {
+        if (!cd.loadFromFile(fullPath.toStdString())) {
             txt << "[ parse error ]\n\n";
             continue;
         }
-        // for each top chunk, recurse
         for (auto& top : cd.getChunks()) {
             recursePrint(top, 1, txt, counts);
         }
         txt << "\n";
     }
-    // 5) Output totals
+
+    auto kindToString = [](ChunkFileKind kind) -> QString {
+        switch (kind) {
+        case ChunkFileKind::DefinitionDB: return "DefinitionDB";
+        case ChunkFileKind::W3D: return "W3D";
+        default: return "Unknown";
+        }
+    };
+
     txt << "=== Chunk Type Totals ===\n";
-    for (const auto& [id, count] : counts) {
+    for (const auto& [key, count] : counts) {
+        ChunkFileKind kind = static_cast<ChunkFileKind>(key.first);
+        uint32_t id = key.second;
         txt << QString("0x%1 ").arg(id, 8, 16, QChar('0')).toUpper()
-            << QString::fromStdString(LabelForChunk(id, nullptr))
+            << "(" << kindToString(kind) << ") "
+            << QString::fromStdString(LabelForChunk(id, nullptr, kind))
             << ": " << count << "\n";
     }
 

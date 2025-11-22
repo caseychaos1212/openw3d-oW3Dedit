@@ -37,3 +37,18 @@
 |----------------------|-----------------------------------------------------------|
 | Format converter     | .fbx to .w3d using import logic                           |
 | W3dviewer Features   | add support for emitter creation and any other features   |
+
+## Utilities
+
+### Definition DB hash dump
+
+`tools/ddb_hash_dump.cpp` is a small console helper that walks a `.ddb` file, extracts every definition name stored in `CHUNKID_VARIABLES`, computes the CRC32 hash the game uses, and writes a JSON mapping (`hash -> name`).
+
+Usage:
+
+```
+g++ -std=c++17 tools/ddb_hash_dump.cpp backend/ChunkData.cpp -o ddb_hash_dump
+./ddb_hash_dump /path/to/objects.ddb objects_hashes.json
+```
+
+You can feed the resulting JSON back into the viewer/exporter so hashed chunk IDs (e.g. `0x363D5EEA`) show the friendly name instead of the raw value.

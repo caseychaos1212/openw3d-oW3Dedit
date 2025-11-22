@@ -30,10 +30,12 @@ private slots:
     void on_actionExportChunkList_triggered();
 private:
     void populateTree();
+    void loadHashNameOverrides();
 
     QTreeWidget* treeWidget = nullptr;
     QTableWidget* tableWidget = nullptr;
     std::unique_ptr<ChunkData> chunkData;
+    QString currentFilePath;
     QString recentFilesPath;
     QStringList recentFiles;
     QMenu* recentFilesMenu = nullptr;

@@ -3,9 +3,33 @@
 #include <iostream>
 #include <memory>
 #include <vector>
+#include <algorithm>
+#include <cctype>
 #include "ChunkData.h"
 #include "ChunkNames.h"
 
+
+namespace {
+
+std::string ToLower(std::string value) {
+    std::transform(value.begin(), value.end(), value.begin(),
+        [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    return value;
+}
+
+ChunkFileKind DetectFileKind(const std::string& filename) {
+    auto dot = filename.find_last_of('.');
+    if (dot == std::string::npos) {
+        return ChunkFileKind::W3D;
+    }
+    std::string ext = ToLower(filename.substr(dot));
+    if (ext == ".ddb") {
+        return ChunkFileKind::DefinitionDB;
+    }
+    return ChunkFileKind::W3D;
+}
+
+}
 
 static bool readUint32(std::istream& stream, uint32_t& value) {
     value = 0;
@@ -13,7 +37,7 @@ static bool readUint32(std::istream& stream, uint32_t& value) {
     return static_cast<bool>(stream);
 }
 
-inline bool IsForcedWrapper(uint32_t id, uint32_t parent = 0)
+inline bool IsForcedWrapper(uint32_t id, const ChunkItem* parent = nullptr)
 {
     switch (id) {
     case 0x0000: // W3D_CHUNK_MESH
@@ -58,16 +82,18 @@ inline bool IsForcedWrapper(uint32_t id, uint32_t parent = 0)
     case 0x0B40: // W3D_CHUNK_SHDSUBMESH_SHADER
 
 
-        return true;
-
-
-
     default:
-        (void)parent; // parent available if you later need parent-sensitive overrides
+        if (id == COMMON_VARIABLE_CHUNK_ID &&
+            parent != nullptr &&
+            (parent->fileKind == ChunkFileKind::DefinitionDB ||
+             parent->id >= CHUNKID_COMMANDO_EDITOR_BEGIN))
+        {
+            return true;
+        }
+        (void)parent;
         return false;
     }
 }
-
 
 bool ChunkData::loadFromFile(const std::string& filename) {
     // Ensure previous data does not persist between loads
@@ -82,11 +108,14 @@ bool ChunkData::loadFromFile(const std::string& filename) {
     auto fileSize = file.tellg();
     file.seekg(0, std::ios::beg);
 
+    currentFileKind = DetectFileKind(filename);
+
     std::cout << "Opening file: " << filename << "\n"
         << "File size: " << fileSize << "\n";
 
     while (file && file.tellg() < fileSize) {
         auto chunk = std::make_shared<ChunkItem>();
+        chunk->fileKind = currentFileKind;
         std::streampos startPos = file.tellg();
 
         // 1 read ID
@@ -124,7 +153,7 @@ bool ChunkData::loadFromFile(const std::string& filename) {
             << "\n";
 
         // 5 if MSB said this has subchunks OR the ID is in our forced-wrapper list
-        const bool wraps = chunk->hasSubChunks || IsForcedWrapper(chunk->id);
+        const bool wraps = chunk->hasSubChunks || IsForcedWrapper(chunk->id, nullptr);
         if (wraps) {
             std::string buf(reinterpret_cast<char*>(chunk->data.data()), chunk->length);
             std::istringstream subStream(buf);
@@ -175,6 +204,10 @@ bool ChunkData::parseChunk(std::istream& stream, std::shared_ptr<ChunkItem>& par
             {
                 microMode = true;
             }
+            else if (parent->id == COMMON_VARIABLE_CHUNK_ID && parent->parent != nullptr)
+            {
+                microMode = true;
+            }
           
         }
 
@@ -193,6 +226,7 @@ bool ChunkData::parseChunk(std::istream& stream, std::shared_ptr<ChunkItem>& par
             }
 
             auto child = std::make_shared<ChunkItem>();
+            child->fileKind = parent ? parent->fileKind : currentFileKind;
             child->id = mid;
             child->length = mlen;
             child->data.resize(mlen);
@@ -206,6 +240,7 @@ bool ChunkData::parseChunk(std::istream& stream, std::shared_ptr<ChunkItem>& par
         // 2) otherwise it's a normal 4 byte ID + 4 byte length + payload
         if (stream.rdbuf()->in_avail() < 8) break;
         auto child = std::make_shared<ChunkItem>();
+        child->fileKind = parent ? parent->fileKind : currentFileKind;
         if (!readUint32(stream, child->id)) break;
 
         uint32_t rawLen = 0;
@@ -229,7 +264,7 @@ bool ChunkData::parseChunk(std::istream& stream, std::shared_ptr<ChunkItem>& par
         parent->children.push_back(child);
 
         // 3) recurse only if MSB was set
-        if (child->hasSubChunks) {
+        if (child->hasSubChunks || IsForcedWrapper(child->id, parent.get())) {
             std::string buf(reinterpret_cast<char*>(child->data.data()), child->length);
             std::istringstream subStream(buf);
             parseChunk(subStream, child);
@@ -244,4 +279,5 @@ bool ChunkData::parseChunk(std::istream& stream, std::shared_ptr<ChunkItem>& par
 
 void ChunkData::clear() {
     chunks.clear();
+    currentFileKind = ChunkFileKind::Unknown;
 }
