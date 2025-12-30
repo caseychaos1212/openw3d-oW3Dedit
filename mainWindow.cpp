@@ -9,6 +9,7 @@
 #include <QFileDialog>
 #include <QMessageBox>
 #include <QSplitter>
+#include <QScrollArea>
 #include <QTreeWidget>
 #include <QTableWidget>
 #include <QAbstractItemView>
@@ -30,10 +31,12 @@
 #include <QHeaderView>
 #include <iostream>
 #include <QStandardPaths>
+#include <QSettings>
 #include <QTextStream>
 #include <QFile>
 #include <QDir>
 #include <QFileInfo>
+#include <QCloseEvent>
 #include "backend/W3DMesh.h"
 #include "backend/W3DStructs.h"
 #include "backend/ChunkMutators.h"
@@ -638,23 +641,25 @@ MeshEditorWidget::MeshEditorWidget(QWidget* parent) : QWidget(parent) {
     form->addRow(tr("Container Name"), containerNameEdit);
     layout->addLayout(form);
 
-    auto* collisionGroup = new QGroupBox(tr("Collision Flags"), this);
-    auto* collisionLayout = new QGridLayout(collisionGroup);
-    const std::array<std::pair<MeshAttr, const char*>, 5> kFlags = { {
+    auto* flagGroup = new QGroupBox(tr("Mesh Flags"), this);
+    auto* flagLayout = new QGridLayout(flagGroup);
+    const std::array<std::pair<MeshAttr, const char*>, 7> kFlags = { {
         { MeshAttr::W3D_MESH_FLAG_COLLISION_TYPE_PHYSICAL,   "Physical" },
         { MeshAttr::W3D_MESH_FLAG_COLLISION_TYPE_PROJECTILE, "Projectile" },
         { MeshAttr::W3D_MESH_FLAG_COLLISION_TYPE_VIS,        "Visibility" },
         { MeshAttr::W3D_MESH_FLAG_COLLISION_TYPE_CAMERA,     "Camera" },
         { MeshAttr::W3D_MESH_FLAG_COLLISION_TYPE_VEHICLE,    "Vehicle" },
+        { MeshAttr::W3D_MESH_FLAG_HIDDEN,                    "Hide" },
+        { MeshAttr::W3D_MESH_FLAG_TWO_SIDED,                 "2-Sided" },
     } };
     int row = 0;
     for (const auto& [flag, label] : kFlags) {
-        auto* check = new QCheckBox(QString::fromLatin1(label), collisionGroup);
-        collisionLayout->addWidget(check, row / 2, row % 2);
-        collisionControls.push_back({ MeshAttrValue(flag), check });
+        auto* check = new QCheckBox(QString::fromLatin1(label), flagGroup);
+        flagLayout->addWidget(check, row / 2, row % 2);
+        flagControls.push_back({ MeshAttrValue(flag), check });
         ++row;
     }
-    layout->addWidget(collisionGroup);
+    layout->addWidget(flagGroup);
 
     applyButton = new QPushButton(tr("Apply Mesh Changes"), this);
     connect(applyButton, &QPushButton::clicked,
@@ -668,7 +673,7 @@ void MeshEditorWidget::setChunk(const std::shared_ptr<ChunkItem>& chunkPtr) {
     chunk = chunkPtr;
     meshNameEdit->clear();
     containerNameEdit->clear();
-    for (auto& ctrl : collisionControls) {
+    for (auto& ctrl : flagControls) {
         if (ctrl.box) ctrl.box->setChecked(false);
     }
     if (!chunkPtr) {
@@ -687,7 +692,7 @@ void MeshEditorWidget::setChunk(const std::shared_ptr<ChunkItem>& chunkPtr) {
     containerNameEdit->setText(ReadFixedString(header.ContainerName, W3D_NAME_LEN));
 
     const uint32_t attr = header.Attributes;
-    for (auto& ctrl : collisionControls) {
+    for (auto& ctrl : flagControls) {
         ctrl.box->setChecked((attr & ctrl.mask) != 0);
     }
 
@@ -698,10 +703,22 @@ void MeshEditorWidget::applyChanges() {
     auto chunkPtr = chunk.lock();
     if (!chunkPtr) return;
 
-    const std::string meshName = meshNameEdit->text().toStdString();
-    const std::string containerName = containerNameEdit->text().toStdString();
+    QString oldMeshName;
+    QString oldContainerName;
+    {
+        auto parsed = ParseChunkStruct<W3dMeshHeader3Struct>(chunkPtr);
+        if (auto header = std::get_if<W3dMeshHeader3Struct>(&parsed)) {
+            oldMeshName = ReadFixedString(header->MeshName, W3D_NAME_LEN);
+            oldContainerName = ReadFixedString(header->ContainerName, W3D_NAME_LEN);
+        }
+    }
+
+    const QString newMeshName = meshNameEdit->text();
+    const QString newContainerName = containerNameEdit->text();
+    const std::string meshName = newMeshName.toStdString();
+    const std::string containerName = newContainerName.toStdString();
     uint32_t clearMask = 0;
-    for (const auto& ctrl : collisionControls) {
+    for (const auto& ctrl : flagControls) {
         clearMask |= ctrl.mask;
     }
 
@@ -712,7 +729,7 @@ void MeshEditorWidget::applyChanges() {
             W3DEdit::WriteFixedString(header.MeshName, W3D_NAME_LEN, meshName);
             W3DEdit::WriteFixedString(header.ContainerName, W3D_NAME_LEN, containerName);
             uint32_t attr = header.Attributes & ~clearMask;
-            for (const auto& ctrl : collisionControls) {
+            for (const auto& ctrl : flagControls) {
                 if (ctrl.box->isChecked()) {
                     attr |= ctrl.mask;
                 }
@@ -727,6 +744,9 @@ void MeshEditorWidget::applyChanges() {
         return;
     }
 
+    if (oldMeshName != newMeshName || oldContainerName != newContainerName) {
+        emit meshRenamed(oldMeshName, newMeshName, oldContainerName, newContainerName);
+    }
     emit chunkEdited();
 }
 
@@ -996,6 +1016,273 @@ void StringEditorWidget::applyChanges() {
     emit chunkEdited();
 }
 
+SurfaceTypeEditorWidget::SurfaceTypeEditorWidget(QWidget* parent)
+    : QWidget(parent) {
+    setEnabled(false);
+
+    auto* layout = new QVBoxLayout(this);
+    layout->setContentsMargins(0, 0, 0, 0);
+    layout->setSpacing(6);
+
+    auto* form = new QFormLayout();
+    surfaceTypeCombo = new QComboBox(this);
+
+    for (uint32_t i = 0; i <= 255; ++i) {
+        const char* name = SurfaceTypeName(i);
+        if (!name) continue;
+        surfaceTypeCombo->addItem(QString::fromLatin1("%1 (%2)").arg(QString::fromLatin1(name)).arg(i),
+            static_cast<int>(i));
+    }
+
+    form->addRow(tr("Surface Type"), surfaceTypeCombo);
+    layout->addLayout(form);
+
+    applyButton = new QPushButton(tr("Apply"), this);
+    connect(applyButton, &QPushButton::clicked,
+        this, &SurfaceTypeEditorWidget::applyChanges);
+
+    layout->addStretch();
+    layout->addWidget(applyButton, 0, Qt::AlignRight);
+}
+
+void SurfaceTypeEditorWidget::setChunk(const std::shared_ptr<ChunkItem>& chunkPtr) {
+    chunk = chunkPtr;
+    if (!chunkPtr) {
+        surfaceTypeCombo->setCurrentIndex(-1);
+        setEnabled(false);
+        return;
+    }
+
+    uint32_t surfaceType = 0;
+    bool found = false;
+
+    const auto& buf = chunkPtr->data;
+    size_t off = 0;
+    while (off + 2 <= buf.size()) {
+        const uint8_t id = buf[off + 0];
+        const uint8_t size = buf[off + 1];
+        off += 2;
+        if (off + size > buf.size()) break;
+
+        if (id == 0x01 && size >= 4) { // VARID_SURFACETYPE
+            std::memcpy(&surfaceType, buf.data() + off, 4);
+            found = true;
+            break;
+        }
+        off += size;
+    }
+
+    if (found) {
+        SetComboValue(surfaceTypeCombo, static_cast<int>(surfaceType));
+    }
+    else {
+        SetComboValue(surfaceTypeCombo, 13); // Default
+    }
+
+    setEnabled(true);
+}
+
+void SurfaceTypeEditorWidget::applyChanges() {
+    auto chunkPtr = chunk.lock();
+    if (!chunkPtr) return;
+
+    const QVariant data = surfaceTypeCombo->currentData();
+    if (!data.isValid()) return;
+    const uint32_t surfaceType = static_cast<uint32_t>(data.toInt());
+
+    auto& buf = chunkPtr->data;
+    size_t off = 0;
+    while (off + 2 <= buf.size()) {
+        const uint8_t id = buf[off + 0];
+        const uint8_t size = buf[off + 1];
+        off += 2;
+        if (off + size > buf.size()) {
+            QMessageBox::warning(this, tr("Error"),
+                tr("Surface type chunk is truncated."));
+            return;
+        }
+
+        if (id == 0x01) { // VARID_SURFACETYPE
+            if (size < 4) {
+                QMessageBox::warning(this, tr("Error"),
+                    tr("Surface type value is invalid."));
+                return;
+            }
+            std::memcpy(buf.data() + off, &surfaceType, 4);
+            chunkPtr->length = static_cast<uint32_t>(buf.size());
+            emit chunkEdited();
+            return;
+        }
+        off += size;
+    }
+
+    // Not found: append a new micro-chunk
+    buf.push_back(0x01);
+    buf.push_back(4);
+    buf.push_back(static_cast<uint8_t>(surfaceType & 0xFF));
+    buf.push_back(static_cast<uint8_t>((surfaceType >> 8) & 0xFF));
+    buf.push_back(static_cast<uint8_t>((surfaceType >> 16) & 0xFF));
+    buf.push_back(static_cast<uint8_t>((surfaceType >> 24) & 0xFF));
+    chunkPtr->length = static_cast<uint32_t>(buf.size());
+    emit chunkEdited();
+}
+
+TriangleSurfaceTypeEditorWidget::TriangleSurfaceTypeEditorWidget(QWidget* parent)
+    : QWidget(parent) {
+    setEnabled(false);
+
+    auto* layout = new QVBoxLayout(this);
+    layout->setContentsMargins(0, 0, 0, 0);
+    layout->setSpacing(6);
+
+    auto* form = new QFormLayout();
+    fromCombo = new QComboBox(this);
+    toCombo = new QComboBox(this);
+
+    fromCombo->addItem(tr("Any"), -1);
+    for (uint32_t i = 0; i <= 255; ++i) {
+        const char* name = SurfaceTypeName(i);
+        if (!name) continue;
+        const auto label = QString::fromLatin1("%1 (%2)")
+            .arg(QString::fromLatin1(name))
+            .arg(i);
+        fromCombo->addItem(label, static_cast<int>(i));
+        toCombo->addItem(label, static_cast<int>(i));
+    }
+
+    form->addRow(tr("Replace"), fromCombo);
+    form->addRow(tr("With"), toCombo);
+    layout->addLayout(form);
+
+    statsLabel = new QLabel(this);
+    statsLabel->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    layout->addWidget(statsLabel);
+
+    applyButton = new QPushButton(tr("Apply"), this);
+    connect(applyButton, &QPushButton::clicked,
+        this, &TriangleSurfaceTypeEditorWidget::applyChanges);
+    connect(fromCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
+        this, &TriangleSurfaceTypeEditorWidget::updateStats);
+
+    layout->addStretch();
+    layout->addWidget(applyButton, 0, Qt::AlignRight);
+}
+
+void TriangleSurfaceTypeEditorWidget::setChunk(const std::shared_ptr<ChunkItem>& chunkPtr) {
+    chunk = chunkPtr;
+    if (!chunkPtr) {
+        statsLabel->clear();
+        fromCombo->setCurrentIndex(0);
+        toCombo->setCurrentIndex(-1);
+        setEnabled(false);
+        return;
+    }
+
+    if (chunkPtr->data.size() % sizeof(W3dTriStruct) != 0) {
+        statsLabel->setText(tr("Malformed TRIANGLES chunk."));
+        setEnabled(false);
+        return;
+    }
+
+    // Default selections based on the first triangle (when available).
+    const std::size_t triCount = chunkPtr->data.size() / sizeof(W3dTriStruct);
+    if (triCount > 0) {
+        uint32_t firstType{};
+        std::memcpy(&firstType,
+            chunkPtr->data.data() + offsetof(W3dTriStruct, Attributes),
+            sizeof(firstType));
+        SetComboValue(toCombo, static_cast<int>(firstType));
+    }
+    else {
+        SetComboValue(toCombo, 13); // Default
+    }
+
+    fromCombo->setCurrentIndex(0); // Any
+    setEnabled(true);
+    updateStats();
+}
+
+void TriangleSurfaceTypeEditorWidget::updateStats() {
+    auto chunkPtr = chunk.lock();
+    if (!chunkPtr) {
+        statsLabel->clear();
+        return;
+    }
+
+    const auto& buf = chunkPtr->data;
+    if (buf.size() % sizeof(W3dTriStruct) != 0) {
+        statsLabel->setText(tr("Malformed TRIANGLES chunk."));
+        return;
+    }
+
+    const int fromType = fromCombo->currentData().toInt();
+    const std::size_t triCount = buf.size() / sizeof(W3dTriStruct);
+    std::size_t matches = 0;
+
+    if (fromType < 0) {
+        matches = triCount;
+    }
+    else {
+        for (std::size_t i = 0; i < triCount; ++i) {
+            uint32_t surfaceType{};
+            const std::size_t off = i * sizeof(W3dTriStruct) + offsetof(W3dTriStruct, Attributes);
+            std::memcpy(&surfaceType, buf.data() + off, sizeof(surfaceType));
+            if (surfaceType == static_cast<uint32_t>(fromType)) {
+                ++matches;
+            }
+        }
+    }
+
+    statsLabel->setText(tr("Triangles: %1 • Matches: %2").arg(triCount).arg(matches));
+}
+
+void TriangleSurfaceTypeEditorWidget::applyChanges() {
+    auto chunkPtr = chunk.lock();
+    if (!chunkPtr) return;
+
+    if (chunkPtr->data.size() % sizeof(W3dTriStruct) != 0) {
+        QMessageBox::warning(this, tr("Error"), tr("Malformed TRIANGLES chunk."));
+        return;
+    }
+
+    const QVariant fromData = fromCombo->currentData();
+    const QVariant toData = toCombo->currentData();
+    if (!fromData.isValid() || !toData.isValid()) return;
+
+    const int fromType = fromData.toInt();
+    const uint32_t toType = static_cast<uint32_t>(toData.toInt());
+
+    auto& buf = chunkPtr->data;
+    const std::size_t triCount = buf.size() / sizeof(W3dTriStruct);
+    std::size_t modified = 0;
+
+    for (std::size_t i = 0; i < triCount; ++i) {
+        const std::size_t off = i * sizeof(W3dTriStruct) + offsetof(W3dTriStruct, Attributes);
+        uint32_t currentType{};
+        std::memcpy(&currentType, buf.data() + off, sizeof(currentType));
+
+        if (fromType >= 0 && currentType != static_cast<uint32_t>(fromType)) {
+            continue;
+        }
+
+        if (currentType == toType) {
+            continue;
+        }
+
+        std::memcpy(buf.data() + off, &toType, sizeof(toType));
+        ++modified;
+    }
+
+    if (modified == 0) {
+        updateStats();
+        return;
+    }
+
+    chunkPtr->length = static_cast<uint32_t>(buf.size());
+    updateStats();
+    emit chunkEdited();
+}
+
 MaterialEditorWidget::MaterialEditorWidget(QWidget* parent)
     : QWidget(parent) {
     setEnabled(false);
@@ -1197,7 +1484,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     saveAsAction->setShortcut(QKeySequence::SaveAs);
     connect(saveAsAction, &QAction::triggered, this, &MainWindow::saveFileAs);
 
-    auto* splitter = new QSplitter(this);
+    splitter = new QSplitter(this);
 
     treeWidget = new QTreeWidget(splitter);
     treeWidget->setHeaderLabel(tr("Chunk Tree"));
@@ -1205,16 +1492,30 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     auto* detailContainer = new QWidget(splitter);
     auto* detailLayout = new QVBoxLayout(detailContainer);
     detailLayout->setContentsMargins(0, 0, 0, 0);
-    detailLayout->setSpacing(6);
+    detailLayout->setSpacing(0);
 
-    tableWidget = new QTableWidget(detailContainer);
+    detailSplitter = new QSplitter(Qt::Vertical, detailContainer);
+    detailSplitter->setChildrenCollapsible(true);
+    detailSplitter->setCollapsible(0, false);
+    detailSplitter->setCollapsible(1, true);
+    detailSplitter->setStretchFactor(0, 3);
+    detailSplitter->setStretchFactor(1, 1);
+    detailLayout->addWidget(detailSplitter, 1);
+
+    tableWidget = new QTableWidget(detailSplitter);
     tableWidget->setColumnCount(3);
     tableWidget->setHorizontalHeaderLabels({ tr("Field"), tr("Type"), tr("Value") });
     tableWidget->setEditTriggers(QAbstractItemView::NoEditTriggers);
-    detailLayout->addWidget(tableWidget);
+    detailSplitter->addWidget(tableWidget);
 
-    editorStack = new QStackedWidget(detailContainer);
+    editorScrollArea = new QScrollArea(detailSplitter);
+    editorScrollArea->setWidgetResizable(true);
+    editorScrollArea->setFrameShape(QFrame::NoFrame);
+    detailSplitter->addWidget(editorScrollArea);
+
+    editorStack = new QStackedWidget();
     editorStack->setContentsMargins(0, 0, 0, 0);
+    editorScrollArea->setWidget(editorStack);
     editorPlaceholder = new QWidget(editorStack);
     auto* placeholderLayout = new QVBoxLayout(editorPlaceholder);
     placeholderLayout->addStretch();
@@ -1239,9 +1540,16 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     shaderEditor = new ShaderEditorWidget(editorStack);
     editorStack->addWidget(shaderEditor);
 
+    surfaceTypeEditor = new SurfaceTypeEditorWidget(editorStack);
+    editorStack->addWidget(surfaceTypeEditor);
+
+    triangleSurfaceTypeEditor = new TriangleSurfaceTypeEditorWidget(editorStack);
+    editorStack->addWidget(triangleSurfaceTypeEditor);
+
     editorStack->setCurrentWidget(editorPlaceholder);
-    editorStack->setVisible(false);
-    detailLayout->addWidget(editorStack);
+    detailSplitter->setSizes({ 800, 180 });
+    detailSplitterStateCache = detailSplitter->saveState();
+    editorScrollArea->setVisible(false);
 
     splitter->addWidget(treeWidget);
     splitter->addWidget(detailContainer);
@@ -1255,10 +1563,13 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     chunkData = std::make_unique<ChunkData>();
 
     connect(meshEditor, &MeshEditorWidget::chunkEdited, this, &MainWindow::onChunkEdited);
+    connect(meshEditor, &MeshEditorWidget::meshRenamed, this, &MainWindow::onMeshRenamed);
     connect(textureNameEditor, &StringEditorWidget::chunkEdited, this, &MainWindow::onChunkEdited);
     connect(materialNameEditor, &StringEditorWidget::chunkEdited, this, &MainWindow::onChunkEdited);
     connect(materialEditor, &MaterialEditorWidget::chunkEdited, this, &MainWindow::onChunkEdited);
     connect(shaderEditor, &ShaderEditorWidget::chunkEdited, this, &MainWindow::onChunkEdited);
+    connect(surfaceTypeEditor, &SurfaceTypeEditorWidget::chunkEdited, this, &MainWindow::onChunkEdited);
+    connect(triangleSurfaceTypeEditor, &TriangleSurfaceTypeEditorWidget::chunkEdited, this, &MainWindow::onChunkEdited);
 
     updateWindowTitle();
     recentFilesPath = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation) + "/recent_files.txt";
@@ -1280,6 +1591,23 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     batchMenu->addAction(exportChunksAct);
     connect(exportChunksAct, &QAction::triggered,
         this, &MainWindow::on_actionExportChunkList_triggered);
+
+    {
+        QSettings settings;
+        const QByteArray geometry = settings.value("MainWindow/geometry").toByteArray();
+        if (!geometry.isEmpty()) {
+            restoreGeometry(geometry);
+        }
+        const QByteArray splitterState = settings.value("MainWindow/splitter").toByteArray();
+        if (splitter && !splitterState.isEmpty()) {
+            splitter->restoreState(splitterState);
+        }
+        const QByteArray detailSplitterState = settings.value("MainWindow/detailSplitter").toByteArray();
+        if (detailSplitter && !detailSplitterState.isEmpty()) {
+            detailSplitter->restoreState(detailSplitterState);
+            detailSplitterStateCache = detailSplitterState;
+        }
+    }
 }
 
 
@@ -1696,6 +2024,7 @@ void MainWindow::handleTreeSelection() {
 		case 0x0B4B: fields = InterpretShdSubMeshTangentBasisSXT(target); break;
 		case 0x0B4C: fields = InterpretShdSubMeshColor(target); break;
 		case 0x0B4D: fields = InterpretShdSubMeshVertexInfluences(target); break;
+        case 0x16490430: fields = InterpretShdSubMeshShaderDefVariables(target); break;
 		case 0x0C00: fields = InterpretSecondaryVertices(target); break;
 		case 0x0C01: fields = InterpretSecondaryVertexNormals(target); break;
 		case 0x0C02: fields = InterpretLightMapUV(target); break;
@@ -1778,6 +2107,194 @@ void MainWindow::onChunkEdited() {
     handleTreeSelection();
 }
 
+void MainWindow::onMeshRenamed(const QString& oldMeshName,
+    const QString& newMeshName,
+    const QString& oldContainerName,
+    const QString& newContainerName) {
+    if (!chunkData) return;
+
+    const bool meshChanged = oldMeshName != newMeshName;
+    const bool containerChanged = oldContainerName != newContainerName;
+    if (!meshChanged && !containerChanged) return;
+
+    const bool hasOldContainer = !oldContainerName.isEmpty();
+
+    auto renameFullName = [&](const QString& current) -> QString {
+        const int dot = current.indexOf(QLatin1Char('.'));
+        if (dot < 0) {
+            if (!hasOldContainer && meshChanged && current == oldMeshName) {
+                return newMeshName;
+            }
+            return current;
+        }
+
+        const QString containerPart = current.left(dot);
+        const QString objectPart = current.mid(dot + 1);
+        if (!hasOldContainer || containerPart != oldContainerName) {
+            return current;
+        }
+
+        QString updatedContainer = containerPart;
+        QString updatedObject = objectPart;
+        if (containerChanged) {
+            updatedContainer = newContainerName;
+        }
+        if (meshChanged && objectPart == oldMeshName) {
+            updatedObject = newMeshName;
+        }
+        return updatedContainer + QLatin1Char('.') + updatedObject;
+        };
+
+    std::function<void(const std::shared_ptr<ChunkItem>&)> dfs =
+        [&](const std::shared_ptr<ChunkItem>& node) {
+        if (!node) return;
+
+        if (containerChanged && hasOldContainer && node->id == 0x001F) { // W3D_CHUNK_MESH_HEADER3
+            auto parsed = ParseChunkStruct<W3dMeshHeader3Struct>(node);
+            if (auto header = std::get_if<W3dMeshHeader3Struct>(&parsed)) {
+                const QString containerName = ReadFixedString(header->ContainerName, W3D_NAME_LEN);
+                if (containerName == oldContainerName) {
+                    (void)W3DEdit::MutateStructChunk<W3dMeshHeader3Struct>(
+                        node,
+                        [&](W3dMeshHeader3Struct& target) {
+                            W3DEdit::WriteFixedString(target.ContainerName, W3D_NAME_LEN, newContainerName.toStdString());
+                        });
+                }
+            }
+        }
+
+        if (hasOldContainer && node->id == 0x0300) { // W3D_CHUNK_HMODEL
+            std::shared_ptr<ChunkItem> headerChunk;
+            QString modelName;
+            for (const auto& child : node->children) {
+                if (child->id == 0x0301) { // W3D_CHUNK_HMODEL_HEADER
+                    auto parsed = ParseChunkStruct<W3dHModelHeaderStruct>(child);
+                    if (auto header = std::get_if<W3dHModelHeaderStruct>(&parsed)) {
+                        modelName = ReadFixedString(header->Name, W3D_NAME_LEN);
+                        headerChunk = child;
+                    }
+                    break;
+                }
+            }
+
+            if (modelName == oldContainerName) {
+                if (containerChanged && headerChunk) {
+                    (void)W3DEdit::MutateStructChunk<W3dHModelHeaderStruct>(
+                        headerChunk,
+                        [&](W3dHModelHeaderStruct& header) {
+                            W3DEdit::WriteFixedString(header.Name, W3D_NAME_LEN, newContainerName.toStdString());
+                        });
+                }
+
+                if (meshChanged) {
+                    for (const auto& child : node->children) {
+                        if (child->id != 0x0302 && child->id != 0x0303
+                            && child->id != 0x0304 && child->id != 0x0306) {
+                            continue;
+                        }
+
+                        auto parsed = ParseChunkStruct<W3dHModelNodeStruct>(child);
+                        if (auto nodeStruct = std::get_if<W3dHModelNodeStruct>(&parsed)) {
+                            const QString renderName = ReadFixedString(nodeStruct->RenderObjName, W3D_NAME_LEN);
+                            if (renderName == oldMeshName) {
+                                (void)W3DEdit::MutateStructChunk<W3dHModelNodeStruct>(
+                                    child,
+                                    [&](W3dHModelNodeStruct& n) {
+                                        W3DEdit::WriteFixedString(n.RenderObjName, W3D_NAME_LEN, newMeshName.toStdString());
+                                    });
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        switch (node->id) {
+        case 0x0704: { // W3D_CHUNK_HLOD_SUB_OBJECT
+            auto parsed = ParseChunkStruct<W3dHLodSubObjectStruct>(node);
+            if (auto sub = std::get_if<W3dHLodSubObjectStruct>(&parsed)) {
+                const QString curName = ReadFixedString(sub->Name, 2 * W3D_NAME_LEN);
+                const QString updated = renameFullName(curName);
+                if (updated != curName) {
+                    (void)W3DEdit::MutateStructChunk<W3dHLodSubObjectStruct>(
+                        node,
+                        [&](W3dHLodSubObjectStruct& target) {
+                            W3DEdit::WriteFixedString(target.Name, 2 * W3D_NAME_LEN, updated.toStdString());
+                        });
+                }
+            }
+            break;
+        }
+        case 0x0402: { // W3D_CHUNK_LOD
+            auto parsed = ParseChunkStruct<W3dLODStruct>(node);
+            if (auto lod = std::get_if<W3dLODStruct>(&parsed)) {
+                const QString curName = ReadFixedString(lod->RenderObjName, 2 * W3D_NAME_LEN);
+                const QString updated = renameFullName(curName);
+                if (updated != curName) {
+                    (void)W3DEdit::MutateStructChunk<W3dLODStruct>(
+                        node,
+                        [&](W3dLODStruct& target) {
+                            W3DEdit::WriteFixedString(target.RenderObjName, 2 * W3D_NAME_LEN, updated.toStdString());
+                        });
+                }
+            }
+            break;
+        }
+        case 0x0740: { // W3D_CHUNK_BOX
+            auto parsed = ParseChunkStruct<W3dBoxStruct>(node);
+            if (auto box = std::get_if<W3dBoxStruct>(&parsed)) {
+                const QString curName = ReadFixedString(box->Name, 2 * W3D_NAME_LEN);
+                const QString updated = renameFullName(curName);
+                if (updated != curName) {
+                    (void)W3DEdit::MutateStructChunk<W3dBoxStruct>(
+                        node,
+                        [&](W3dBoxStruct& target) {
+                            W3DEdit::WriteFixedString(target.Name, 2 * W3D_NAME_LEN, updated.toStdString());
+                        });
+                }
+            }
+            break;
+        }
+        case 0x0750: { // W3D_CHUNK_NULL_OBJECT
+            auto parsed = ParseChunkStruct<W3dNullObjectStruct>(node);
+            if (auto nul = std::get_if<W3dNullObjectStruct>(&parsed)) {
+                const QString curName = ReadFixedString(nul->Name, 2 * W3D_NAME_LEN);
+                const QString updated = renameFullName(curName);
+                if (updated != curName) {
+                    (void)W3DEdit::MutateStructChunk<W3dNullObjectStruct>(
+                        node,
+                        [&](W3dNullObjectStruct& target) {
+                            W3DEdit::WriteFixedString(target.Name, 2 * W3D_NAME_LEN, updated.toStdString());
+                        });
+                }
+            }
+            break;
+        }
+        case 0x0422: { // W3D_CHUNK_COLLECTION_OBJ_NAME
+            if (node->data.empty()) break;
+            const char* raw = reinterpret_cast<const char*>(node->data.data());
+            const auto len = TruncatedLength(raw, node->data.size());
+            const QString curName = QString::fromLatin1(raw, static_cast<int>(len));
+            const QString updated = renameFullName(curName);
+            if (updated != curName) {
+                (void)W3DEdit::UpdateNullTermStringChunk(node, updated.toStdString());
+            }
+            break;
+        }
+        default:
+            break;
+        }
+
+        for (const auto& child : node->children) {
+            dfs(child);
+        }
+        };
+
+    for (const auto& root : chunkData->getChunks()) {
+        dfs(root);
+    }
+}
+
 void MainWindow::updateEditorForChunk(const std::shared_ptr<ChunkItem>& chunk) {
     currentChunk = chunk;
 
@@ -1786,42 +2303,81 @@ void MainWindow::updateEditorForChunk(const std::shared_ptr<ChunkItem>& chunk) {
     materialNameEditor->setChunk(nullptr);
     materialEditor->setChunk(nullptr);
     shaderEditor->setChunk(nullptr);
+    surfaceTypeEditor->setChunk(nullptr);
+    triangleSurfaceTypeEditor->setChunk(nullptr);
 
     if (!chunk) {
         editorStack->setCurrentWidget(editorPlaceholder);
-        editorStack->setVisible(false);
+        if (editorScrollArea && editorScrollArea->isVisible() && detailSplitter) {
+            detailSplitterStateCache = detailSplitter->saveState();
+        }
+        if (editorScrollArea) editorScrollArea->setVisible(false);
         return;
     }
+
+    const auto showEditor = [&]() {
+        if (!editorScrollArea) return;
+        const bool wasHidden = !editorScrollArea->isVisible();
+        editorScrollArea->setVisible(true);
+
+        if (!detailSplitter) return;
+        if (wasHidden && !detailSplitterStateCache.isEmpty()) {
+            if (detailSplitter->restoreState(detailSplitterStateCache)) {
+                return;
+            }
+        }
+        const auto sizes = detailSplitter->sizes();
+        if (sizes.size() < 2) return;
+        if (!wasHidden) return;
+        if (sizes[1] != 0) return;
+        const int total = sizes[0] + sizes[1];
+        if (total <= 0) return;
+        const int editorHeight = std::min(180, std::max(0, total - 120));
+        detailSplitter->setSizes({ total - editorHeight, editorHeight });
+        };
 
     switch (chunk->id) {
     case 0x001F: // W3D_CHUNK_MESH_HEADER3
         meshEditor->setChunk(chunk);
         editorStack->setCurrentWidget(meshEditor);
-        editorStack->setVisible(true);
+        showEditor();
         break;
     case 0x0032: // W3D_CHUNK_TEXTURE_NAME
         textureNameEditor->setChunk(chunk);
         editorStack->setCurrentWidget(textureNameEditor);
-        editorStack->setVisible(true);
+        showEditor();
         break;
     case 0x002C: // W3D_CHUNK_VERTEX_MATERIAL_NAME
         materialNameEditor->setChunk(chunk);
         editorStack->setCurrentWidget(materialNameEditor);
-        editorStack->setVisible(true);
+        showEditor();
         break;
     case 0x002D: // W3D_CHUNK_VERTEX_MATERIAL_INFO
         materialEditor->setChunk(chunk);
         editorStack->setCurrentWidget(materialEditor);
-        editorStack->setVisible(true);
+        showEditor();
         break;
     case 0x0029: // W3D_CHUNK_SHADERS
         shaderEditor->setChunk(chunk);
         editorStack->setCurrentWidget(shaderEditor);
-        editorStack->setVisible(true);
+        showEditor();
+        break;
+    case 0x0020: // W3D_CHUNK_TRIANGLES
+        triangleSurfaceTypeEditor->setChunk(chunk);
+        editorStack->setCurrentWidget(triangleSurfaceTypeEditor);
+        showEditor();
+        break;
+    case 0x16490430: // W3D_CHUNK_SHDDEF_CLASS_VARS
+        surfaceTypeEditor->setChunk(chunk);
+        editorStack->setCurrentWidget(surfaceTypeEditor);
+        showEditor();
         break;
     default:
         editorStack->setCurrentWidget(editorPlaceholder);
-        editorStack->setVisible(false);
+        if (editorScrollArea && editorScrollArea->isVisible() && detailSplitter) {
+            detailSplitterStateCache = detailSplitter->saveState();
+        }
+        if (editorScrollArea) editorScrollArea->setVisible(false);
         break;
     }
 }
@@ -1841,6 +2397,28 @@ void MainWindow::updateWindowTitle() {
         title += QLatin1Char('*');
     }
     setWindowTitle(title);
+}
+
+void MainWindow::closeEvent(QCloseEvent* event) {
+    QSettings settings;
+    settings.setValue("MainWindow/geometry", saveGeometry());
+    if (splitter) {
+        settings.setValue("MainWindow/splitter", splitter->saveState());
+    }
+    if (detailSplitter) {
+        QByteArray state;
+        if (editorScrollArea && editorScrollArea->isVisible()) {
+            state = detailSplitter->saveState();
+            detailSplitterStateCache = state;
+        }
+        else {
+            state = detailSplitterStateCache.isEmpty()
+                ? detailSplitter->saveState()
+                : detailSplitterStateCache;
+        }
+        settings.setValue("MainWindow/detailSplitter", state);
+    }
+    QMainWindow::closeEvent(event);
 }
 
 bool MainWindow::confirmDiscardChanges() {

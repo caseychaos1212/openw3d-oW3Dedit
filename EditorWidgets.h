@@ -30,12 +30,16 @@ public:
 
 signals:
     void chunkEdited();
+    void meshRenamed(const QString& oldMeshName,
+        const QString& newMeshName,
+        const QString& oldContainerName,
+        const QString& newContainerName);
 
 private slots:
     void applyChanges();
 
 private:
-    struct CollisionControl {
+    struct FlagControl {
         uint32_t mask = 0;
         QCheckBox* box = nullptr;
     };
@@ -44,7 +48,7 @@ private:
     QLineEdit* meshNameEdit = nullptr;
     QLineEdit* containerNameEdit = nullptr;
     QPushButton* applyButton = nullptr;
-    std::vector<CollisionControl> collisionControls;
+    std::vector<FlagControl> flagControls;
 };
 
 class StringEditorWidget : public QWidget {
@@ -146,5 +150,44 @@ private:
     QSpinBox* fogFuncSpin = nullptr;
     QSpinBox* shaderPresetSpin = nullptr;
 
+    QPushButton* applyButton = nullptr;
+};
+
+class SurfaceTypeEditorWidget : public QWidget {
+    Q_OBJECT
+public:
+    explicit SurfaceTypeEditorWidget(QWidget* parent = nullptr);
+    void setChunk(const std::shared_ptr<ChunkItem>& chunk);
+
+signals:
+    void chunkEdited();
+
+private slots:
+    void applyChanges();
+
+private:
+    std::weak_ptr<ChunkItem> chunk;
+    QComboBox* surfaceTypeCombo = nullptr;
+    QPushButton* applyButton = nullptr;
+};
+
+class TriangleSurfaceTypeEditorWidget : public QWidget {
+    Q_OBJECT
+public:
+    explicit TriangleSurfaceTypeEditorWidget(QWidget* parent = nullptr);
+    void setChunk(const std::shared_ptr<ChunkItem>& chunk);
+
+signals:
+    void chunkEdited();
+
+private slots:
+    void applyChanges();
+    void updateStats();
+
+private:
+    std::weak_ptr<ChunkItem> chunk;
+    QComboBox* fromCombo = nullptr;
+    QComboBox* toCombo = nullptr;
+    QLabel* statsLabel = nullptr;
     QPushButton* applyButton = nullptr;
 };
