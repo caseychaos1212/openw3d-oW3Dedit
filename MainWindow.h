@@ -12,6 +12,9 @@ class QStackedWidget;
 class QSplitter;
 class QScrollArea;
 class QCloseEvent;
+class QCheckBox;
+class QPlainTextEdit;
+class QGroupBox;
 class MeshEditorWidget;
 class StringEditorWidget;
 class MapperArgsEditorWidget;
@@ -60,6 +63,9 @@ private:
     QSplitter* splitter = nullptr;
     QSplitter* detailSplitter = nullptr;
     QScrollArea* editorScrollArea = nullptr;
+    QCheckBox* rawHexToggle = nullptr;
+    QPlainTextEdit* rawHexEdit = nullptr;
+    QGroupBox* rawHexContainer = nullptr;
     std::unique_ptr<ChunkData> chunkData;
     QString recentFilesPath;
     QStringList recentFiles;
@@ -82,6 +88,7 @@ private:
     QByteArray detailSplitterStateCache;
 
     void updateEditorForChunk(const std::shared_ptr<ChunkItem>& chunk);
+    void updateRawHex(const std::shared_ptr<ChunkItem>& chunk);
     void setDirty(bool value);
     void updateWindowTitle();
     bool confirmDiscardChanges();

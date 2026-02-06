@@ -109,6 +109,24 @@ static QString BuildMapperArgsReference() {
     return out;
 }
 
+static QString FormatHexBlock(const std::vector<uint8_t>& data) {
+    if (data.empty()) return {};
+    constexpr std::size_t kBytesPerLine = 16;
+    QString out;
+    for (std::size_t i = 0; i < data.size(); i += kBytesPerLine) {
+        out += QStringLiteral("%1: ")
+            .arg(static_cast<uint32_t>(i), 4, 16, QLatin1Char('0')).toUpper();
+        const std::size_t end = std::min(i + kBytesPerLine, data.size());
+        for (std::size_t j = i; j < end; ++j) {
+            out += QStringLiteral("%1").arg(data[j], 2, 16, QLatin1Char('0')).toUpper();
+            if (j + 1 < end) out += QLatin1Char(' ');
+        }
+        out += QLatin1Char('\n');
+    }
+    if (!out.isEmpty()) out.chop(1);
+    return out;
+}
+
 constexpr uint32_t MeshAttrValue(MeshAttr attr) {
     return static_cast<uint32_t>(attr);
 }
@@ -1667,11 +1685,29 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     detailSplitter->setStretchFactor(1, 1);
     detailLayout->addWidget(detailSplitter, 1);
 
-    tableWidget = new QTableWidget(detailSplitter);
+    auto* tableContainer = new QWidget(detailSplitter);
+    auto* tableLayout = new QVBoxLayout(tableContainer);
+    tableLayout->setContentsMargins(0, 0, 0, 0);
+    tableLayout->setSpacing(6);
+
+    rawHexToggle = new QCheckBox(tr("Show raw hex"), tableContainer);
+    tableLayout->addWidget(rawHexToggle);
+
+    tableWidget = new QTableWidget(tableContainer);
     tableWidget->setColumnCount(3);
     tableWidget->setHorizontalHeaderLabels({ tr("Field"), tr("Type"), tr("Value") });
     tableWidget->setEditTriggers(QAbstractItemView::NoEditTriggers);
-    detailSplitter->addWidget(tableWidget);
+    tableLayout->addWidget(tableWidget, 1);
+
+    rawHexContainer = new QGroupBox(tr("Raw Hex"), tableContainer);
+    auto* rawHexLayout = new QVBoxLayout(rawHexContainer);
+    rawHexEdit = new QPlainTextEdit(rawHexContainer);
+    rawHexEdit->setReadOnly(true);
+    rawHexLayout->addWidget(rawHexEdit);
+    rawHexContainer->setVisible(false);
+    tableLayout->addWidget(rawHexContainer);
+
+    detailSplitter->addWidget(tableContainer);
 
     editorScrollArea = new QScrollArea(detailSplitter);
     editorScrollArea->setWidgetResizable(true);
@@ -1743,6 +1779,10 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     connect(shaderEditor, &ShaderEditorWidget::chunkEdited, this, &MainWindow::onChunkEdited);
     connect(surfaceTypeEditor, &SurfaceTypeEditorWidget::chunkEdited, this, &MainWindow::onChunkEdited);
     connect(triangleSurfaceTypeEditor, &TriangleSurfaceTypeEditorWidget::chunkEdited, this, &MainWindow::onChunkEdited);
+    connect(rawHexToggle, &QCheckBox::toggled, this, [this](bool on) {
+        if (rawHexContainer) rawHexContainer->setVisible(on);
+        updateRawHex(currentChunk);
+        });
 
     updateWindowTitle();
     recentFilesPath = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation) + "/recent_files.txt";
@@ -2223,6 +2263,7 @@ void MainWindow::handleTreeSelection() {
     }
 
     updateEditorForChunk(target);
+    updateRawHex(target);
 }
 
 void MainWindow::saveFile() {
@@ -2567,6 +2608,19 @@ void MainWindow::updateEditorForChunk(const std::shared_ptr<ChunkItem>& chunk) {
     }
 }
 
+void MainWindow::updateRawHex(const std::shared_ptr<ChunkItem>& chunk) {
+    if (!rawHexEdit || !rawHexToggle) return;
+    if (!rawHexToggle->isChecked() || !chunk) {
+        rawHexEdit->clear();
+        if (rawHexContainer) rawHexContainer->setTitle(tr("Raw Hex"));
+        return;
+    }
+    rawHexEdit->setPlainText(FormatHexBlock(chunk->data));
+    if (rawHexContainer) {
+        rawHexContainer->setTitle(tr("Raw Hex (%1 bytes)").arg(static_cast<int>(chunk->data.size())));
+    }
+}
+
 void MainWindow::setDirty(bool value) {
     if (dirty == value) return;
     dirty = value;
@@ -2622,6 +2676,7 @@ void MainWindow::clearDetails() {
     tableWidget->clearContents();
     tableWidget->setRowCount(0);
     updateEditorForChunk(nullptr);
+    updateRawHex(nullptr);
 }
 
 
