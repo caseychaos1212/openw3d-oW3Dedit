@@ -16,6 +16,7 @@ class QDoubleSpinBox;
 class QLabel;
 class QFormLayout;
 class QVBoxLayout;
+class QPlainTextEdit;
 
 #include "backend/W3DStructs.h"
 #include "backend/ChunkItem.h"
@@ -71,6 +72,25 @@ private:
     QPushButton* applyButton = nullptr;
 };
 
+class MapperArgsEditorWidget : public QWidget {
+    Q_OBJECT
+public:
+    explicit MapperArgsEditorWidget(const QString& label, QWidget* parent = nullptr);
+    void setChunk(const std::shared_ptr<ChunkItem>& chunk);
+
+signals:
+    void chunkEdited();
+
+private slots:
+    void applyChanges();
+
+private:
+    std::weak_ptr<ChunkItem> chunk;
+    QPlainTextEdit* argsEdit = nullptr;
+    QPlainTextEdit* referenceEdit = nullptr;
+    QPushButton* applyButton = nullptr;
+};
+
 class MaterialEditorWidget : public QWidget {
     Q_OBJECT
 public:
@@ -99,6 +119,10 @@ private:
     std::vector<FlagControl> basicFlagControls;
     QComboBox* stage0Combo = nullptr;
     QComboBox* stage1Combo = nullptr;
+    QSpinBox* stage0CodeSpin = nullptr;
+    QSpinBox* stage1CodeSpin = nullptr;
+    int stage0UnknownIndex = -1;
+    int stage1UnknownIndex = -1;
     ColorControls ambient{};
     ColorControls diffuse{};
     ColorControls specular{};
@@ -108,6 +132,7 @@ private:
     QDoubleSpinBox* translucencySpin = nullptr;
 
     void populateStageCombo(QComboBox* combo, int stage);
+    void setStageMapping(QComboBox* combo, QSpinBox* spin, int stage, int& unknownIndex, uint8_t code);
     void setColor(const W3dRGBStruct& src, ColorControls& dest);
     void readColor(W3dRGBStruct& dest, const ColorControls& src) const;
 };

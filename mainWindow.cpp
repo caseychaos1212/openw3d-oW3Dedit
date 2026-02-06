@@ -24,6 +24,7 @@
 #include <QSpinBox>
 #include <QDoubleSpinBox>
 #include <QLabel>
+#include <QPlainTextEdit>
 #include <QGridLayout>
 #include <QKeySequence>
 #include <QDialog>
@@ -64,6 +65,48 @@ static std::size_t TruncatedLength(const char* data, std::size_t maxLen) {
 
 static QString ReadFixedString(const char* data, std::size_t maxLen) {
     return QString::fromLatin1(data, static_cast<int>(TruncatedLength(data, maxLen)));
+}
+
+static QString BuildMapperArgsReference() {
+    struct Entry { const char* name; const char* args; };
+    static const Entry kEntries[] = {
+        { "UV", "" },
+        { "Environment", "" },
+        { "ClassicEnvironment", "" },
+        { "Screen", "UPerSec=0.0\nVPerSec=0.0\nUOffset=0.0\nVOffset=0.0\nClampFix=false\nUScale=1.0\nVScale=1.0" },
+        { "LinearOffset", "UPerSec=0.0\nVPerSec=0.0\nUOffset=0.0\nVOffset=0.0\nClampFix=false\nUScale=1.0\nVScale=1.0" },
+        { "Silhouette", "Not Supported" },
+        { "Scale", "UScale=1.0\nVScale=1.0" },
+        { "Grid", "FPS=1.0; The frames per second\nLog2Width=1; So 0=width 1, 1=width 2, 2=width 4. The default means animate using a texture divided up into quarters.\nLast=GridWidth*GridWidth; The last frame to use.\nOffset=0" },
+        { "Rotate", "Speed=0.1; In Hertz. 1 = 1 rotate per second\nUCenter=0.0\nVCenter=0.0\nUScale=1.0\nVScale=1.0" },
+        { "Sine", "UAmp=1.0\nUFreq=1.0\nUPhase=0.0\nVAmp=1.0\nVFreq=1.0\nVPhase=0.0\nUScale=1.0\nVScale=1.0" },
+        { "Step", "UStep=0.0\nVStep=0.0\nSPS=0.0; Steps per second\nClampFix=false\nUScale=1.0\nVScale=1.0" },
+        { "ZigZag", "UPerSec=0.0\nVPerSec=0.0\nPeriod=0.0; Time it takes to make a zigzag in seconds\nUScale=1.0\nVScale=1.0" },
+        { "WSClassicEnv", "Axis=Z; Axis to use for this, X, Y, Z" },
+        { "WSEnvironment", "Axis=Z; Axis to use for this, X, Y, Z" },
+        { "GridClassicEnv", "FPS=1.0; The frames per second\nLog2Width=1; So 0=width 1, 1=width 2, 2=width 4. The default means animate using a texture divided up into quarters.\nLast=GridWidth*GridWidth; The last frame to use.\nOffset=0" },
+        { "GridEnvironment", "FPS=1.0; The frames per second\nLog2Width=1; So 0=width 1, 1=width 2, 2=width 4. The default means animate using a texture divided up into quarters.\nLast=GridWidth*GridWidth; The last frame to use.\nOffset=0" },
+        { "Random", "FPS=0.0; Frames per second\nUPerSec=0.0\nVPerSec=0.0\nUScale=1.0\nVScale=1.0" },
+        { "Edge", "VPerSec=0.0\nUseReflect=false\nVStart=0.0" },
+        { "BumpEnv", "BumpRotation = 0.1; In Hertz. 1 = 1 rotate per second  (DEFAULT = 0.0)\nBumpScale = scale factor applied to the bumps\t(DEFAULT = 1.0)\nUPerSec=0.0\nVPerSec=0.0\nUScale=1.0\nVScale=1.0" },
+        { "GridWSClassicEnv", "FPS=1.0; The frames per second\nLog2Width=1; So 0=width 1, 1=width 2, 2=width 4. The default means animate using a texture divided up into quarters.\nLast=GridWidth*GridWidth; The last frame to use.\nOffset=0\nAxis=Z; Axis to use for this, X, Y, Z" },
+        { "GridWSEnv", "FPS=1.0; The frames per second\nLog2Width=1; So 0=width 1, 1=width 2, 2=width 4. The default means animate using a texture divided up into quarters.\nLast=GridWidth*GridWidth; The last frame to use.\nOffset=0\nAxis=Z; Axis to use for this, X, Y, Z" },
+    };
+
+    QString out = QStringLiteral("Mapping args reference (original Max tools defaults)\n\n");
+    for (const auto& entry : kEntries) {
+        out += QString::fromLatin1(entry.name);
+        if (entry.args && entry.args[0] != '\0') {
+            out += QStringLiteral(":\n");
+            out += QString::fromLatin1(entry.args);
+        }
+        else {
+            out += QStringLiteral(": (no args)");
+        }
+        out += QStringLiteral("\n\n");
+    }
+    out += QStringLiteral("Notes: keys are case-sensitive; omit parentheses in values; types are float/int/bool.");
+    return out;
 }
 
 constexpr uint32_t MeshAttrValue(MeshAttr attr) {
@@ -1016,6 +1059,63 @@ void StringEditorWidget::applyChanges() {
     emit chunkEdited();
 }
 
+MapperArgsEditorWidget::MapperArgsEditorWidget(const QString& label, QWidget* parent)
+    : QWidget(parent) {
+    setEnabled(false);
+    auto* layout = new QVBoxLayout(this);
+    layout->setContentsMargins(0, 0, 0, 0);
+    layout->setSpacing(6);
+
+    auto* title = new QLabel(label, this);
+    layout->addWidget(title);
+
+    argsEdit = new QPlainTextEdit(this);
+    argsEdit->setPlaceholderText(tr("Enter mapper args..."));
+    layout->addWidget(argsEdit, 1);
+
+    auto* refGroup = new QGroupBox(tr("Reference"), this);
+    auto* refLayout = new QVBoxLayout(refGroup);
+    referenceEdit = new QPlainTextEdit(refGroup);
+    referenceEdit->setReadOnly(true);
+    referenceEdit->setPlainText(BuildMapperArgsReference());
+    refLayout->addWidget(referenceEdit);
+    layout->addWidget(refGroup);
+
+    applyButton = new QPushButton(tr("Apply Mapper Args"), this);
+    connect(applyButton, &QPushButton::clicked,
+        this, &MapperArgsEditorWidget::applyChanges);
+
+    layout->addStretch();
+    layout->addWidget(applyButton, 0, Qt::AlignRight);
+}
+
+void MapperArgsEditorWidget::setChunk(const std::shared_ptr<ChunkItem>& chunkPtr) {
+    chunk = chunkPtr;
+    if (!chunkPtr) {
+        argsEdit->clear();
+        setEnabled(false);
+        return;
+    }
+
+    const char* raw = reinterpret_cast<const char*>(chunkPtr->data.data());
+    const auto len = chunkPtr->data.empty()
+        ? 0
+        : TruncatedLength(raw, chunkPtr->data.size());
+    argsEdit->setPlainText(QString::fromLatin1(raw, static_cast<int>(len)));
+    setEnabled(true);
+}
+
+void MapperArgsEditorWidget::applyChanges() {
+    auto chunkPtr = chunk.lock();
+    if (!chunkPtr) return;
+
+    if (!W3DEdit::UpdateNullTermStringChunk(chunkPtr, argsEdit->toPlainText().toStdString())) {
+        QMessageBox::warning(this, tr("Error"), tr("Failed to update mapper args."));
+        return;
+    }
+    emit chunkEdited();
+}
+
 SurfaceTypeEditorWidget::SurfaceTypeEditorWidget(QWidget* parent)
     : QWidget(parent) {
     setEnabled(false);
@@ -1303,13 +1403,44 @@ MaterialEditorWidget::MaterialEditorWidget(QWidget* parent)
     auto* stageLayout = new QGridLayout(stageGroup);
     stage0Combo = new QComboBox(stageGroup);
     stage1Combo = new QComboBox(stageGroup);
+    stage0CodeSpin = new QSpinBox(stageGroup);
+    stage1CodeSpin = new QSpinBox(stageGroup);
     populateStageCombo(stage0Combo, 0);
     populateStageCombo(stage1Combo, 1);
-    stageLayout->addWidget(new QLabel(tr("Stage 0"), stageGroup), 0, 0);
-    stageLayout->addWidget(stage0Combo, 0, 1);
-    stageLayout->addWidget(new QLabel(tr("Stage 1"), stageGroup), 1, 0);
-    stageLayout->addWidget(stage1Combo, 1, 1);
+    for (auto* spin : { stage0CodeSpin, stage1CodeSpin }) {
+        spin->setRange(0, 255);
+        spin->setSingleStep(1);
+    }
+
+    stageLayout->addWidget(new QLabel(tr("Mapping"), stageGroup), 0, 1);
+    stageLayout->addWidget(new QLabel(tr("Code"), stageGroup), 0, 2);
+    stageLayout->addWidget(new QLabel(tr("Stage 0"), stageGroup), 1, 0);
+    stageLayout->addWidget(stage0Combo, 1, 1);
+    stageLayout->addWidget(stage0CodeSpin, 1, 2);
+    stageLayout->addWidget(new QLabel(tr("Stage 1"), stageGroup), 2, 0);
+    stageLayout->addWidget(stage1Combo, 2, 1);
+    stageLayout->addWidget(stage1CodeSpin, 2, 2);
+    stageLayout->setColumnStretch(1, 1);
     layout->addWidget(stageGroup);
+
+    auto hookStage = [&](QComboBox* combo, QSpinBox* spin, int stage) {
+        connect(combo, QOverload<int>::of(&QComboBox::currentIndexChanged),
+            this, [this, combo, spin, stage](int) {
+                const QVariant data = combo->currentData();
+                if (!data.isValid()) return;
+                int& unknownIndex = (stage == 0) ? stage0UnknownIndex : stage1UnknownIndex;
+                setStageMapping(combo, spin, stage, unknownIndex,
+                    static_cast<uint8_t>(data.toInt() & 0xFF));
+            });
+        connect(spin, QOverload<int>::of(&QSpinBox::valueChanged),
+            this, [this, combo, spin, stage](int value) {
+                int& unknownIndex = (stage == 0) ? stage0UnknownIndex : stage1UnknownIndex;
+                setStageMapping(combo, spin, stage, unknownIndex,
+                    static_cast<uint8_t>(value & 0xFF));
+            });
+        };
+    hookStage(stage0Combo, stage0CodeSpin, 0);
+    hookStage(stage1Combo, stage1CodeSpin, 1);
 
     auto makeColorGroup = [&](const QString& title, ColorControls& controls) {
         auto* group = new QGroupBox(title, this);
@@ -1370,6 +1501,41 @@ void MaterialEditorWidget::populateStageCombo(QComboBox* combo, int stage) {
     }
 }
 
+void MaterialEditorWidget::setStageMapping(QComboBox* combo, QSpinBox* spin, int stage, int& unknownIndex, uint8_t code) {
+    const QSignalBlocker blockCombo(combo);
+    const QSignalBlocker blockSpin(spin);
+
+    spin->setValue(static_cast<int>(code));
+
+    int idx = combo->findData(static_cast<int>(code));
+    if (idx >= 0) {
+        if (unknownIndex >= 0 && unknownIndex != idx && unknownIndex < combo->count()) {
+            if (unknownIndex < idx) {
+                combo->removeItem(unknownIndex);
+                --idx;
+            }
+            else {
+                combo->removeItem(unknownIndex);
+            }
+            unknownIndex = -1;
+        }
+        combo->setCurrentIndex(idx);
+        return;
+    }
+
+    const QString label = QString::fromStdString(StageMappingName(code, stage));
+    if (unknownIndex >= 0 && unknownIndex < combo->count()) {
+        combo->setItemText(unknownIndex, label);
+        combo->setItemData(unknownIndex, static_cast<int>(code));
+        combo->setCurrentIndex(unknownIndex);
+    }
+    else {
+        unknownIndex = combo->count();
+        combo->addItem(label, static_cast<int>(code));
+        combo->setCurrentIndex(unknownIndex);
+    }
+}
+
 void MaterialEditorWidget::setColor(const W3dRGBStruct& src, ColorControls& dest) {
     dest.r->setValue(static_cast<int>(src.R));
     dest.g->setValue(static_cast<int>(src.G));
@@ -1401,13 +1567,12 @@ void MaterialEditorWidget::setChunk(const std::shared_ptr<ChunkItem>& chunkPtr) 
         ctrl.box->setChecked((data.Attributes & ctrl.mask) != 0);
     }
 
-    auto applyStage = [&](QComboBox* combo, int stage) {
+    auto applyStage = [&](QComboBox* combo, QSpinBox* spin, int stage, int& unknownIndex) {
         const uint8_t code = ExtractStageMapping(data.Attributes, stage);
-        const int idx = combo->findData(static_cast<int>(code));
-        if (idx >= 0) combo->setCurrentIndex(idx);
+        setStageMapping(combo, spin, stage, unknownIndex, code);
     };
-    applyStage(stage0Combo, 0);
-    applyStage(stage1Combo, 1);
+    applyStage(stage0Combo, stage0CodeSpin, 0, stage0UnknownIndex);
+    applyStage(stage1Combo, stage1CodeSpin, 1, stage1UnknownIndex);
 
     setColor(data.Ambient, ambient);
     setColor(data.Diffuse, diffuse);
@@ -1442,8 +1607,8 @@ void MaterialEditorWidget::applyChanges() {
                 }
             }
 
-            const uint32_t stage0 = static_cast<uint32_t>(stage0Combo->currentData().toInt() & 0xFF);
-            const uint32_t stage1 = static_cast<uint32_t>(stage1Combo->currentData().toInt() & 0xFF);
+            const uint32_t stage0 = static_cast<uint32_t>(stage0CodeSpin->value() & 0xFF);
+            const uint32_t stage1 = static_cast<uint32_t>(stage1CodeSpin->value() & 0xFF);
             attr |= (stage0 << VERTMAT_STAGE0_MAPPING_SHIFT);
             attr |= (stage1 << VERTMAT_STAGE1_MAPPING_SHIFT);
             data.Attributes = attr;
@@ -1534,6 +1699,12 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     materialNameEditor = new StringEditorWidget(tr("Material Name"), editorStack);
     editorStack->addWidget(materialNameEditor);
 
+    stage0ArgsEditor = new MapperArgsEditorWidget(tr("Stage 0 Mapper Args"), editorStack);
+    editorStack->addWidget(stage0ArgsEditor);
+
+    stage1ArgsEditor = new MapperArgsEditorWidget(tr("Stage 1 Mapper Args"), editorStack);
+    editorStack->addWidget(stage1ArgsEditor);
+
     materialEditor = new MaterialEditorWidget(editorStack);
     editorStack->addWidget(materialEditor);
 
@@ -1566,6 +1737,8 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     connect(meshEditor, &MeshEditorWidget::meshRenamed, this, &MainWindow::onMeshRenamed);
     connect(textureNameEditor, &StringEditorWidget::chunkEdited, this, &MainWindow::onChunkEdited);
     connect(materialNameEditor, &StringEditorWidget::chunkEdited, this, &MainWindow::onChunkEdited);
+    connect(stage0ArgsEditor, &MapperArgsEditorWidget::chunkEdited, this, &MainWindow::onChunkEdited);
+    connect(stage1ArgsEditor, &MapperArgsEditorWidget::chunkEdited, this, &MainWindow::onChunkEdited);
     connect(materialEditor, &MaterialEditorWidget::chunkEdited, this, &MainWindow::onChunkEdited);
     connect(shaderEditor, &ShaderEditorWidget::chunkEdited, this, &MainWindow::onChunkEdited);
     connect(surfaceTypeEditor, &SurfaceTypeEditorWidget::chunkEdited, this, &MainWindow::onChunkEdited);
@@ -2301,6 +2474,8 @@ void MainWindow::updateEditorForChunk(const std::shared_ptr<ChunkItem>& chunk) {
     meshEditor->setChunk(nullptr);
     textureNameEditor->setChunk(nullptr);
     materialNameEditor->setChunk(nullptr);
+    stage0ArgsEditor->setChunk(nullptr);
+    stage1ArgsEditor->setChunk(nullptr);
     materialEditor->setChunk(nullptr);
     shaderEditor->setChunk(nullptr);
     surfaceTypeEditor->setChunk(nullptr);
@@ -2350,6 +2525,16 @@ void MainWindow::updateEditorForChunk(const std::shared_ptr<ChunkItem>& chunk) {
     case 0x002C: // W3D_CHUNK_VERTEX_MATERIAL_NAME
         materialNameEditor->setChunk(chunk);
         editorStack->setCurrentWidget(materialNameEditor);
+        showEditor();
+        break;
+    case 0x002E: // W3D_CHUNK_ARG0
+        stage0ArgsEditor->setChunk(chunk);
+        editorStack->setCurrentWidget(stage0ArgsEditor);
+        showEditor();
+        break;
+    case 0x002F: // W3D_CHUNK_ARG1
+        stage1ArgsEditor->setChunk(chunk);
+        editorStack->setCurrentWidget(stage1ArgsEditor);
         showEditor();
         break;
     case 0x002D: // W3D_CHUNK_VERTEX_MATERIAL_INFO

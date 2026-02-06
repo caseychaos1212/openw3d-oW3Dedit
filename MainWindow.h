@@ -14,6 +14,7 @@ class QScrollArea;
 class QCloseEvent;
 class MeshEditorWidget;
 class StringEditorWidget;
+class MapperArgsEditorWidget;
 class MaterialEditorWidget;
 class ShaderEditorWidget;
 class SurfaceTypeEditorWidget;
@@ -68,6 +69,8 @@ private:
     MeshEditorWidget* meshEditor = nullptr;
     StringEditorWidget* textureNameEditor = nullptr;
     StringEditorWidget* materialNameEditor = nullptr;
+    MapperArgsEditorWidget* stage0ArgsEditor = nullptr;
+    MapperArgsEditorWidget* stage1ArgsEditor = nullptr;
     MaterialEditorWidget* materialEditor = nullptr;
     ShaderEditorWidget* shaderEditor = nullptr;
     SurfaceTypeEditorWidget* surfaceTypeEditor = nullptr;
