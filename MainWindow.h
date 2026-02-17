@@ -17,6 +17,7 @@ class QPlainTextEdit;
 class QGroupBox;
 class MeshEditorWidget;
 class StringEditorWidget;
+class TransformNodeEditorWidget;
 class MapperArgsEditorWidget;
 class MaterialEditorWidget;
 class ShaderEditorWidget;
@@ -75,6 +76,7 @@ private:
     MeshEditorWidget* meshEditor = nullptr;
     StringEditorWidget* textureNameEditor = nullptr;
     StringEditorWidget* materialNameEditor = nullptr;
+    TransformNodeEditorWidget* transformNodeEditor = nullptr;
     MapperArgsEditorWidget* stage0ArgsEditor = nullptr;
     MapperArgsEditorWidget* stage1ArgsEditor = nullptr;
     MaterialEditorWidget* materialEditor = nullptr;

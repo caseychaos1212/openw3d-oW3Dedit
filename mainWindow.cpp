@@ -726,8 +726,8 @@ MeshEditorWidget::MeshEditorWidget(QWidget* parent) : QWidget(parent) {
     connect(applyButton, &QPushButton::clicked,
         this, &MeshEditorWidget::applyChanges);
 
-    layout->addStretch();
     layout->addWidget(applyButton, 0, Qt::AlignRight);
+    layout->addStretch();
 }
 
 void MeshEditorWidget::setChunk(const std::shared_ptr<ChunkItem>& chunkPtr) {
@@ -889,8 +889,8 @@ ShaderEditorWidget::ShaderEditorWidget(QWidget* parent)
     layout->addLayout(form);
 
     applyButton = new QPushButton(tr("Apply Shader Changes"), this);
-    layout->addStretch();
     layout->addWidget(applyButton, 0, Qt::AlignRight);
+    layout->addStretch();
 
     connect(shaderIndexCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
         this, [this](int idx) { loadShader(idx); });
@@ -1046,8 +1046,8 @@ StringEditorWidget::StringEditorWidget(const QString& label, QWidget* parent, in
     connect(applyButton, &QPushButton::clicked,
         this, &StringEditorWidget::applyChanges);
 
-    layout->addStretch();
     layout->addWidget(applyButton, 0, Qt::AlignRight);
+    layout->addStretch();
 }
 
 void StringEditorWidget::setChunk(const std::shared_ptr<ChunkItem>& chunkPtr) {
@@ -1077,6 +1077,102 @@ void StringEditorWidget::applyChanges() {
     emit chunkEdited();
 }
 
+TransformNodeEditorWidget::TransformNodeEditorWidget(QWidget* parent)
+    : QWidget(parent) {
+    setEnabled(false);
+
+    auto* layout = new QVBoxLayout(this);
+    layout->setContentsMargins(0, 0, 0, 0);
+    layout->setSpacing(6);
+
+    auto* form = new QFormLayout();
+    fileNameEdit = new QLineEdit(this);
+    form->addRow(tr("Linked W3D File"), fileNameEdit);
+    layout->addLayout(form);
+
+    applyButton = new QPushButton(tr("Apply"), this);
+    connect(applyButton, &QPushButton::clicked,
+        this, &TransformNodeEditorWidget::applyChanges);
+    layout->addWidget(applyButton, 0, Qt::AlignRight);
+    layout->addStretch();
+}
+
+void TransformNodeEditorWidget::setChunk(const std::shared_ptr<ChunkItem>& chunkPtr) {
+    chunk = chunkPtr;
+    fileNameEdit->clear();
+    if (!chunkPtr) {
+        setEnabled(false);
+        return;
+    }
+
+    auto parsed = ParseChunkStruct<W3dTransformNodeStruct>(chunkPtr);
+    if (auto err = std::get_if<std::string>(&parsed)) {
+        Q_UNUSED(err);
+        setEnabled(false);
+        return;
+    }
+
+    const auto& header = std::get<W3dTransformNodeStruct>(parsed);
+    const std::size_t headerBytes = sizeof(W3dTransformNodeStruct);
+    const std::size_t available = chunkPtr->data.size() > headerBytes
+        ? (chunkPtr->data.size() - headerBytes)
+        : 0;
+    const std::size_t nameLen = std::min<std::size_t>(header.name_len, available);
+    if (nameLen > 0) {
+        const char* raw = reinterpret_cast<const char*>(chunkPtr->data.data() + headerBytes);
+        const auto len = TruncatedLength(raw, nameLen);
+        fileNameEdit->setText(QString::fromLatin1(raw, static_cast<int>(len)));
+    }
+
+    setEnabled(true);
+}
+
+void TransformNodeEditorWidget::applyChanges() {
+    auto chunkPtr = chunk.lock();
+    if (!chunkPtr) return;
+
+    auto parsed = ParseChunkStruct<W3dTransformNodeStruct>(chunkPtr);
+    if (auto err = std::get_if<std::string>(&parsed)) {
+        QMessageBox::warning(this, tr("Error"),
+            QString::fromStdString("Failed to update transform node: " + *err));
+        return;
+    }
+
+    auto header = std::get<W3dTransformNodeStruct>(parsed);
+    const std::size_t headerBytes = sizeof(W3dTransformNodeStruct);
+    const std::size_t oldAvailable = chunkPtr->data.size() > headerBytes
+        ? (chunkPtr->data.size() - headerBytes)
+        : 0;
+    const std::size_t oldNameLen = std::min<std::size_t>(header.name_len, oldAvailable);
+
+    bool oldHadTerminator = false;
+    if (oldNameLen > 0) {
+        const char* oldName = reinterpret_cast<const char*>(chunkPtr->data.data() + headerBytes);
+        for (std::size_t i = 0; i < oldNameLen; ++i) {
+            if (oldName[i] == '\0') {
+                oldHadTerminator = true;
+                break;
+            }
+        }
+    }
+
+    QByteArray newNameBytes = fileNameEdit->text().toLatin1();
+    if (oldHadTerminator) {
+        newNameBytes.push_back('\0');
+    }
+
+    header.name_len = static_cast<uint32_t>(newNameBytes.size());
+    std::vector<uint8_t> updatedData(headerBytes + static_cast<std::size_t>(newNameBytes.size()));
+    std::memcpy(updatedData.data(), &header, sizeof(header));
+    if (!newNameBytes.isEmpty()) {
+        std::memcpy(updatedData.data() + headerBytes, newNameBytes.constData(), static_cast<std::size_t>(newNameBytes.size()));
+    }
+
+    chunkPtr->data = std::move(updatedData);
+    chunkPtr->length = static_cast<uint32_t>(chunkPtr->data.size());
+    emit chunkEdited();
+}
+
 MapperArgsEditorWidget::MapperArgsEditorWidget(const QString& label, QWidget* parent)
     : QWidget(parent) {
     setEnabled(false);
@@ -1103,8 +1199,8 @@ MapperArgsEditorWidget::MapperArgsEditorWidget(const QString& label, QWidget* pa
     connect(applyButton, &QPushButton::clicked,
         this, &MapperArgsEditorWidget::applyChanges);
 
-    layout->addStretch();
     layout->addWidget(applyButton, 0, Qt::AlignRight);
+    layout->addStretch();
 }
 
 void MapperArgsEditorWidget::setChunk(const std::shared_ptr<ChunkItem>& chunkPtr) {
@@ -1159,8 +1255,8 @@ SurfaceTypeEditorWidget::SurfaceTypeEditorWidget(QWidget* parent)
     connect(applyButton, &QPushButton::clicked,
         this, &SurfaceTypeEditorWidget::applyChanges);
 
-    layout->addStretch();
     layout->addWidget(applyButton, 0, Qt::AlignRight);
+    layout->addStretch();
 }
 
 void SurfaceTypeEditorWidget::setChunk(const std::shared_ptr<ChunkItem>& chunkPtr) {
@@ -1282,8 +1378,8 @@ TriangleSurfaceTypeEditorWidget::TriangleSurfaceTypeEditorWidget(QWidget* parent
     connect(fromCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
         this, &TriangleSurfaceTypeEditorWidget::updateStats);
 
-    layout->addStretch();
     layout->addWidget(applyButton, 0, Qt::AlignRight);
+    layout->addStretch();
 }
 
 void TriangleSurfaceTypeEditorWidget::setChunk(const std::shared_ptr<ChunkItem>& chunkPtr) {
@@ -1507,8 +1603,8 @@ MaterialEditorWidget::MaterialEditorWidget(QWidget* parent)
     connect(applyButton, &QPushButton::clicked,
         this, &MaterialEditorWidget::applyChanges);
 
-    layout->addStretch();
     layout->addWidget(applyButton, 0, Qt::AlignRight);
+    layout->addStretch();
 }
 
 void MaterialEditorWidget::populateStageCombo(QComboBox* combo, int stage) {
@@ -1735,6 +1831,9 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     materialNameEditor = new StringEditorWidget(tr("Material Name"), editorStack);
     editorStack->addWidget(materialNameEditor);
 
+    transformNodeEditor = new TransformNodeEditorWidget(editorStack);
+    editorStack->addWidget(transformNodeEditor);
+
     stage0ArgsEditor = new MapperArgsEditorWidget(tr("Stage 0 Mapper Args"), editorStack);
     editorStack->addWidget(stage0ArgsEditor);
 
@@ -1773,6 +1872,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     connect(meshEditor, &MeshEditorWidget::meshRenamed, this, &MainWindow::onMeshRenamed);
     connect(textureNameEditor, &StringEditorWidget::chunkEdited, this, &MainWindow::onChunkEdited);
     connect(materialNameEditor, &StringEditorWidget::chunkEdited, this, &MainWindow::onChunkEdited);
+    connect(transformNodeEditor, &TransformNodeEditorWidget::chunkEdited, this, &MainWindow::onChunkEdited);
     connect(stage0ArgsEditor, &MapperArgsEditorWidget::chunkEdited, this, &MainWindow::onChunkEdited);
     connect(stage1ArgsEditor, &MapperArgsEditorWidget::chunkEdited, this, &MainWindow::onChunkEdited);
     connect(materialEditor, &MaterialEditorWidget::chunkEdited, this, &MainWindow::onChunkEdited);
@@ -2336,6 +2436,9 @@ void MainWindow::onMeshRenamed(const QString& oldMeshName,
     auto renameFullName = [&](const QString& current) -> QString {
         const int dot = current.indexOf(QLatin1Char('.'));
         if (dot < 0) {
+            if (containerChanged && hasOldContainer && current == oldContainerName) {
+                return newContainerName;
+            }
             if (!hasOldContainer && meshChanged && current == oldMeshName) {
                 return newMeshName;
             }
@@ -2391,15 +2494,17 @@ void MainWindow::onMeshRenamed(const QString& oldMeshName,
                 }
             }
 
-            if (modelName == oldContainerName) {
-                if (containerChanged && headerChunk) {
-                    (void)W3DEdit::MutateStructChunk<W3dHModelHeaderStruct>(
-                        headerChunk,
-                        [&](W3dHModelHeaderStruct& header) {
+            if (containerChanged && headerChunk && modelName == oldContainerName) {
+                (void)W3DEdit::MutateStructChunk<W3dHModelHeaderStruct>(
+                    headerChunk,
+                    [&](W3dHModelHeaderStruct& header) {
+                        if (ReadFixedString(header.Name, W3D_NAME_LEN) == oldContainerName) {
                             W3DEdit::WriteFixedString(header.Name, W3D_NAME_LEN, newContainerName.toStdString());
-                        });
-                }
+                        }
+                    });
+            }
 
+            if (modelName == oldContainerName) {
                 if (meshChanged) {
                     for (const auto& child : node->children) {
                         if (child->id != 0x0302 && child->id != 0x0303
@@ -2424,6 +2529,23 @@ void MainWindow::onMeshRenamed(const QString& oldMeshName,
         }
 
         switch (node->id) {
+        case 0x0701: { // W3D_CHUNK_HLOD_HEADER
+            if (!containerChanged || !hasOldContainer) break;
+            auto parsed = ParseChunkStruct<W3dHLodHeaderStruct>(node);
+            if (auto header = std::get_if<W3dHLodHeaderStruct>(&parsed)) {
+                const QString currentName = ReadFixedString(header->Name, W3D_NAME_LEN);
+                if (currentName == oldContainerName) {
+                    (void)W3DEdit::MutateStructChunk<W3dHLodHeaderStruct>(
+                        node,
+                        [&](W3dHLodHeaderStruct& target) {
+                            if (ReadFixedString(target.Name, W3D_NAME_LEN) == oldContainerName) {
+                                W3DEdit::WriteFixedString(target.Name, W3D_NAME_LEN, newContainerName.toStdString());
+                            }
+                        });
+                }
+            }
+            break;
+        }
         case 0x0704: { // W3D_CHUNK_HLOD_SUB_OBJECT
             auto parsed = ParseChunkStruct<W3dHLodSubObjectStruct>(node);
             if (auto sub = std::get_if<W3dHLodSubObjectStruct>(&parsed)) {
@@ -2515,6 +2637,7 @@ void MainWindow::updateEditorForChunk(const std::shared_ptr<ChunkItem>& chunk) {
     meshEditor->setChunk(nullptr);
     textureNameEditor->setChunk(nullptr);
     materialNameEditor->setChunk(nullptr);
+    transformNodeEditor->setChunk(nullptr);
     stage0ArgsEditor->setChunk(nullptr);
     stage1ArgsEditor->setChunk(nullptr);
     materialEditor->setChunk(nullptr);
@@ -2566,6 +2689,11 @@ void MainWindow::updateEditorForChunk(const std::shared_ptr<ChunkItem>& chunk) {
     case 0x002C: // W3D_CHUNK_VERTEX_MATERIAL_NAME
         materialNameEditor->setChunk(chunk);
         editorStack->setCurrentWidget(materialNameEditor);
+        showEditor();
+        break;
+    case 0x0424: // W3D_CHUNK_TRANSFORM_NODE
+        transformNodeEditor->setChunk(chunk);
+        editorStack->setCurrentWidget(transformNodeEditor);
         showEditor();
         break;
     case 0x002E: // W3D_CHUNK_ARG0
@@ -2911,4 +3039,3 @@ void MainWindow::on_actionExportChunkList_triggered()
     QMessageBox::information(this, tr("Done"),
         tr("Chunk list exported to %1").arg(outPath));
 }
-

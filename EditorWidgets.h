@@ -72,6 +72,24 @@ private:
     QPushButton* applyButton = nullptr;
 };
 
+class TransformNodeEditorWidget : public QWidget {
+    Q_OBJECT
+public:
+    explicit TransformNodeEditorWidget(QWidget* parent = nullptr);
+    void setChunk(const std::shared_ptr<ChunkItem>& chunk);
+
+signals:
+    void chunkEdited();
+
+private slots:
+    void applyChanges();
+
+private:
+    std::weak_ptr<ChunkItem> chunk;
+    QLineEdit* fileNameEdit = nullptr;
+    QPushButton* applyButton = nullptr;
+};
+
 class MapperArgsEditorWidget : public QWidget {
     Q_OBJECT
 public:
