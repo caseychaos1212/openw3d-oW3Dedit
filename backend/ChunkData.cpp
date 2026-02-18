@@ -4,8 +4,6 @@
 #include <memory>
 #include <vector>
 #include <filesystem>
-#include <QJsonDocument>
-#include <QString>
 #include <nlohmann/json.hpp>
 
 using ordered_json = nlohmann::ordered_json;
@@ -335,7 +333,7 @@ void ChunkData::clear() {
     sourceFilename.clear();
 }
 
-QJsonDocument ChunkData::toJson() const {
+nlohmann::ordered_json ChunkData::toJson() const {
     ordered_json root;
     root["SCHEMA_VERSION"] = 1;
     ordered_json arr = ordered_json::array();
@@ -343,16 +341,14 @@ QJsonDocument ChunkData::toJson() const {
         arr.push_back(ChunkJson::toJson(*c));
     std::string key = sourceFilename.empty() ? "CHUNKS" : sourceFilename;
     root[key] = arr;
-    auto jsonText = QString::fromStdString(root.dump());
-    return QJsonDocument::fromJson(jsonText.toUtf8());
+    return root;
 }
 
-bool ChunkData::fromJson(const QJsonDocument& doc) {
-    if (!doc.isObject()) return false;
+bool ChunkData::fromJson(const nlohmann::ordered_json& doc) {
+    if (!doc.is_object()) return false;
     clear();
-    auto root = nlohmann::ordered_json::parse(doc.toJson(QJsonDocument::Compact).toStdString());
     ordered_json arr = ordered_json::array();
-    for (auto it = root.begin(); it != root.end(); ++it) {
+    for (auto it = doc.begin(); it != doc.end(); ++it) {
         if (it.key() == "SCHEMA_VERSION") continue;
         if (it.value().is_array()) {
             sourceFilename = it.key();

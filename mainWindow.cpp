@@ -45,8 +45,7 @@
 #include "backend/ParseUtils.h"
 #include "EditorWidgets.h"
 #include <map>
-#include <QJsonDocument>
-#include <QJsonParseError>
+#include <nlohmann/json.hpp>
 #include <array>
 #include <vector>
 #include <cstring>
@@ -59,6 +58,8 @@
 #include <functional>
 #include <cctype>
 #include <QSignalBlocker>
+
+using ordered_json = nlohmann::ordered_json;
 
 static std::size_t TruncatedLength(const char* data, std::size_t maxLen) {
     std::size_t len = 0;
@@ -2208,6 +2209,10 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     batchMenu->addAction(exportChunksAct);
     connect(exportChunksAct, &QAction::triggered,
         this, &MainWindow::on_actionExportChunkList_triggered);
+    auto exportJsonBatchAct = new QAction(tr("Export JSON Batch..."), this);
+    batchMenu->addAction(exportJsonBatchAct);
+    connect(exportJsonBatchAct, &QAction::triggered,
+        this, &MainWindow::on_actionExportJsonBatch_triggered);
 
     {
         QSettings settings;
@@ -3761,17 +3766,89 @@ void MainWindow::on_actionExportChunkList_triggered()
         tr("Chunk list exported to %1").arg(outPath));
 }
 
+void MainWindow::on_actionExportJsonBatch_triggered()
+{
+    QString startDir = lastDirectory.isEmpty() ? QDir::homePath() : lastDirectory;
+    QString srcDir = QFileDialog::getExistingDirectory(
+        this,
+        tr("Select W3D Directory"),
+        startDir,
+        QFileDialog::ShowDirsOnly | QFileDialog::DontResolveSymlinks);
+    if (srcDir.isEmpty()) return;
+
+    QString outDir = QFileDialog::getExistingDirectory(
+        this,
+        tr("Select Output Directory"),
+        srcDir,
+        QFileDialog::ShowDirsOnly | QFileDialog::DontResolveSymlinks);
+    if (outDir.isEmpty()) return;
+
+    QDir dir(srcDir);
+    auto w3dFiles = dir.entryList(QStringList{ "*.w3d", "*.W3D", "*.wlt" },
+        QDir::Files | QDir::NoSymLinks);
+
+    if (w3dFiles.isEmpty()) {
+        QMessageBox::information(this, tr("Export JSON"),
+            tr("No W3D files found in %1.").arg(srcDir));
+        return;
+    }
+
+    QDir outputDir(outDir);
+    int successCount = 0;
+    QStringList failures;
+
+    for (const QString& fileName : w3dFiles) {
+        QString inputPath = dir.absoluteFilePath(fileName);
+        ChunkData cd;
+        if (!cd.loadFromFile(inputPath.toStdString())) {
+            failures << tr("%1 (load failed)").arg(inputPath);
+            continue;
+        }
+
+        const ordered_json doc = cd.toJson();
+        QString baseName = QFileInfo(fileName).completeBaseName();
+        QString outputPath = outputDir.absoluteFilePath(baseName + ".json");
+        QFile outFile(outputPath);
+        if (!outFile.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+            failures << tr("%1 (write open failed)").arg(outputPath);
+            continue;
+        }
+
+        QByteArray payload = QByteArray::fromStdString(doc.dump(4));
+        auto written = outFile.write(payload);
+        outFile.close();
+        if (written != payload.size()) {
+            failures << tr("%1 (write failed)").arg(outputPath);
+            continue;
+        }
+
+        ++successCount;
+    }
+
+    lastDirectory = srcDir;
+
+    QString summary = tr("Exported %1 file(s) to %2.").arg(successCount).arg(outDir);
+    if (failures.isEmpty()) {
+        QMessageBox::information(this, tr("Export JSON"), summary);
+    }
+    else {
+        summary += tr("\n\nFailures:\n%1").arg(failures.join("\n"));
+        QMessageBox::warning(this, tr("Export JSON"), summary);
+    }
+}
+
 
 void MainWindow::exportJson() {
     QString path = QFileDialog::getSaveFileName(this, tr("Export to JSON"), lastDirectory, tr("JSON Files (*.json);;All Files (*)"));
     if (path.isEmpty()) return;
-    QJsonDocument doc = chunkData->toJson();
+    const ordered_json doc = chunkData->toJson();
     QFile file(path);
     if (!file.open(QIODevice::WriteOnly)) {
         QMessageBox::warning(this, tr("Error"), tr("Cannot write JSON file."));
         return;
     }
-    file.write(doc.toJson(QJsonDocument::Indented));
+    const QByteArray payload = QByteArray::fromStdString(doc.dump(4));
+    file.write(payload);
     file.close();
 }
 
@@ -3783,10 +3860,19 @@ void MainWindow::importJson() {
         QMessageBox::warning(this, tr("Error"), tr("Cannot open JSON file."));
         return;
     }
-    QJsonParseError err;
-    QJsonDocument doc = QJsonDocument::fromJson(file.readAll(), &err);
+    const QByteArray data = file.readAll();
     file.close();
-    if (err.error != QJsonParseError::NoError || !chunkData->fromJson(doc)) {
+
+    ordered_json doc;
+    try {
+        doc = ordered_json::parse(data.constBegin(), data.constEnd());
+    }
+    catch (const nlohmann::json::parse_error& e) {
+        QMessageBox::warning(this, tr("Error"), tr("Invalid JSON content: %1").arg(QString::fromUtf8(e.what())));
+        return;
+    }
+
+    if (!chunkData->fromJson(doc)) {
         QMessageBox::warning(this, tr("Error"), tr("Invalid JSON content."));
         return;
     }
