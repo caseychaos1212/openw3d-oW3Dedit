@@ -139,6 +139,22 @@ inline const char* SurfaceTypeName(uint32_t v) {
     case 29: return "Tiberium Water Permeable";
     case 30: return "Underwater Dirt";
     case 31: return "Underwater Tiberium Dirt";
+    case 32: return "Blue Tiberium";
+    case 33: return "Red Tiberium";
+    case 34: return "Tiberium Veins";
+    case 35: return "Laser";
+    case 36: return "Snow Permeable";
+    case 37: return "Electrical Glass";
+    case 38: return "Electrical Glass Permeable";
+    case 39: return "Slush";
+    case 40: return "Extra 1";
+    case 41: return "Extra 2";
+    case 42: return "Extra 3";
+    case 43: return "Extra 4";
+    case 44: return "Extra 5";
+    case 45: return "Extra 6";
+    case 46: return "Extra 7";
+    case 47: return "Extra 8";
     default: return nullptr;
     }
 }
@@ -281,18 +297,11 @@ InterpretShdSubMeshShaderDefVariables(const std::shared_ptr<ChunkItem>& chunk)
                 uint32_t st = (uint32_t)p[0] | ((uint32_t)p[1] << 8)
                     | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
                 B.UInt32("SurfaceType", st);
-                
-                static const char* kSurfaceNames[] = {
-                    "Light Metal","Heavy Metal","Water","Sand","Dirt","Mud","Grass","Wood",
-                    "Concrete","Flesh","Rock","Snow","Ice","Default","Glass","Cloth",
-                    "Tiberium Field","Foliage Permeable","Glass Permeable","Ice Permeable",
-                    "Cloth Permeable","Electrical","Electrical Permeable","Flammable",
-                    "Flammable Permeable","Steam","Steam Permeable","Water Permeable",
-                    "Tiberium Water","Tiberium Water Permeable","Underwater Dirt",
-                    "Underwater Tiberium Dirt"
-                };
-                if (st < (uint32_t)(sizeof(kSurfaceNames) / sizeof(kSurfaceNames[0]))) {
-                    B.Push("SurfaceTypeName", "enum", kSurfaceNames[st]);
+                if (const char* sname = SurfaceTypeName(st)) {
+                    B.Push("SurfaceTypeName", "enum", sname);
+                }
+                else {
+                    B.Push("SurfaceTypeName", "enum", "Unknown");
                 }
             }
             break;

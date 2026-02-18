@@ -71,23 +71,25 @@
   </PropertyGroup>
   <PropertyGroup>
     <_ProjectFileVersion>10.0.20506.1</_ProjectFileVersion>
+    <OutDir Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">$(ProjectDir)Debug\</OutDir>
     <IntDir Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">oW3DEdit.dir\Debug\</IntDir>
     <TargetName Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">oW3DEdit</TargetName>
     <TargetExt Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">.exe</TargetExt>
     <LinkIncremental Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">true</LinkIncremental>
     <GenerateManifest Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">true</GenerateManifest>
+    <OutDir Condition="'$(Configuration)|$(Platform)'=='Release|x64'">$(ProjectDir)Release\</OutDir>
     <IntDir Condition="'$(Configuration)|$(Platform)'=='Release|x64'">oW3DEdit.dir\Release\</IntDir>
     <TargetName Condition="'$(Configuration)|$(Platform)'=='Release|x64'">oW3DEdit</TargetName>
     <TargetExt Condition="'$(Configuration)|$(Platform)'=='Release|x64'">.exe</TargetExt>
     <LinkIncremental Condition="'$(Configuration)|$(Platform)'=='Release|x64'">false</LinkIncremental>
     <GenerateManifest Condition="'$(Configuration)|$(Platform)'=='Release|x64'">true</GenerateManifest>
-    <OutDir Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">C:\Users\admin\source\repos\openw3d-oW3Dedit\MinSizeRel\</OutDir>
+    <OutDir Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">$(ProjectDir)MinSizeRel\</OutDir>
     <IntDir Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">oW3DEdit.dir\MinSizeRel\</IntDir>
     <TargetName Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">oW3DEdit</TargetName>
     <TargetExt Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">.exe</TargetExt>
     <LinkIncremental Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">false</LinkIncremental>
     <GenerateManifest Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">true</GenerateManifest>
-    <OutDir Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">C:\Users\admin\source\repos\openw3d-oW3Dedit\RelWithDebInfo\</OutDir>
+    <OutDir Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">$(ProjectDir)RelWithDebInfo\</OutDir>
     <IntDir Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">oW3DEdit.dir\RelWithDebInfo\</IntDir>
     <TargetName Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">oW3DEdit</TargetName>
     <TargetExt Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">.exe</TargetExt>
@@ -137,8 +139,8 @@
       <AdditionalOptions>%(AdditionalOptions) /machine:x64</AdditionalOptions>
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <IgnoreSpecificDefaultLibraries>%(IgnoreSpecificDefaultLibraries)</IgnoreSpecificDefaultLibraries>
-      <ImportLibrary>$(ProjectDir)/Debug/oW3DEdit.lib</ImportLibrary>
-      <ProgramDataBaseFile>$(ProjectDir)/Debug/oW3DEdit.pdb</ProgramDataBaseFile>
+      <ImportLibrary>$(OutDir)oW3DEdit.lib</ImportLibrary>
+      <ProgramDataBaseFile>$(OutDir)oW3DEdit.pdb</ProgramDataBaseFile>
       <SubSystem>Console</SubSystem>
     </Link>
     <ProjectReference>
@@ -192,8 +194,8 @@
       <AdditionalOptions>%(AdditionalOptions) /machine:x64</AdditionalOptions>
       <GenerateDebugInformation>false</GenerateDebugInformation>
       <IgnoreSpecificDefaultLibraries>%(IgnoreSpecificDefaultLibraries)</IgnoreSpecificDefaultLibraries>
-      <ImportLibrary>$(ProjectDir)/Release/oW3DEdit.lib</ImportLibrary>
-      <ProgramDataBaseFile>C$(ProjectDir)/Release/oW3DEdit.pdb</ProgramDataBaseFile>
+      <ImportLibrary>$(OutDir)oW3DEdit.lib</ImportLibrary>
+      <ProgramDataBaseFile>$(OutDir)oW3DEdit.pdb</ProgramDataBaseFile>
       <SubSystem>Windows</SubSystem>
     </Link>
     <ProjectReference>
@@ -247,8 +249,8 @@
       <AdditionalOptions>%(AdditionalOptions) /machine:x64</AdditionalOptions>
       <GenerateDebugInformation>false</GenerateDebugInformation>
       <IgnoreSpecificDefaultLibraries>%(IgnoreSpecificDefaultLibraries)</IgnoreSpecificDefaultLibraries>
-      <ImportLibrary>C:/Users/admin/source/repos/openw3d-oW3Dedit/MinSizeRel/oW3DEdit.lib</ImportLibrary>
-      <ProgramDataBaseFile>C:/Users/admin/source/repos/openw3d-oW3Dedit/MinSizeRel/oW3DEdit.pdb</ProgramDataBaseFile>
+      <ImportLibrary>$(OutDir)oW3DEdit.lib</ImportLibrary>
+      <ProgramDataBaseFile>$(OutDir)oW3DEdit.pdb</ProgramDataBaseFile>
       <SubSystem>Console</SubSystem>
     </Link>
     <ProjectReference>
@@ -298,8 +300,8 @@
       <AdditionalOptions>%(AdditionalOptions) /machine:x64</AdditionalOptions>
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <IgnoreSpecificDefaultLibraries>%(IgnoreSpecificDefaultLibraries)</IgnoreSpecificDefaultLibraries>
-      <ImportLibrary>$(ProjectDir)/RelWithDebInfo/oW3DEdit.lib</ImportLibrary>
-      <ProgramDataBaseFile>$(ProjectDir)/RelWithDebInfo/oW3DEdit.pdb</ProgramDataBaseFile>
+      <ImportLibrary>$(OutDir)oW3DEdit.lib</ImportLibrary>
+      <ProgramDataBaseFile>$(OutDir)oW3DEdit.pdb</ProgramDataBaseFile>
       <SubSystem>Console</SubSystem>
     </Link>
     <ProjectReference>
@@ -309,6 +311,7 @@
   <ItemGroup>
     <ClInclude Include="thirdparty\nlohmann\json.hpp" />
     <QtMoc Include="MainWindow.h" />
+    <QtMoc Include="EditorWidgets.h" />
     <ClCompile Include="backend\ChunkJson.cpp" />
     <ClCompile Include="backend\ChunkSerializers.cpp" />
     <ClCompile Include="Main.cpp" />
@@ -345,6 +348,7 @@
     <ClInclude Include="backend\W3DStructs.h" />
     <ClInclude Include="backend\ChunkItem.h" />
     <ClInclude Include="backend\ChunkData.h" />
+    <ClInclude Include="backend\ChunkMutators.h" />
     <ClCompile Include="backend\ChunkData.cpp" />
   </ItemGroup>
   <ItemGroup />
