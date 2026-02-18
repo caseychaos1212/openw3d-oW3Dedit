@@ -28,6 +28,7 @@
 #include <QGridLayout>
 #include <QKeySequence>
 #include <QDialog>
+#include <QInputDialog>
 #include <QDialogButtonBox>
 #include <QHeaderView>
 #include <iostream>
@@ -132,6 +133,7 @@ constexpr uint32_t MeshAttrValue(MeshAttr attr) {
 }
 
 constexpr int kMeshNameMax = static_cast<int>(W3D_NAME_LEN) - 1;
+constexpr int kPivotNameMax = static_cast<int>(W3D_NAME_LEN) - 1;
 
 template <typename Enum>
 static void PopulateEnumCombo(QComboBox* combo) {
@@ -178,6 +180,7 @@ struct MeshBinding {
 
 struct HierarchyInfo {
     QString name;
+    std::shared_ptr<ChunkItem> pivotChunk;
     std::vector<PivotInfo> pivots;
     std::vector<MeshBinding> meshes;
 };
@@ -208,18 +211,26 @@ static std::string NormalizeName(const std::string& in) {
 
 class HierarchyBrowserDialog : public QDialog {
 public:
+    using PivotRenameHandler =
+        std::function<bool(const std::shared_ptr<ChunkItem>&, int, const QString&, QString*)>;
+
     HierarchyBrowserDialog(const std::vector<HierarchyInfo>& data,
         std::function<void(void*)> meshHandler,
         std::function<void*(const QString&)> resolver,
+        PivotRenameHandler renameHandler,
         QWidget* parent = nullptr)
         : QDialog(parent)
         , hierarchies(data)
         , onMeshActivated(std::move(meshHandler))
-        , resolveChunk(std::move(resolver)) {
+        , resolveChunk(std::move(resolver))
+        , onPivotRenamed(std::move(renameHandler)) {
         setWindowTitle(tr("Hierarchy Browser"));
 
         auto* layout = new QVBoxLayout(this);
-        auto* hint = new QLabel(tr("Select a mesh and click \"Select Mesh\" to jump to its chunk."), this);
+        auto* hint = new QLabel(
+            tr("Select a mesh and click \"Select Mesh\" to jump to its chunk. "
+                "Double-click a pivot name to rename it."),
+            this);
         layout->addWidget(hint);
 
         tree = new QTreeWidget(this);
@@ -239,17 +250,27 @@ public:
             this, &HierarchyBrowserDialog::onSelectionChanged);
         connect(selectButton, &QPushButton::clicked,
             this, &HierarchyBrowserDialog::activateSelection);
+        connect(tree, &QTreeWidget::itemDoubleClicked,
+            this, &HierarchyBrowserDialog::onItemDoubleClicked);
     }
 
 private:
     static constexpr int RoleIsMesh = Qt::UserRole + 1;
     static constexpr int RoleName = Qt::UserRole + 2;
+    static constexpr int RoleIsPivot = Qt::UserRole + 3;
+    static constexpr int RoleHierarchyIndex = Qt::UserRole + 4;
+    static constexpr int RolePivotIndex = Qt::UserRole + 5;
 
     void populate() {
+        QSignalBlocker blocker(tree);
         tree->clear();
-        for (const auto& h : hierarchies) {
+        for (int hierarchyIndex = 0; hierarchyIndex < static_cast<int>(hierarchies.size()); ++hierarchyIndex) {
+            const auto& h = hierarchies[static_cast<std::size_t>(hierarchyIndex)];
             auto* root = new QTreeWidgetItem(tree, { h.name, tr("Hierarchy") });
             root->setData(0, RoleIsMesh, false);
+            root->setData(0, RoleIsPivot, false);
+            root->setData(0, RoleHierarchyIndex, hierarchyIndex);
+            root->setData(0, RolePivotIndex, -1);
 
             // Build pivot items recursively so parent ordering does not matter
             std::vector<QTreeWidgetItem*> pivotItems(h.pivots.size(), nullptr);
@@ -275,6 +296,9 @@ private:
                     : tr("Root");
                 auto* item = new QTreeWidgetItem(parentItem, { label, detail });
                 item->setData(0, RoleIsMesh, false);
+                item->setData(0, RoleIsPivot, true);
+                item->setData(0, RoleHierarchyIndex, hierarchyIndex);
+                item->setData(0, RolePivotIndex, idx);
                 pivotItems[static_cast<std::size_t>(idx)] = item;
                 return item;
                 };
@@ -312,6 +336,9 @@ private:
                 meshItem->setData(0, Qt::UserRole,
                     QVariant::fromValue<void*>(mesh.chunk ? mesh.chunk.get() : nullptr));
                 meshItem->setData(0, RoleIsMesh, true);
+                meshItem->setData(0, RoleIsPivot, false);
+                meshItem->setData(0, RoleHierarchyIndex, hierarchyIndex);
+                meshItem->setData(0, RolePivotIndex, -1);
                 meshItem->setData(0, RoleName, mesh.displayName);
             }
 
@@ -348,11 +375,91 @@ private:
         }
     }
 
+    void onItemDoubleClicked(QTreeWidgetItem* item, int column) {
+        if (!item || column != 0) return;
+        if (!item->data(0, RoleIsPivot).toBool()) return;
+
+        const int hierarchyIndex = item->data(0, RoleHierarchyIndex).toInt();
+        const int pivotIndex = item->data(0, RolePivotIndex).toInt();
+        if (hierarchyIndex < 0 || hierarchyIndex >= static_cast<int>(hierarchies.size())) return;
+
+        auto& hierarchy = hierarchies[static_cast<std::size_t>(hierarchyIndex)];
+        if (pivotIndex < 0 || pivotIndex >= static_cast<int>(hierarchy.pivots.size())) return;
+
+        const QString currentName = hierarchy.pivots[static_cast<std::size_t>(pivotIndex)].name;
+        bool accepted = false;
+        QString newName = QInputDialog::getText(
+            this,
+            tr("Rename Pivot"),
+            tr("Pivot Name"),
+            QLineEdit::Normal,
+            currentName,
+            &accepted).trimmed();
+
+        if (!accepted || newName == currentName) return;
+        if (newName.size() > kPivotNameMax) {
+            QMessageBox::warning(
+                this,
+                tr("Invalid Name"),
+                tr("Pivot names can be at most %1 characters.").arg(kPivotNameMax));
+            return;
+        }
+        if (!onPivotRenamed) return;
+
+        QString error;
+        if (!onPivotRenamed(hierarchy.pivotChunk, pivotIndex, newName, &error)) {
+            QMessageBox::warning(
+                this,
+                tr("Rename Failed"),
+                error.isEmpty()
+                    ? tr("Failed to rename pivot.")
+                    : tr("Failed to rename pivot: %1").arg(error));
+            return;
+        }
+
+        hierarchy.pivots[static_cast<std::size_t>(pivotIndex)].name = newName;
+        for (auto& mesh : hierarchy.meshes) {
+            if (mesh.pivotIndex == pivotIndex) {
+                mesh.pivotName = newName;
+            }
+        }
+
+        populate();
+        selectPivotItem(hierarchyIndex, pivotIndex);
+    }
+
+    void selectPivotItem(int hierarchyIndex, int pivotIndex) {
+        std::function<QTreeWidgetItem * (QTreeWidgetItem*)> dfs =
+            [&](QTreeWidgetItem* node) -> QTreeWidgetItem* {
+            if (!node) return nullptr;
+            if (node->data(0, RoleIsPivot).toBool()
+                && node->data(0, RoleHierarchyIndex).toInt() == hierarchyIndex
+                && node->data(0, RolePivotIndex).toInt() == pivotIndex) {
+                return node;
+            }
+            for (int i = 0; i < node->childCount(); ++i) {
+                if (auto* found = dfs(node->child(i))) {
+                    return found;
+                }
+            }
+            return nullptr;
+            };
+
+        for (int i = 0; i < tree->topLevelItemCount(); ++i) {
+            if (auto* found = dfs(tree->topLevelItem(i))) {
+                tree->setCurrentItem(found);
+                tree->scrollToItem(found);
+                break;
+            }
+        }
+    }
+
     QTreeWidget* tree = nullptr;
     QPushButton* selectButton = nullptr;
     std::vector<HierarchyInfo> hierarchies;
     std::function<void(void*)> onMeshActivated;
     std::function<void*(const QString&)> resolveChunk;
+    PivotRenameHandler onPivotRenamed;
 };
 
 static std::unordered_multimap<std::string, std::shared_ptr<ChunkItem>> BuildMeshIndex(
@@ -595,6 +702,7 @@ static std::vector<HierarchyInfo> CollectHierarchies(
                     }
                 }
                 else if (child->id == 0x0102) { // pivots
+                    info.pivotChunk = child;
                     auto parsed = ParseChunkArray<W3dPivotStruct>(child);
                     if (auto pivots = std::get_if<std::vector<W3dPivotStruct>>(&parsed)) {
                         info.pivots.reserve(pivots->size());
@@ -2919,6 +3027,46 @@ void MainWindow::showHierarchyBrowser() {
                 return range.first->second.get();
             }
             return nullptr;
+        },
+        [this](const std::shared_ptr<ChunkItem>& pivotChunk,
+            int pivotIndex,
+            const QString& newName,
+            QString* error) -> bool {
+            if (!pivotChunk) {
+                if (error) {
+                    *error = tr("Hierarchy pivot chunk was not found.");
+                }
+                return false;
+            }
+
+            if (pivotIndex < 0) {
+                if (error) {
+                    *error = tr("Pivot index is invalid.");
+                }
+                return false;
+            }
+
+            std::string mutateError;
+            const bool mutated = W3DEdit::MutateStructAtIndex<W3dPivotStruct>(
+                pivotChunk,
+                static_cast<std::size_t>(pivotIndex),
+                [&](W3dPivotStruct& pivot) {
+                    W3DEdit::WriteFixedString(
+                        pivot.Name,
+                        W3D_NAME_LEN,
+                        newName.toStdString());
+                },
+                &mutateError);
+
+            if (!mutated) {
+                if (error) {
+                    *error = QString::fromStdString(mutateError);
+                }
+                return false;
+            }
+
+            onChunkEdited();
+            return true;
         },
         this);
     dlg.exec();
