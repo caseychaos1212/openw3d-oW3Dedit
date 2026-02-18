@@ -6,5 +6,3 @@
 struct ChunkSerializer;
 
 const std::unordered_map<uint32_t, const ChunkSerializer*>& chunkSerializerRegistry();
-
-#pragma once

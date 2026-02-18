@@ -50,6 +50,7 @@
 #include <vector>
 #include <cstring>
 #include <cstddef>
+#include <exception>
 #include <variant>
 #include <type_traits>
 #include <optional>
@@ -3867,13 +3868,19 @@ void MainWindow::importJson() {
     try {
         doc = ordered_json::parse(data.constBegin(), data.constEnd());
     }
-    catch (const nlohmann::json::parse_error& e) {
+    catch (const nlohmann::json::exception& e) {
         QMessageBox::warning(this, tr("Error"), tr("Invalid JSON content: %1").arg(QString::fromUtf8(e.what())));
         return;
     }
 
-    if (!chunkData->fromJson(doc)) {
-        QMessageBox::warning(this, tr("Error"), tr("Invalid JSON content."));
+    try {
+        if (!chunkData->fromJson(doc)) {
+            QMessageBox::warning(this, tr("Error"), tr("Invalid JSON content."));
+            return;
+        }
+    }
+    catch (const std::exception& e) {
+        QMessageBox::warning(this, tr("Error"), tr("Invalid JSON content: %1").arg(QString::fromUtf8(e.what())));
         return;
     }
     ClearChunkTree();

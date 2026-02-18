@@ -346,21 +346,36 @@ nlohmann::ordered_json ChunkData::toJson() const {
 
 bool ChunkData::fromJson(const nlohmann::ordered_json& doc) {
     if (!doc.is_object()) return false;
-    clear();
+
     ordered_json arr = ordered_json::array();
+    std::string parsedSourceFilename;
+    bool foundChunkArray = false;
+
     for (auto it = doc.begin(); it != doc.end(); ++it) {
         if (it.key() == "SCHEMA_VERSION") continue;
         if (it.value().is_array()) {
-            sourceFilename = it.key();
+            parsedSourceFilename = it.key();
             arr = it.value();
+            foundChunkArray = true;
             break;
         }
     }
-    if (arr.empty()) return false;
+    if (!foundChunkArray) return false;
+
+    std::vector<std::shared_ptr<ChunkItem>> parsedChunks;
+    parsedChunks.reserve(arr.size());
     for (const auto& v : arr) {
-        if (v.is_object()) {
-            chunks.push_back(ChunkJson::fromJson(v));
+        if (!v.is_object()) {
+            return false;
         }
+        auto chunk = ChunkJson::fromJson(v);
+        if (!chunk) {
+            return false;
+        }
+        parsedChunks.push_back(std::move(chunk));
     }
+
+    chunks = std::move(parsedChunks);
+    sourceFilename = std::move(parsedSourceFilename);
     return true;
 }

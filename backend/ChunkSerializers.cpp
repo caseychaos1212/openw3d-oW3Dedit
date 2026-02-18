@@ -157,7 +157,7 @@ namespace {
                 item.data,
                 [](const W3dVectorStruct& v) { return QJsonArray{ v.X, v.Y, v.Z }; }
             );
-            return dataObj;
+            return obj;
         }
 
         void fromJson(const QJsonObject& dataObj, ChunkItem& item) const override {
@@ -412,8 +412,8 @@ namespace {
     };
     // Serializer for chunk 0x0010 (W3D_CHUNK_DAMAGE_HEADER)
     struct DamageHeaderSerializer : ChunkSerializer {
-        ordered_json toJson(const ChunkItem& item) const override {
-            ordered_json obj;
+        QJsonObject toJson(const ChunkItem& item) const override {
+            QJsonObject obj;
             if (item.data.size() >= sizeof(W3dDamageHeaderStruct)) {
                 const auto* h = reinterpret_cast<const W3dDamageHeaderStruct*>(item.data.data());
                 obj["NUMDAMAGEMATERIALS"] = static_cast<int>(h->NumDamageMaterials);
@@ -421,27 +421,27 @@ namespace {
                 obj["NUMDAMAGECOLORS"] = static_cast<int>(h->NumDamageColors);
                 obj["DAMAGEINDEX"] = static_cast<int>(h->DamageIndex);
 
-                ordered_json fu = ordered_json::array();
+                QJsonArray fu;
                 for (int i = 0; i < 4; ++i) {
-                    fu.push_back(static_cast<int>(h->FutureUse[i]));
+                    fu.append(static_cast<int>(h->FutureUse[i]));
                 }
                 obj["FUTUREUSE"] = fu;
             }
             return obj;
         }
 
-        void fromJson(const ordered_json& dataObj, ChunkItem& item) const override {
+        void fromJson(const QJsonObject& dataObj, ChunkItem& item) const override {
             W3dDamageHeaderStruct h{}; // zero-init
 
-            h.NumDamageMaterials = dataObj.value("NUMDAMAGEMATERIALS", 0);
-            h.NumDamageVerts = dataObj.value("NUMDAMAGEVERTS", 0);
-            h.NumDamageColors = dataObj.value("NUMDAMAGECOLORS", 0);
-            h.DamageIndex = dataObj.value("DAMAGEINDEX", 0);
+            h.NumDamageMaterials = dataObj.value("NUMDAMAGEMATERIALS").toInt();
+            h.NumDamageVerts = dataObj.value("NUMDAMAGEVERTS").toInt();
+            h.NumDamageColors = dataObj.value("NUMDAMAGECOLORS").toInt();
+            h.DamageIndex = dataObj.value("DAMAGEINDEX").toInt();
 
-            auto fu = dataObj.value("FUTUREUSE", ordered_json::array());
-            for (size_t i = 0; i < 4 && i < fu.size(); ++i) {
+            QJsonArray fu = dataObj.value("FUTUREUSE").toArray();
+            for (int i = 0; i < 4 && i < fu.size(); ++i) {
                 // adjust cast if FutureUse is unsigned
-                h.FutureUse[i] = static_cast<int32_t>(fu[i].get<int>());
+                h.FutureUse[i] = static_cast<int32_t>(fu[i].toInt());
             }
 
             item.length = static_cast<uint32_t>(sizeof(W3dDamageHeaderStruct));
@@ -3980,6 +3980,20 @@ namespace {
     static const DazzleTypenameSerializer dazzleTypenameSerializerInstance;
     static const SoundRObjHeaderSerializer soundRObjHeaderSerializerInstance;
     static const SoundRObjDefinitionSerializer soundRObjDefinitionSerializerInstance;
+    */
+
+    // Active serializer instances used by the current registry.
+    static const MeshHeader1Serializer meshHeader1SerializerInstance;
+    static const VerticesSerializer verticesSerializerInstance;
+    static const VertexNormalsSerializer vertexNormalsSerializerInstance;
+    static const SurrenderNormalsSerializer surrenderNormalsSerializerInstance;
+    static const TexCoordsSerializer texCoordsSerializerInstance;
+    static const MaterialsSerializer materialsSerializerInstance;
+    static const SurrenderTrianglesSerializer surrenderTrianglesSerializerInstance;
+    static const MeshUserTextSerializer meshUserTextSerializerInstance;
+    static const VertexColorsSerializer vertexColorsSerializerInstance;
+    static const VertexInfluencesSerializer vertexInfluencesSerializerInstance;
+    static const DamageHeaderSerializer damageHeaderSerializerInstance;
 } // namespace
 
 const std::unordered_map<uint32_t, const ChunkSerializer*>& chunkSerializerRegistry() {
@@ -4098,6 +4112,7 @@ const std::unordered_map<uint32_t, const ChunkSerializer*>& chunkSerializerRegis
         {0x0902, &dazzleTypenameSerializerInstance},
         {0x0A01, &soundRObjHeaderSerializerInstance},
         {0x0A02, &soundRObjDefinitionSerializerInstance},
+        */
     };
     return registry;
 }
