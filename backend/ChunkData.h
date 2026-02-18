@@ -20,6 +20,10 @@ public:
         return chunks;
     }
 
+    std::vector<std::shared_ptr<ChunkItem>>& getChunksMutable() {
+        return chunks;
+    }
+
     // Clears all loaded chunks
     void clear();
 

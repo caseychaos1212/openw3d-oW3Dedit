@@ -48,8 +48,10 @@
 #include <array>
 #include <vector>
 #include <cstring>
+#include <cstddef>
 #include <variant>
 #include <type_traits>
+#include <optional>
 #include <unordered_map>
 #include <algorithm>
 #include <functional>
@@ -206,6 +208,171 @@ static std::string NormalizeName(const std::string& in) {
     };
     strip(lowered);
     return lowered;
+}
+
+struct ChunkLocation {
+    std::vector<std::shared_ptr<ChunkItem>>* siblings = nullptr;
+    std::size_t index = 0;
+    ChunkItem* parent = nullptr;
+};
+
+static std::shared_ptr<ChunkItem> FindChunkByPtr(
+    const std::vector<std::shared_ptr<ChunkItem>>& roots,
+    const void* targetPtr) {
+    if (!targetPtr) return nullptr;
+
+    std::function<std::shared_ptr<ChunkItem>(const std::shared_ptr<ChunkItem>&)> dfs =
+        [&](const std::shared_ptr<ChunkItem>& node) -> std::shared_ptr<ChunkItem> {
+        if (!node) return nullptr;
+        if (node.get() == targetPtr) return node;
+        for (const auto& child : node->children) {
+            if (auto found = dfs(child)) return found;
+        }
+        return nullptr;
+        };
+
+    for (const auto& root : roots) {
+        if (auto found = dfs(root)) return found;
+    }
+    return nullptr;
+}
+
+static bool FindChunkLocationRecursive(
+    std::vector<std::shared_ptr<ChunkItem>>& siblings,
+    ChunkItem* parent,
+    const void* targetPtr,
+    ChunkLocation& out) {
+    for (std::size_t i = 0; i < siblings.size(); ++i) {
+        auto& node = siblings[i];
+        if (!node) continue;
+        if (node.get() == targetPtr) {
+            out.siblings = &siblings;
+            out.index = i;
+            out.parent = parent;
+            return true;
+        }
+        if (FindChunkLocationRecursive(node->children, node.get(), targetPtr, out)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool FindChunkLocation(
+    std::vector<std::shared_ptr<ChunkItem>>& roots,
+    const void* targetPtr,
+    ChunkLocation& out) {
+    return FindChunkLocationRecursive(roots, nullptr, targetPtr, out);
+}
+
+static bool ParseChunkIdText(const QString& text, uint32_t& outId) {
+    QString normalized = text.trimmed();
+    if (normalized.isEmpty()) return false;
+
+    int base = 10;
+    if (normalized.startsWith(QStringLiteral("0x"), Qt::CaseInsensitive)) {
+        normalized = normalized.mid(2);
+        base = 16;
+    }
+
+    bool ok = false;
+    const uint32_t parsed = normalized.toUInt(&ok, base);
+    if (!ok) return false;
+
+    outId = parsed;
+    return true;
+}
+
+static void* SelectedChunkPtr(const QTreeWidget* tree) {
+    if (!tree) return nullptr;
+    const auto items = tree->selectedItems();
+    if (items.isEmpty()) return nullptr;
+    return items.first()->data(0, Qt::UserRole).value<void*>();
+}
+
+static bool PromptChunkId(QWidget* parent, const QString& title, uint32_t suggestedId, uint32_t& outId) {
+    bool accepted = false;
+    const QString defaultText = QStringLiteral("0x%1").arg(suggestedId, 0, 16).toUpper();
+    const QString chunkIdText = QInputDialog::getText(
+        parent,
+        title,
+        QObject::tr("Chunk ID (hex or decimal)"),
+        QLineEdit::Normal,
+        defaultText,
+        &accepted).trimmed();
+
+    if (!accepted) return false;
+    if (!ParseChunkIdText(chunkIdText, outId)) {
+        QMessageBox::warning(
+            parent,
+            QObject::tr("Invalid Chunk ID"),
+            QObject::tr("Enter a valid chunk ID using decimal or 0x-prefixed hex."));
+        return false;
+    }
+
+    return true;
+}
+
+static bool MoveBoneToEndInPivots(
+    std::vector<W3dPivotStruct>& pivots,
+    std::vector<W3dPivotFixupStruct>* pivotFixups,
+    int boneIndex,
+    QString* error) {
+    if (boneIndex < 0 || boneIndex >= static_cast<int>(pivots.size())) {
+        if (error) *error = QObject::tr("Pivot index is out of range.");
+        return false;
+    }
+
+    const auto moveSingle = [&](uint32_t sourceIdx) {
+        const uint32_t count = static_cast<uint32_t>(pivots.size());
+        if (sourceIdx >= count) return;
+
+        W3dPivotStruct movedPivot = pivots[sourceIdx];
+        std::optional<W3dPivotFixupStruct> movedFixup;
+        if (pivotFixups) {
+            movedFixup = (*pivotFixups)[sourceIdx];
+        }
+
+        for (uint32_t i = sourceIdx; i + 1 < count; ++i) {
+            pivots[i] = pivots[i + 1];
+            if (pivotFixups) {
+                (*pivotFixups)[i] = (*pivotFixups)[i + 1];
+            }
+        }
+
+        pivots[count - 1] = movedPivot;
+        if (pivotFixups) {
+            (*pivotFixups)[count - 1] = *movedFixup;
+        }
+
+        for (uint32_t i = sourceIdx; i + 1 < count; ++i) {
+            uint32_t& parentIdx = pivots[i].ParentIdx;
+            if (parentIdx == 0xFFFFFFFFu) continue;
+            if (parentIdx > sourceIdx) {
+                --parentIdx;
+            }
+            else if (parentIdx == sourceIdx) {
+                parentIdx = count - 1;
+            }
+        }
+        };
+
+    const auto findFirstBad = [&]() -> int {
+        for (uint32_t i = 1; i < static_cast<uint32_t>(pivots.size()); ++i) {
+            const uint32_t parentIdx = pivots[i].ParentIdx;
+            if (parentIdx != 0xFFFFFFFFu && parentIdx > i) {
+                return static_cast<int>(i);
+            }
+        }
+        return -1;
+        };
+
+    moveSingle(static_cast<uint32_t>(boneIndex));
+    for (int bad = findFirstBad(); bad != -1; bad = findFirstBad()) {
+        moveSingle(static_cast<uint32_t>(bad));
+    }
+
+    return true;
 }
 } // namespace
 
@@ -1875,6 +2042,8 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
 
     treeWidget = new QTreeWidget(splitter);
     treeWidget->setHeaderLabel(tr("Chunk Tree"));
+    treeWidget->setSelectionMode(QAbstractItemView::SingleSelection);
+    connect(treeWidget, &QTreeWidget::itemSelectionChanged, this, &MainWindow::handleTreeSelection);
 
     auto* detailContainer = new QWidget(splitter);
     auto* detailLayout = new QVBoxLayout(detailContainer);
@@ -2000,6 +2169,27 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
         lastDirectory = QDir::homePath();
     UpdateRecentFilesMenu();
     // create the menu & action
+    QMenu* editMenu = menuBar()->addMenu(tr("&Edit"));
+    QAction* addTopLevelChunkAction = editMenu->addAction(tr("Add Top-Level Chunk..."));
+    QAction* insertChunkBeforeAction = editMenu->addAction(tr("Insert Chunk Before..."));
+    QAction* insertChunkAfterAction = editMenu->addAction(tr("Insert Chunk After..."));
+    QAction* addChildChunkAction = editMenu->addAction(tr("Add Child Chunk..."));
+    editMenu->addSeparator();
+    QAction* moveChunkUpAction = editMenu->addAction(tr("Move Chunk Up"));
+    QAction* moveChunkDownAction = editMenu->addAction(tr("Move Chunk Down"));
+    QAction* deleteChunkAction = editMenu->addAction(tr("Delete Selected Chunk"));
+    editMenu->addSeparator();
+    QAction* moveHierarchyBoneToEndAction = editMenu->addAction(tr("Move Hierarchy Bone To End..."));
+
+    connect(addTopLevelChunkAction, &QAction::triggered, this, &MainWindow::addTopLevelChunk);
+    connect(insertChunkBeforeAction, &QAction::triggered, this, &MainWindow::insertChunkBefore);
+    connect(insertChunkAfterAction, &QAction::triggered, this, &MainWindow::insertChunkAfter);
+    connect(addChildChunkAction, &QAction::triggered, this, &MainWindow::addChildChunk);
+    connect(moveChunkUpAction, &QAction::triggered, this, &MainWindow::moveChunkUp);
+    connect(moveChunkDownAction, &QAction::triggered, this, &MainWindow::moveChunkDown);
+    connect(deleteChunkAction, &QAction::triggered, this, &MainWindow::deleteSelectedChunk);
+    connect(moveHierarchyBoneToEndAction, &QAction::triggered, this, &MainWindow::moveHierarchyBoneToEnd);
+
     QMenu* viewMenu = menuBar()->addMenu("&View");
     QAction* expandAllAction = viewMenu->addAction("Expand All");
     QAction* collapseAllAction = viewMenu->addAction("Collapse All");
@@ -2120,8 +2310,6 @@ void MainWindow::populateTree() {
     }
 
     treeWidget->collapseAll();
-    connect(treeWidget, &QTreeWidget::itemSelectionChanged, this, &MainWindow::handleTreeSelection);
-
 }
 
 // Constants for clarity
@@ -2153,22 +2341,7 @@ void MainWindow::handleTreeSelection() {
         return;
     }
 
-    // Resolve ChunkItem*
-    std::shared_ptr<ChunkItem> target;
-    {
-        std::function<std::shared_ptr<ChunkItem>(const std::shared_ptr<ChunkItem>&)> dfs =
-            [&](const std::shared_ptr<ChunkItem>& node) -> std::shared_ptr<ChunkItem> {
-            if (node.get() == targetPtr) return node;
-            for (const auto& c : node->children) {
-                if (auto r = dfs(c)) return r;
-            }
-            return nullptr;
-            };
-        for (const auto& root : chunkData->getChunks()) {
-            target = dfs(root);
-            if (target) break;
-        }
-    }
+    const std::shared_ptr<ChunkItem> target = FindChunkByPtr(chunkData->getChunks(), targetPtr);
 
     tableWidget->clearContents();
     tableWidget->setRowCount(0);
@@ -3070,6 +3243,400 @@ void MainWindow::showHierarchyBrowser() {
         },
         this);
     dlg.exec();
+}
+
+void MainWindow::addTopLevelChunk() {
+    if (!chunkData) return;
+
+    uint32_t chunkId = 0;
+    if (!PromptChunkId(this, tr("Add Top-Level Chunk"), 0x0100u, chunkId)) {
+        return;
+    }
+
+    auto newChunk = std::make_shared<ChunkItem>();
+    newChunk->id = chunkId;
+    newChunk->hasSubChunks = false;
+    newChunk->length = 0;
+    newChunk->parent = nullptr;
+
+    auto& roots = chunkData->getChunksMutable();
+    roots.push_back(newChunk);
+
+    setDirty(true);
+    populateTree();
+    selectChunkInTree(newChunk.get());
+}
+
+void MainWindow::insertChunkBefore() {
+    if (!chunkData) return;
+
+    void* selectedPtr = SelectedChunkPtr(treeWidget);
+    if (!selectedPtr) {
+        QMessageBox::information(this, tr("No Chunk Selected"),
+            tr("Select a chunk to insert before."));
+        return;
+    }
+
+    auto& roots = chunkData->getChunksMutable();
+    ChunkLocation location;
+    if (!FindChunkLocation(roots, selectedPtr, location) || !location.siblings) {
+        QMessageBox::warning(this, tr("Error"), tr("Failed to locate the selected chunk."));
+        return;
+    }
+
+    uint32_t chunkId = 0;
+    const uint32_t suggestedId = (*location.siblings)[location.index]
+        ? (*location.siblings)[location.index]->id
+        : 0x0000u;
+    if (!PromptChunkId(this, tr("Insert Chunk Before"), suggestedId, chunkId)) {
+        return;
+    }
+
+    auto newChunk = std::make_shared<ChunkItem>();
+    newChunk->id = chunkId;
+    newChunk->hasSubChunks = false;
+    newChunk->length = 0;
+    newChunk->parent = location.parent;
+
+    location.siblings->insert(location.siblings->begin() + static_cast<std::ptrdiff_t>(location.index), newChunk);
+
+    setDirty(true);
+    populateTree();
+    selectChunkInTree(newChunk.get());
+}
+
+void MainWindow::insertChunkAfter() {
+    if (!chunkData) return;
+
+    void* selectedPtr = SelectedChunkPtr(treeWidget);
+    if (!selectedPtr) {
+        QMessageBox::information(this, tr("No Chunk Selected"),
+            tr("Select a chunk to insert after."));
+        return;
+    }
+
+    auto& roots = chunkData->getChunksMutable();
+    ChunkLocation location;
+    if (!FindChunkLocation(roots, selectedPtr, location) || !location.siblings) {
+        QMessageBox::warning(this, tr("Error"), tr("Failed to locate the selected chunk."));
+        return;
+    }
+
+    uint32_t chunkId = 0;
+    const uint32_t suggestedId = (*location.siblings)[location.index]
+        ? (*location.siblings)[location.index]->id
+        : 0x0000u;
+    if (!PromptChunkId(this, tr("Insert Chunk After"), suggestedId, chunkId)) {
+        return;
+    }
+
+    auto newChunk = std::make_shared<ChunkItem>();
+    newChunk->id = chunkId;
+    newChunk->hasSubChunks = false;
+    newChunk->length = 0;
+    newChunk->parent = location.parent;
+
+    const std::size_t insertIndex = location.index + 1;
+    location.siblings->insert(location.siblings->begin() + static_cast<std::ptrdiff_t>(insertIndex), newChunk);
+
+    setDirty(true);
+    populateTree();
+    selectChunkInTree(newChunk.get());
+}
+
+void MainWindow::addChildChunk() {
+    if (!chunkData) return;
+
+    void* selectedPtr = SelectedChunkPtr(treeWidget);
+    if (!selectedPtr) {
+        QMessageBox::information(this, tr("No Chunk Selected"),
+            tr("Select a parent chunk to add a child chunk."));
+        return;
+    }
+
+    auto parentChunk = FindChunkByPtr(chunkData->getChunks(), selectedPtr);
+    if (!parentChunk) {
+        QMessageBox::warning(this, tr("Error"), tr("Failed to locate the selected chunk."));
+        return;
+    }
+
+    if (parentChunk->isMicro) {
+        QMessageBox::warning(this, tr("Unsupported"),
+            tr("Cannot add child chunks under micro chunks."));
+        return;
+    }
+
+    if (!parentChunk->data.empty() && parentChunk->children.empty()) {
+        const auto choice = QMessageBox::question(
+            this,
+            tr("Convert To Wrapper"),
+            tr("The selected chunk currently contains raw data. "
+                "Adding children will replace that raw data when the file is saved. Continue?"),
+            QMessageBox::Yes | QMessageBox::No,
+            QMessageBox::No);
+        if (choice != QMessageBox::Yes) return;
+    }
+
+    uint32_t chunkId = 0;
+    if (!PromptChunkId(this, tr("Add Child Chunk"), 0x0001u, chunkId)) {
+        return;
+    }
+
+    auto newChunk = std::make_shared<ChunkItem>();
+    newChunk->id = chunkId;
+    newChunk->hasSubChunks = false;
+    newChunk->length = 0;
+    newChunk->parent = parentChunk.get();
+
+    parentChunk->children.push_back(newChunk);
+    parentChunk->hasSubChunks = true;
+
+    setDirty(true);
+    populateTree();
+    selectChunkInTree(newChunk.get());
+}
+
+void MainWindow::deleteSelectedChunk() {
+    if (!chunkData) return;
+
+    void* selectedPtr = SelectedChunkPtr(treeWidget);
+    if (!selectedPtr) {
+        QMessageBox::information(this, tr("No Chunk Selected"),
+            tr("Select a chunk to delete."));
+        return;
+    }
+
+    auto& roots = chunkData->getChunksMutable();
+    ChunkLocation location;
+    if (!FindChunkLocation(roots, selectedPtr, location) || !location.siblings) {
+        QMessageBox::warning(this, tr("Error"), tr("Failed to locate the selected chunk."));
+        return;
+    }
+
+    auto& siblings = *location.siblings;
+    if (location.index >= siblings.size() || !siblings[location.index]) {
+        QMessageBox::warning(this, tr("Error"), tr("Invalid selected chunk index."));
+        return;
+    }
+
+    const auto& chunk = siblings[location.index];
+    const QString chunkLabel = QStringLiteral("0x%1 (%2)")
+        .arg(chunk->id, 0, 16)
+        .arg(QString::fromStdString(LabelForChunk(chunk->id, chunk.get())));
+
+    const auto choice = QMessageBox::question(
+        this,
+        tr("Delete Chunk"),
+        tr("Delete %1 and all of its child chunks?").arg(chunkLabel),
+        QMessageBox::Yes | QMessageBox::No,
+        QMessageBox::No);
+    if (choice != QMessageBox::Yes) return;
+
+    void* nextSelection = nullptr;
+    if (location.index + 1 < siblings.size()) {
+        nextSelection = siblings[location.index + 1].get();
+    }
+    else if (location.index > 0) {
+        nextSelection = siblings[location.index - 1].get();
+    }
+    else if (location.parent) {
+        nextSelection = location.parent;
+    }
+
+    siblings.erase(siblings.begin() + static_cast<std::ptrdiff_t>(location.index));
+
+    setDirty(true);
+    populateTree();
+    if (nextSelection) {
+        selectChunkInTree(nextSelection);
+    }
+    else {
+        clearDetails();
+    }
+}
+
+void MainWindow::moveChunkUp() {
+    if (!chunkData) return;
+
+    void* selectedPtr = SelectedChunkPtr(treeWidget);
+    if (!selectedPtr) {
+        QMessageBox::information(this, tr("No Chunk Selected"),
+            tr("Select a chunk to move."));
+        return;
+    }
+
+    auto& roots = chunkData->getChunksMutable();
+    ChunkLocation location;
+    if (!FindChunkLocation(roots, selectedPtr, location) || !location.siblings) {
+        QMessageBox::warning(this, tr("Error"), tr("Failed to locate the selected chunk."));
+        return;
+    }
+
+    if (location.index == 0) {
+        return;
+    }
+
+    auto& siblings = *location.siblings;
+    std::swap(siblings[location.index], siblings[location.index - 1]);
+
+    setDirty(true);
+    populateTree();
+    selectChunkInTree(selectedPtr);
+}
+
+void MainWindow::moveChunkDown() {
+    if (!chunkData) return;
+
+    void* selectedPtr = SelectedChunkPtr(treeWidget);
+    if (!selectedPtr) {
+        QMessageBox::information(this, tr("No Chunk Selected"),
+            tr("Select a chunk to move."));
+        return;
+    }
+
+    auto& roots = chunkData->getChunksMutable();
+    ChunkLocation location;
+    if (!FindChunkLocation(roots, selectedPtr, location) || !location.siblings) {
+        QMessageBox::warning(this, tr("Error"), tr("Failed to locate the selected chunk."));
+        return;
+    }
+
+    auto& siblings = *location.siblings;
+    if (location.index + 1 >= siblings.size()) {
+        return;
+    }
+
+    std::swap(siblings[location.index], siblings[location.index + 1]);
+
+    setDirty(true);
+    populateTree();
+    selectChunkInTree(selectedPtr);
+}
+
+void MainWindow::moveHierarchyBoneToEnd() {
+    if (!chunkData || chunkData->getChunks().empty()) {
+        QMessageBox::information(this, tr("No File Loaded"),
+            tr("Load a W3D file first."));
+        return;
+    }
+
+    void* selectedPtr = SelectedChunkPtr(treeWidget);
+    if (!selectedPtr) {
+        QMessageBox::information(this, tr("No Chunk Selected"),
+            tr("Select any chunk inside a hierarchy (0x0100) and try again."));
+        return;
+    }
+
+    auto current = FindChunkByPtr(chunkData->getChunks(), selectedPtr);
+    if (!current) {
+        QMessageBox::warning(this, tr("Error"), tr("Failed to locate the selected chunk."));
+        return;
+    }
+
+    std::shared_ptr<ChunkItem> hierarchyChunk = current;
+    while (hierarchyChunk && hierarchyChunk->id != 0x0100) {
+        if (!hierarchyChunk->parent) {
+            hierarchyChunk.reset();
+            break;
+        }
+        hierarchyChunk = FindChunkByPtr(chunkData->getChunks(), hierarchyChunk->parent);
+    }
+
+    if (!hierarchyChunk) {
+        QMessageBox::information(this, tr("No Hierarchy Context"),
+            tr("The selected chunk is not inside a hierarchy block (0x0100)."));
+        return;
+    }
+
+    std::shared_ptr<ChunkItem> pivotChunk;
+    std::shared_ptr<ChunkItem> pivotFixupChunk;
+    for (const auto& child : hierarchyChunk->children) {
+        if (!child) continue;
+        if (child->id == 0x0102 && !pivotChunk) {
+            pivotChunk = child;
+        }
+        else if (child->id == 0x0103 && !pivotFixupChunk) {
+            pivotFixupChunk = child;
+        }
+    }
+
+    if (!pivotChunk) {
+        QMessageBox::warning(this, tr("Missing Pivots"),
+            tr("This hierarchy does not contain a pivots chunk (0x0102)."));
+        return;
+    }
+
+    auto parsedPivots = ParseChunkArray<W3dPivotStruct>(pivotChunk);
+    if (auto err = std::get_if<std::string>(&parsedPivots)) {
+        QMessageBox::warning(this, tr("Error"),
+            tr("Failed to parse pivots chunk: %1").arg(QString::fromStdString(*err)));
+        return;
+    }
+
+    auto pivots = std::get<std::vector<W3dPivotStruct>>(parsedPivots);
+    if (pivots.empty()) {
+        QMessageBox::information(this, tr("No Pivots"),
+            tr("This hierarchy has no pivots to reorder."));
+        return;
+    }
+
+    std::optional<std::vector<W3dPivotFixupStruct>> pivotFixups;
+    if (pivotFixupChunk) {
+        auto parsedFixups = ParseChunkArray<W3dPivotFixupStruct>(pivotFixupChunk);
+        if (auto err = std::get_if<std::string>(&parsedFixups)) {
+            QMessageBox::warning(this, tr("Error"),
+                tr("Failed to parse pivot fixups chunk: %1").arg(QString::fromStdString(*err)));
+            return;
+        }
+        pivotFixups = std::get<std::vector<W3dPivotFixupStruct>>(parsedFixups);
+        if (pivotFixups->size() != pivots.size()) {
+            QMessageBox::warning(this, tr("Pivot Size Mismatch"),
+                tr("Pivot count (%1) and pivot-fixup count (%2) do not match.")
+                .arg(pivots.size())
+                .arg(pivotFixups->size()));
+            return;
+        }
+    }
+
+    bool accepted = false;
+    const int pivotIndex = QInputDialog::getInt(
+        this,
+        tr("Move Bone To End"),
+        tr("Pivot index to move"),
+        0,
+        0,
+        static_cast<int>(pivots.size()) - 1,
+        1,
+        &accepted);
+    if (!accepted) return;
+
+    QString error;
+    if (!MoveBoneToEndInPivots(
+        pivots,
+        pivotFixups ? &*pivotFixups : nullptr,
+        pivotIndex,
+        &error)) {
+        QMessageBox::warning(this, tr("Failed"),
+            error.isEmpty() ? tr("Failed to reorder pivots.") : error);
+        return;
+    }
+
+    const auto* pivotBytes = reinterpret_cast<const uint8_t*>(pivots.data());
+    const std::size_t pivotByteCount = pivots.size() * sizeof(W3dPivotStruct);
+    pivotChunk->data.assign(pivotBytes, pivotBytes + pivotByteCount);
+    pivotChunk->length = static_cast<uint32_t>(pivotChunk->data.size());
+
+    if (pivotFixups && pivotFixupChunk) {
+        const auto* fixupBytes = reinterpret_cast<const uint8_t*>(pivotFixups->data());
+        const std::size_t fixupByteCount = pivotFixups->size() * sizeof(W3dPivotFixupStruct);
+        pivotFixupChunk->data.assign(fixupBytes, fixupBytes + fixupByteCount);
+        pivotFixupChunk->length = static_cast<uint32_t>(pivotFixupChunk->data.size());
+    }
+
+    onChunkEdited();
+    QMessageBox::information(this, tr("Complete"),
+        tr("Moved pivot %1 (and descendants) to the end of the hierarchy order.")
+        .arg(pivotIndex));
 }
 
 void MainWindow::ClearChunkTree() {

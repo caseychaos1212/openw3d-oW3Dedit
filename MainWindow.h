@@ -52,6 +52,14 @@ private slots:
     void OpenRecentFile();  // will be connected to recent file actions
     void on_actionExportChunkList_triggered();
     void showHierarchyBrowser();
+    void addTopLevelChunk();
+    void insertChunkBefore();
+    void insertChunkAfter();
+    void addChildChunk();
+    void deleteSelectedChunk();
+    void moveChunkUp();
+    void moveChunkDown();
+    void moveHierarchyBoneToEnd();
     void selectChunkInTree(void* chunkPtr);
 
 protected:
