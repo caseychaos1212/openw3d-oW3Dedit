@@ -12,6 +12,8 @@
 #include <cstring>
 #include <algorithm>
 
+using ordered_json = QJsonObject;
+
 namespace {
 
     // helper function: convert array of structs to QJsonArray
@@ -45,7 +47,7 @@ namespace {
 
     // Serializer for chunk 0x0001 (W3dMeshHeader1)
     struct MeshHeader1Serializer : ChunkSerializer {
-        QJsonObject toJson(const ChunkItem& item) const override {
+        ordered_json toJson(const ChunkItem& item) const override {
             QJsonObject dataObj;
             if (item.data.size() >= sizeof(W3dMeshHeader1)) {
                 const auto* h = reinterpret_cast<const W3dMeshHeader1*>(item.data.data());
@@ -91,7 +93,7 @@ namespace {
             return dataObj;
         }
 
-        void fromJson(const QJsonObject& dataObj, ChunkItem& item) const override {
+        void fromJson(const ordered_json& dataObj, ChunkItem& item) const override {
             W3dMeshHeader1 h{};
             QString verStr = dataObj.value("VERSION").toString();
             auto parts = verStr.split('.');
@@ -151,7 +153,7 @@ namespace {
 
     // Serializer for chunk 0x0002 (VERTICES)
     struct VerticesSerializer : ChunkSerializer {
-        QJsonObject toJson(const ChunkItem& item) const override {
+        ordered_json toJson(const ChunkItem& item) const override {
             QJsonObject obj;
             obj["VERTICES"] = structsToJsonArray<W3dVectorStruct>(
                 item.data,
@@ -160,7 +162,7 @@ namespace {
             return obj;
         }
 
-        void fromJson(const QJsonObject& dataObj, ChunkItem& item) const override {
+        void fromJson(const ordered_json& dataObj, ChunkItem& item) const override {
             QJsonArray arr = dataObj.value("VERTICES").toArray();
             item.data = jsonArrayToStructs<W3dVectorStruct>(arr, [](const QJsonValue& val) {
                 W3dVectorStruct v{};
@@ -174,7 +176,7 @@ namespace {
 
     // Serializer for chunk 0x0003 (VERTEX_NORMALS)
     struct VertexNormalsSerializer : ChunkSerializer {
-        QJsonObject toJson(const ChunkItem& item) const override {
+        ordered_json toJson(const ChunkItem& item) const override {
             QJsonObject obj;
             obj["VERTEX_NORMALS"] = structsToJsonArray<W3dVectorStruct>(
                 item.data,
@@ -183,7 +185,7 @@ namespace {
             return obj;
         }
 
-        void fromJson(const QJsonObject& dataObj, ChunkItem& item) const override {
+        void fromJson(const ordered_json& dataObj, ChunkItem& item) const override {
             QJsonArray arr = dataObj.value("VERTEX_NORMALS").toArray();
             item.data = jsonArrayToStructs<W3dVectorStruct>(arr, [](const QJsonValue& val) {
                 W3dVectorStruct v{};
@@ -197,7 +199,7 @@ namespace {
 
     // Serializer for chunk 0x0004 (SURRENDER_NORMALS)
     struct SurrenderNormalsSerializer : ChunkSerializer {
-        QJsonObject toJson(const ChunkItem& item) const override {
+        ordered_json toJson(const ChunkItem& item) const override {
             QJsonObject obj;
             obj["SURRENDER_NORMALS"] = structsToJsonArray<W3dVectorStruct>(
                 item.data,
@@ -206,7 +208,7 @@ namespace {
             return obj;
         }
 
-        void fromJson(const QJsonObject& dataObj, ChunkItem& item) const override {
+        void fromJson(const ordered_json& dataObj, ChunkItem& item) const override {
             QJsonArray arr = dataObj.value("SURRENDER_NORMALS").toArray();
             item.data = jsonArrayToStructs<W3dVectorStruct>(arr, [](const QJsonValue& val) {
                 W3dVectorStruct v{};
@@ -220,7 +222,7 @@ namespace {
 
     // Serializer for chunk 0x0005 (TEXCOORDS)
     struct TexCoordsSerializer : ChunkSerializer {
-        QJsonObject toJson(const ChunkItem& item) const override {
+        ordered_json toJson(const ChunkItem& item) const override {
             QJsonObject obj;
             obj["TEXCOORDS"] = structsToJsonArray<W3dTexCoordStruct>(
                 item.data,
@@ -229,7 +231,7 @@ namespace {
             return obj;
         }
 
-        void fromJson(const QJsonObject& dataObj, ChunkItem& item) const override {
+        void fromJson(const ordered_json& dataObj, ChunkItem& item) const override {
             QJsonArray arr = dataObj.value("TEXCOORDS").toArray();
             item.data = jsonArrayToStructs<W3dTexCoordStruct>(arr, [](const QJsonValue& val) {
                 W3dTexCoordStruct t{};
@@ -243,7 +245,7 @@ namespace {
 
     // Serializer for chunk 0x0006 (MATERIALS)
     struct MaterialsSerializer : ChunkSerializer {
-        QJsonObject toJson(const ChunkItem& item) const override {
+        ordered_json toJson(const ChunkItem& item) const override {
             QJsonObject obj;
             obj["MATERIALS"] = structsToJsonArray<W3dMaterial1Struct>(
                 item.data,
@@ -260,7 +262,7 @@ namespace {
             return obj;
         }
 
-        void fromJson(const QJsonObject& dataObj, ChunkItem& item) const override {
+        void fromJson(const ordered_json& dataObj, ChunkItem& item) const override {
             QJsonArray arr = dataObj.value("MATERIALS").toArray();
             item.data = jsonArrayToStructs<W3dMaterial1Struct>(arr, [](const QJsonValue& val) {
                 W3dMaterial1Struct m{};
@@ -287,7 +289,7 @@ namespace {
 
     // Serializer for chunk 0x0009 (O_W3D_CHUNK_SURRENDER_TRIANGLES)
     struct SurrenderTrianglesSerializer : ChunkSerializer {
-        QJsonObject toJson(const ChunkItem& item) const override {
+        ordered_json toJson(const ChunkItem& item) const override {
             QJsonObject obj;
             obj["SURRENDER_TRIANGLES"] = structsToJsonArray<W3dSurrenderTriStruct>(
                 item.data,
@@ -310,7 +312,7 @@ namespace {
             return obj;
         }
 
-        void fromJson(const QJsonObject& dataObj, ChunkItem& item) const override {
+        void fromJson(const ordered_json& dataObj, ChunkItem& item) const override {
             QJsonArray arr = dataObj.value("SURRENDER_TRIANGLES").toArray();
             item.data = jsonArrayToStructs<W3dSurrenderTriStruct>(arr, [](const QJsonValue& val) {
                 W3dSurrenderTriStruct t{};
@@ -339,25 +341,26 @@ namespace {
 
     // Serializer for chunk 0x000C (W3D_CHUNK_MESH_USER_TEXT)
     struct MeshUserTextSerializer : ChunkSerializer {
-        QJsonObject toJson(const ChunkItem& item) const override {
+        ordered_json toJson(const ChunkItem& item) const override {
             QJsonObject obj;
             QString text = QString::fromUtf8(reinterpret_cast<const char*>(item.data.data()), int(item.data.size()));
             obj["TEXT"] = text;
             return obj;
         }
 
-        void fromJson(const QJsonObject& dataObj, ChunkItem& item) const override {
+        void fromJson(const ordered_json& dataObj, ChunkItem& item) const override {
             QByteArray text = dataObj.value("TEXT").toString().toUtf8();
-            item.length = uint32_t(text.size() + 1);
+            item.length = uint32_t(text.size());
             item.data.resize(item.length);
-            std::memcpy(item.data.data(), text.constData(), text.size());
-            item.data[text.size()] = 0;
+            if (!text.isEmpty()) {
+                std::memcpy(item.data.data(), text.constData(), text.size());
+            }
         }
     };
 
     // Serializer for chunk 0x000D (W3D_CHUNK_VERTEX_COLORS)
     struct VertexColorsSerializer : ChunkSerializer {
-        QJsonObject toJson(const ChunkItem& item) const override {
+        ordered_json toJson(const ChunkItem& item) const override {
             QJsonObject obj;
             obj["VERTEX_COLORS"] = structsToJsonArray<W3dRGBStruct>(
                 item.data,
@@ -366,7 +369,7 @@ namespace {
             return obj;
         }
 
-        void fromJson(const QJsonObject& dataObj, ChunkItem& item) const override {
+        void fromJson(const ordered_json& dataObj, ChunkItem& item) const override {
             QJsonArray arr = dataObj.value("VERTEX_COLORS").toArray();
             item.data = jsonArrayToStructs<W3dRGBStruct>(arr, [](const QJsonValue& val) {
                 W3dRGBStruct c{};
@@ -380,7 +383,7 @@ namespace {
 
     // Serializer for chunk 0x000E (W3D_CHUNK_VERTEX_INFLUENCES)
     struct VertexInfluencesSerializer : ChunkSerializer {
-        QJsonObject toJson(const ChunkItem& item) const override {
+        ordered_json toJson(const ChunkItem& item) const override {
             QJsonObject obj;
             obj["VERTEX_INFLUENCES"] = structsToJsonArray<W3dVertInfStruct>(
                 item.data,
@@ -396,7 +399,7 @@ namespace {
             return obj;
         }
 
-        void fromJson(const QJsonObject& dataObj, ChunkItem& item) const override {
+        void fromJson(const ordered_json& dataObj, ChunkItem& item) const override {
             QJsonArray arr = dataObj.value("VERTEX_INFLUENCES").toArray();
             item.data = jsonArrayToStructs<W3dVertInfStruct>(arr, [](const QJsonValue& val) {
                 W3dVertInfStruct v{};
@@ -412,7 +415,7 @@ namespace {
     };
     // Serializer for chunk 0x0010 (W3D_CHUNK_DAMAGE_HEADER)
     struct DamageHeaderSerializer : ChunkSerializer {
-        QJsonObject toJson(const ChunkItem& item) const override {
+        ordered_json toJson(const ChunkItem& item) const override {
             QJsonObject obj;
             if (item.data.size() >= sizeof(W3dDamageHeaderStruct)) {
                 const auto* h = reinterpret_cast<const W3dDamageHeaderStruct*>(item.data.data());
@@ -430,7 +433,7 @@ namespace {
             return obj;
         }
 
-        void fromJson(const QJsonObject& dataObj, ChunkItem& item) const override {
+        void fromJson(const ordered_json& dataObj, ChunkItem& item) const override {
             W3dDamageHeaderStruct h{}; // zero-init
 
             h.NumDamageMaterials = dataObj.value("NUMDAMAGEMATERIALS").toInt();
@@ -450,7 +453,6 @@ namespace {
         }
     };
 
-    /*
     // Serializer for chunk 0x0011 (W3D_CHUNK_DAMAGE_VERTICES)
     struct DamageVerticesSerializer : ChunkSerializer {
         ordered_json toJson(const ChunkItem& item) const override {
@@ -3877,7 +3879,6 @@ namespace {
     static const VertexColorsSerializer vertexColorsSerializerInstance;
     static const VertexInfluencesSerializer vertexInfluencesSerializerInstance;
     static const DamageHeaderSerializer damageHeaderSerializerInstance;
-  /*
     static const DamageVerticesSerializer damageVerticesSerializerInstance;
     static const DamageColorsSerializer damageColorsSerializerInstance;
     static const Materials2Serializer materials2SerializerInstance;
@@ -3980,20 +3981,6 @@ namespace {
     static const DazzleTypenameSerializer dazzleTypenameSerializerInstance;
     static const SoundRObjHeaderSerializer soundRObjHeaderSerializerInstance;
     static const SoundRObjDefinitionSerializer soundRObjDefinitionSerializerInstance;
-    */
-
-    // Active serializer instances used by the current registry.
-    static const MeshHeader1Serializer meshHeader1SerializerInstance;
-    static const VerticesSerializer verticesSerializerInstance;
-    static const VertexNormalsSerializer vertexNormalsSerializerInstance;
-    static const SurrenderNormalsSerializer surrenderNormalsSerializerInstance;
-    static const TexCoordsSerializer texCoordsSerializerInstance;
-    static const MaterialsSerializer materialsSerializerInstance;
-    static const SurrenderTrianglesSerializer surrenderTrianglesSerializerInstance;
-    static const MeshUserTextSerializer meshUserTextSerializerInstance;
-    static const VertexColorsSerializer vertexColorsSerializerInstance;
-    static const VertexInfluencesSerializer vertexInfluencesSerializerInstance;
-    static const DamageHeaderSerializer damageHeaderSerializerInstance;
 } // namespace
 
 const std::unordered_map<uint32_t, const ChunkSerializer*>& chunkSerializerRegistry() {
@@ -4009,7 +3996,6 @@ const std::unordered_map<uint32_t, const ChunkSerializer*>& chunkSerializerRegis
         {0x000D, &vertexColorsSerializerInstance},
         {0x000E, &vertexInfluencesSerializerInstance},
         {0x0010, &damageHeaderSerializerInstance},
-        /*
         {0x0011, &damageVerticesSerializerInstance},
         {0x0012, &damageColorsSerializerInstance},
         {0x0014, &materials2SerializerInstance},
@@ -4112,7 +4098,6 @@ const std::unordered_map<uint32_t, const ChunkSerializer*>& chunkSerializerRegis
         {0x0902, &dazzleTypenameSerializerInstance},
         {0x0A01, &soundRObjHeaderSerializerInstance},
         {0x0A02, &soundRObjDefinitionSerializerInstance},
-        */
     };
     return registry;
 }

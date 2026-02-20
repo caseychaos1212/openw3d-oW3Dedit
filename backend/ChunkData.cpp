@@ -333,26 +333,89 @@ void ChunkData::clear() {
     sourceFilename.clear();
 }
 
-nlohmann::ordered_json ChunkData::toJson() const {
+namespace {
+
+const char* SerializationModeToToken(JsonSerializationMode mode) {
+    switch (mode) {
+    case JsonSerializationMode::HexOnly:
+        return "HEX_ONLY";
+    case JsonSerializationMode::StructuredPreferred:
+    default:
+        return "STRUCTURED_PREFERRED";
+    }
+}
+
+bool TryParseSerializationModeToken(
+    const std::string& token,
+    JsonSerializationMode& outMode)
+{
+    if (token == "HEX_ONLY") {
+        outMode = JsonSerializationMode::HexOnly;
+        return true;
+    }
+    if (token == "STRUCTURED_PREFERRED") {
+        outMode = JsonSerializationMode::StructuredPreferred;
+        return true;
+    }
+    return false;
+}
+
+void AppendImportWarning(std::vector<std::string>* warnings, const std::string& message) {
+    if (!warnings) {
+        return;
+    }
+    warnings->push_back(message);
+}
+
+} // namespace
+
+nlohmann::ordered_json ChunkData::toJson(JsonSerializationMode mode) const {
     ordered_json root;
     root["SCHEMA_VERSION"] = 1;
+    root["SERIALIZATION_MODE"] = SerializationModeToToken(mode);
     ordered_json arr = ordered_json::array();
     for (const auto& c : chunks)
-        arr.push_back(ChunkJson::toJson(*c));
+        arr.push_back(ChunkJson::toJson(*c, mode));
     std::string key = sourceFilename.empty() ? "CHUNKS" : sourceFilename;
     root[key] = arr;
     return root;
 }
 
-bool ChunkData::fromJson(const nlohmann::ordered_json& doc) {
+bool ChunkData::fromJson(
+    const nlohmann::ordered_json& doc,
+    std::vector<std::string>* warnings)
+{
     if (!doc.is_object()) return false;
+
+    JsonSerializationMode declaredMode = JsonSerializationMode::StructuredPreferred;
+    auto modeIt = doc.find("SERIALIZATION_MODE");
+    if (modeIt == doc.end()) {
+        AppendImportWarning(
+            warnings,
+            "SERIALIZATION_MODE missing; assuming STRUCTURED_PREFERRED.");
+    }
+    else if (!modeIt->is_string()) {
+        AppendImportWarning(
+            warnings,
+            "SERIALIZATION_MODE is not a string; assuming STRUCTURED_PREFERRED.");
+    }
+    else {
+        const std::string modeToken = modeIt->get<std::string>();
+        if (!TryParseSerializationModeToken(modeToken, declaredMode)) {
+            AppendImportWarning(
+                warnings,
+                "Unknown SERIALIZATION_MODE '" + modeToken + "'; assuming STRUCTURED_PREFERRED.");
+        }
+    }
 
     ordered_json arr = ordered_json::array();
     std::string parsedSourceFilename;
     bool foundChunkArray = false;
 
     for (auto it = doc.begin(); it != doc.end(); ++it) {
-        if (it.key() == "SCHEMA_VERSION") continue;
+        if (it.key() == "SCHEMA_VERSION" || it.key() == "SERIALIZATION_MODE") {
+            continue;
+        }
         if (it.value().is_array()) {
             parsedSourceFilename = it.key();
             arr = it.value();
@@ -364,15 +427,18 @@ bool ChunkData::fromJson(const nlohmann::ordered_json& doc) {
 
     std::vector<std::shared_ptr<ChunkItem>> parsedChunks;
     parsedChunks.reserve(arr.size());
+    std::size_t chunkIndex = 0;
     for (const auto& v : arr) {
         if (!v.is_object()) {
             return false;
         }
-        auto chunk = ChunkJson::fromJson(v);
+        const std::string chunkPath = parsedSourceFilename + "[" + std::to_string(chunkIndex) + "]";
+        auto chunk = ChunkJson::fromJson(v, nullptr, declaredMode, warnings, chunkPath);
         if (!chunk) {
             return false;
         }
         parsedChunks.push_back(std::move(chunk));
+        ++chunkIndex;
     }
 
     chunks = std::move(parsedChunks);

@@ -9,6 +9,7 @@
 #include "ChunkSerializer.h"
 
 #include <cstdint>
+#include <exception>
 #include <limits>
 #include <string>
 #include <vector>
@@ -84,9 +85,41 @@ bool readBoolField(const ordered_json& obj, const char* key, bool& out) {
     return true;
 }
 
+bool shouldUseSerializerForItem(const ChunkItem& item) {
+    // Chunk IDs are not globally unique across all parent contexts.
+    // Under SPHERE/RING wrappers, child 0x0001 is sphere/ring header data,
+    // not mesh header1; force raw fallback there to keep exact bytes.
+    if (item.parent != nullptr) {
+        const uint32_t parentId = item.parent->id;
+        if ((parentId == 0x0741 || parentId == 0x0742) && item.id == 0x0001) {
+            return false;
+        }
+    }
+    return true;
+}
+
+std::string appendObjectPath(const std::string& base, const char* key) {
+    return base.empty() ? std::string(key) : (base + "." + key);
+}
+
+std::string appendArrayPath(const std::string& base, const char* key, std::size_t index) {
+    return appendObjectPath(base, key) + "[" + std::to_string(index) + "]";
+}
+
+void appendWarning(
+    std::vector<std::string>* warnings,
+    const std::string& path,
+    const std::string& message)
+{
+    if (!warnings) {
+        return;
+    }
+    warnings->push_back(path + ": " + message);
+}
+
 } // namespace
 
-ordered_json ChunkJson::toJson(const ChunkItem& item) {
+ordered_json ChunkJson::toJson(const ChunkItem& item, JsonSerializationMode mode) {
     ordered_json obj;
     obj["CHUNK_NAME"] = LabelForChunk(item.id, const_cast<ChunkItem*>(&item));
     obj["SUBCHUNKS"] = item.hasSubChunks;
@@ -96,30 +129,42 @@ ordered_json ChunkJson::toJson(const ChunkItem& item) {
     if (!item.children.empty()) {
         ordered_json arr = ordered_json::array();
         for (const auto& c : item.children) {
-            arr.push_back(ChunkJson::toJson(*c));
+            arr.push_back(ChunkJson::toJson(*c, mode));
         }
         obj["CHILDREN"] = arr;
 
     }
     else if (!item.data.empty()) {
-        const auto& registry = chunkSerializerRegistry();
-        auto it = registry.find(item.id);
-        if (it != registry.end()) {
-            obj["DATA"] = toOrdered(it->second->toJson(item));
+        if (mode == JsonSerializationMode::HexOnly) {
+            obj["RAW_DATA_HEX"] = encodeHex(item.data);
         }
         else {
-            obj["RAW_DATA_HEX"] = encodeHex(item.data);
+            const auto& registry = chunkSerializerRegistry();
+            auto it = registry.find(item.id);
+            if (it != registry.end() && shouldUseSerializerForItem(item)) {
+                obj["DATA"] = toOrdered(it->second->toJson(item));
+            }
+            else {
+                obj["RAW_DATA_HEX"] = encodeHex(item.data);
+            }
         }
     }
     return obj;
 }
 
-std::shared_ptr<ChunkItem> ChunkJson::fromJson(const ordered_json& obj, ChunkItem* parent) {
+std::shared_ptr<ChunkItem> ChunkJson::fromJson(
+    const ordered_json& obj,
+    ChunkItem* parent,
+    JsonSerializationMode declaredMode,
+    std::vector<std::string>* warnings,
+    const std::string& jsonPath)
+{
     try {
         if (!obj.is_object()) {
             return nullptr;
         }
 
+        const std::string currentPath = jsonPath.empty() ? std::string("$") : jsonPath;
         auto item = std::make_shared<ChunkItem>();
         if (!readUInt32Field(obj, "CHUNK_ID", item->id)) {
             return nullptr;
@@ -142,40 +187,138 @@ std::shared_ptr<ChunkItem> ChunkJson::fromJson(const ordered_json& obj, ChunkIte
             if (!obj.at("CHILDREN").is_array()) {
                 return nullptr;
             }
+            std::size_t childIndex = 0;
             for (const auto& v : obj.at("CHILDREN")) {
                 if (!v.is_object()) {
                     return nullptr;
                 }
-                auto child = ChunkJson::fromJson(v, item.get());
+                auto child = ChunkJson::fromJson(
+                    v,
+                    item.get(),
+                    declaredMode,
+                    warnings,
+                    appendArrayPath(currentPath, "CHILDREN", childIndex));
                 if (!child) {
                     return nullptr;
                 }
                 item->children.push_back(child);
+                ++childIndex;
             }
             return item;
         }
 
         const auto& registry = chunkSerializerRegistry();
         auto it = registry.find(item->id);
-        bool restoredData = false;
+        const bool canUseSerializer = shouldUseSerializerForItem(*item);
+        const bool hasData = obj.contains("DATA");
+        const bool hasRawHex = obj.contains("RAW_DATA_HEX");
 
-        if (obj.contains("DATA")) {
+        auto tryRestoreFromSerializer = [&]() -> bool {
+            if (!hasData) {
+                return false;
+            }
             if (it == registry.end()) {
-                return nullptr;
+                appendWarning(
+                    warnings,
+                    appendObjectPath(currentPath, "DATA"),
+                    "No serializer registered for this chunk ID.");
+                return false;
             }
-            it->second->fromJson(toQJsonObject(obj.at("DATA")), *item);
-            restoredData = true;
-        }
-
-        if (!restoredData && obj.contains("RAW_DATA_HEX")) {
-            if (!obj.at("RAW_DATA_HEX").is_string()) {
-                return nullptr;
+            if (!canUseSerializer) {
+                appendWarning(
+                    warnings,
+                    appendObjectPath(currentPath, "DATA"),
+                    "Serializer is disabled for this chunk in the current parent context.");
+                return false;
             }
-            if (!decodeHex(obj.at("RAW_DATA_HEX").get<std::string>(), item->data)) {
-                return nullptr;
+            if (!obj.at("DATA").is_object()) {
+                appendWarning(
+                    warnings,
+                    appendObjectPath(currentPath, "DATA"),
+                    "DATA exists but is not an object.");
+                return false;
+            }
+            try {
+                it->second->fromJson(toQJsonObject(obj.at("DATA")), *item);
+            }
+            catch (const std::exception& e) {
+                appendWarning(
+                    warnings,
+                    appendObjectPath(currentPath, "DATA"),
+                    std::string("Serializer import failed: ") + e.what());
+                return false;
+            }
+            catch (...) {
+                appendWarning(
+                    warnings,
+                    appendObjectPath(currentPath, "DATA"),
+                    "Serializer import failed with unknown exception.");
+                return false;
             }
             item->length = static_cast<uint32_t>(item->data.size());
-            restoredData = true;
+            return true;
+        };
+
+        auto tryRestoreFromRawHex = [&]() -> bool {
+            if (!hasRawHex) {
+                return false;
+            }
+            if (!obj.at("RAW_DATA_HEX").is_string()) {
+                appendWarning(
+                    warnings,
+                    appendObjectPath(currentPath, "RAW_DATA_HEX"),
+                    "RAW_DATA_HEX exists but is not a string.");
+                return false;
+            }
+            std::vector<uint8_t> decoded;
+            if (!decodeHex(obj.at("RAW_DATA_HEX").get<std::string>(), decoded)) {
+                appendWarning(
+                    warnings,
+                    appendObjectPath(currentPath, "RAW_DATA_HEX"),
+                    "Failed to decode RAW_DATA_HEX.");
+                return false;
+            }
+            item->data = std::move(decoded);
+            item->length = static_cast<uint32_t>(item->data.size());
+            return true;
+        };
+
+        bool restoredData = false;
+        if (declaredMode == JsonSerializationMode::HexOnly) {
+            restoredData = tryRestoreFromRawHex();
+            if (!restoredData && hasData) {
+                if (hasRawHex) {
+                    appendWarning(
+                        warnings,
+                        currentPath,
+                        "RAW_DATA_HEX could not be imported; falling back to DATA.");
+                }
+                else {
+                    appendWarning(
+                        warnings,
+                        currentPath,
+                        "RAW_DATA_HEX missing for HEX_ONLY payload; using DATA.");
+                }
+                restoredData = tryRestoreFromSerializer();
+            }
+        }
+        else {
+            restoredData = tryRestoreFromSerializer();
+            if (!restoredData && hasRawHex) {
+                if (hasData) {
+                    appendWarning(
+                        warnings,
+                        currentPath,
+                        "DATA could not be imported; falling back to RAW_DATA_HEX.");
+                }
+                else {
+                    appendWarning(
+                        warnings,
+                        currentPath,
+                        "DATA missing for STRUCTURED_PREFERRED payload; using RAW_DATA_HEX.");
+                }
+                restoredData = tryRestoreFromRawHex();
+            }
         }
 
         if (!restoredData && item->length > 0) {

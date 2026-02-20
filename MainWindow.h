@@ -52,6 +52,7 @@ private slots:
     void OpenRecentFile();  // will be connected to recent file actions
     void on_actionExportChunkList_triggered();
     void on_actionExportJsonBatch_triggered();
+    void on_actionValidateRoundTripBatch_triggered();
     void exportJson();
     void importJson();
     void showHierarchyBrowser();
@@ -68,7 +69,22 @@ private slots:
 protected:
     void closeEvent(QCloseEvent* event) override;
 private:
+    enum class ValidatorRunMode {
+        Both,
+        StructuredPreferred,
+        HexOnly
+    };
+
     void populateTree();
+    JsonSerializationMode loadDefaultSerializationModeSetting() const;
+    void saveDefaultSerializationModeSetting(JsonSerializationMode mode) const;
+    bool promptSerializationMode(
+        const QString& title,
+        const QString& prompt,
+        JsonSerializationMode& outMode);
+    ValidatorRunMode loadValidatorRunModeSetting() const;
+    void saveValidatorRunModeSetting(ValidatorRunMode mode) const;
+    bool promptValidatorRunMode(ValidatorRunMode& outMode);
 
     QTreeWidget* treeWidget = nullptr;
     QTableWidget* tableWidget = nullptr;

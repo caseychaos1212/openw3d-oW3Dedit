@@ -37,7 +37,13 @@
 #include <QTextStream>
 #include <QFile>
 #include <QDir>
+#include <QDirIterator>
 #include <QFileInfo>
+#include <QDateTime>
+#include <QProgressDialog>
+#include <QElapsedTimer>
+#include <QCoreApplication>
+#include <QTemporaryFile>
 #include <QCloseEvent>
 #include "backend/W3DMesh.h"
 #include "backend/W3DStructs.h"
@@ -50,6 +56,8 @@
 #include <vector>
 #include <cstring>
 #include <cstddef>
+#include <cstdint>
+#include <limits>
 #include <exception>
 #include <variant>
 #include <type_traits>
@@ -2214,6 +2222,10 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     batchMenu->addAction(exportJsonBatchAct);
     connect(exportJsonBatchAct, &QAction::triggered,
         this, &MainWindow::on_actionExportJsonBatch_triggered);
+    auto validateRoundTripBatchAct = new QAction(tr("Round-Trip Validate Batch..."), this);
+    batchMenu->addAction(validateRoundTripBatchAct);
+    connect(validateRoundTripBatchAct, &QAction::triggered,
+        this, &MainWindow::on_actionValidateRoundTripBatch_triggered);
 
     {
         QSettings settings;
@@ -3705,6 +3717,415 @@ static void recursePrint(const std::shared_ptr<ChunkItem>& c,
     }
 }
 
+namespace {
+
+constexpr const char* kJsonDefaultModeSettingKey = "Json/DefaultSerializationMode";
+constexpr const char* kJsonValidatorRunModeSettingKey = "Json/ValidatorRunMode";
+
+QString SerializationModeToken(JsonSerializationMode mode) {
+    return mode == JsonSerializationMode::HexOnly
+        ? QStringLiteral("HEX_ONLY")
+        : QStringLiteral("STRUCTURED_PREFERRED");
+}
+
+QString SerializationModeUiLabel(JsonSerializationMode mode) {
+    if (mode == JsonSerializationMode::HexOnly) {
+        return QObject::tr("Hex Only (RAW_DATA_HEX for all leaf chunks)");
+    }
+    return QObject::tr("Structured Preferred (DATA when supported, RAW_DATA_HEX fallback)");
+}
+
+bool TryParseSerializationModeToken(const QString& token, JsonSerializationMode& outMode) {
+    const QString normalized = token.trimmed().toUpper();
+    if (normalized == QStringLiteral("HEX_ONLY")) {
+        outMode = JsonSerializationMode::HexOnly;
+        return true;
+    }
+    if (normalized == QStringLiteral("STRUCTURED_PREFERRED")) {
+        outMode = JsonSerializationMode::StructuredPreferred;
+        return true;
+    }
+    return false;
+}
+
+struct RoundTripFallbackMetrics {
+    int nodeCount = 0;
+    std::map<uint32_t, int> chunkCounts;
+};
+
+struct RoundTripReportRow {
+    QString status = QStringLiteral("FAIL");
+    QString mode;
+    QString stage = QStringLiteral("LOAD_W3D");
+    QString sourcePath;
+    QString relativePath;
+    qint64 originalSize = -1;
+    qint64 rebuiltSize = -1;
+    qint64 firstDiffOffset = -1;
+    int originalByte = -1;
+    int rebuiltByte = -1;
+    int fallbackNodeCount = 0;
+    QString fallbackChunkIds;
+    QString errorMessage;
+    QString jsonArtifactPath;
+    QString rebuiltArtifactPath;
+    qint64 durationMs = 0;
+    int warningCount = 0;
+    QString warnings;
+};
+
+static QString CsvEscape(const QString& value) {
+    QString out = value;
+    out.replace('"', "\"\"");
+    const bool needsQuotes = out.contains(',') || out.contains('"') || out.contains('\n') || out.contains('\r');
+    if (needsQuotes) {
+        out.prepend('"');
+        out.append('"');
+    }
+    return out;
+}
+
+static QString NumberOrBlank(qint64 value) {
+    return value < 0 ? QString() : QString::number(value);
+}
+
+static QString ByteOrBlank(int value) {
+    if (value < 0 || value > 0xFF) {
+        return QString();
+    }
+    return QStringLiteral("0x%1").arg(value, 2, 16, QLatin1Char('0')).toUpper();
+}
+
+static void WriteRoundTripCsvHeader(QTextStream& out) {
+    out
+        << "status,mode,stage,source_path,relative_path,original_size,rebuilt_size,"
+        << "first_diff_offset,original_byte_hex,rebuilt_byte_hex,fallback_node_count,"
+        << "fallback_chunk_ids,error_message,json_artifact_path,rebuilt_artifact_path,duration_ms,"
+        << "warning_count,warnings\n";
+}
+
+static void WriteRoundTripCsvRow(QTextStream& out, const RoundTripReportRow& row) {
+    const QStringList columns = {
+        row.status,
+        row.mode,
+        row.stage,
+        row.sourcePath,
+        row.relativePath,
+        NumberOrBlank(row.originalSize),
+        NumberOrBlank(row.rebuiltSize),
+        NumberOrBlank(row.firstDiffOffset),
+        ByteOrBlank(row.originalByte),
+        ByteOrBlank(row.rebuiltByte),
+        QString::number(row.fallbackNodeCount),
+        row.fallbackChunkIds,
+        row.errorMessage,
+        row.jsonArtifactPath,
+        row.rebuiltArtifactPath,
+        NumberOrBlank(row.durationMs),
+        QString::number(row.warningCount),
+        row.warnings
+    };
+
+    for (int i = 0; i < columns.size(); ++i) {
+        if (i > 0) out << ',';
+        out << CsvEscape(columns[i]);
+    }
+    out << '\n';
+}
+
+static bool EnsureParentDirectory(const QString& filePath) {
+    QFileInfo info(filePath);
+    return QDir().mkpath(info.path());
+}
+
+static bool ReadAllBytes(const QString& path, QByteArray& outBytes, QString& errorMessage) {
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly)) {
+        errorMessage = QStringLiteral("Failed to open file for reading: %1").arg(path);
+        return false;
+    }
+    outBytes = file.readAll();
+    if (file.error() != QFileDevice::NoError) {
+        errorMessage = QStringLiteral("Failed to read file bytes: %1").arg(path);
+        return false;
+    }
+    return true;
+}
+
+static bool WriteAllBytes(const QString& path, const QByteArray& bytes, QString& errorMessage) {
+    if (!EnsureParentDirectory(path)) {
+        errorMessage = QStringLiteral("Failed to create output directory for: %1").arg(path);
+        return false;
+    }
+    QFile file(path);
+    if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+        errorMessage = QStringLiteral("Failed to open file for writing: %1").arg(path);
+        return false;
+    }
+    const qint64 written = file.write(bytes);
+    if (written != bytes.size()) {
+        errorMessage = QStringLiteral("Failed to write full file: %1").arg(path);
+        return false;
+    }
+    return true;
+}
+
+static bool TryReadChunkId(const ordered_json& value, uint32_t& outId) {
+    if (value.is_number_unsigned()) {
+        const uint64_t raw = value.get<uint64_t>();
+        if (raw <= std::numeric_limits<uint32_t>::max()) {
+            outId = static_cast<uint32_t>(raw);
+            return true;
+        }
+        return false;
+    }
+    if (value.is_number_integer()) {
+        const int64_t raw = value.get<int64_t>();
+        if (raw >= 0 && static_cast<uint64_t>(raw) <= std::numeric_limits<uint32_t>::max()) {
+            outId = static_cast<uint32_t>(raw);
+            return true;
+        }
+    }
+    return false;
+}
+
+static void CollectFallbackMetrics(const ordered_json& node, RoundTripFallbackMetrics& metrics) {
+    if (node.is_object()) {
+        const auto rawIt = node.find("RAW_DATA_HEX");
+        if (rawIt != node.end()) {
+            ++metrics.nodeCount;
+            const auto idIt = node.find("CHUNK_ID");
+            if (idIt != node.end()) {
+                uint32_t chunkId = 0;
+                if (TryReadChunkId(*idIt, chunkId)) {
+                    ++metrics.chunkCounts[chunkId];
+                }
+            }
+        }
+
+        for (auto it = node.begin(); it != node.end(); ++it) {
+            CollectFallbackMetrics(it.value(), metrics);
+        }
+        return;
+    }
+
+    if (node.is_array()) {
+        for (const auto& child : node) {
+            CollectFallbackMetrics(child, metrics);
+        }
+    }
+}
+
+static QString FormatFallbackChunkCounts(const std::map<uint32_t, int>& chunkCounts) {
+    QStringList entries;
+    for (const auto& [chunkId, count] : chunkCounts) {
+        const QString chunkText = QStringLiteral("0x%1").arg(chunkId, 4, 16, QLatin1Char('0')).toUpper();
+        entries << QStringLiteral("%1:%2").arg(chunkText).arg(count);
+    }
+    return entries.join(';');
+}
+
+static QString SanitizeRelativePath(QString relativePath) {
+    relativePath = QDir::fromNativeSeparators(relativePath);
+    relativePath = QDir::cleanPath(relativePath);
+    while (relativePath.startsWith("../")) {
+        relativePath.remove(0, 3);
+    }
+    if (relativePath == "." || relativePath.isEmpty()) {
+        return QStringLiteral("unnamed.w3d");
+    }
+    return relativePath;
+}
+
+static QString BuildFailureJsonRelativePath(const QString& relativePath) {
+    return relativePath + QStringLiteral(".json");
+}
+
+static QString BuildFailureRebuiltRelativePath(const QString& relativePath) {
+    QFileInfo relInfo(relativePath);
+    const QString dir = (relInfo.path() == ".") ? QString() : relInfo.path();
+    const QString base = relInfo.completeBaseName();
+    const QString suffix = relInfo.completeSuffix();
+    const QString rebuiltName = suffix.isEmpty()
+        ? QStringLiteral("%1.rebuilt").arg(base)
+        : QStringLiteral("%1.rebuilt.%2").arg(base, suffix);
+    return dir.isEmpty() ? rebuiltName : QDir::cleanPath(dir + "/" + rebuiltName);
+}
+
+static bool CompareBytes(
+    const QByteArray& originalBytes,
+    const QByteArray& rebuiltBytes,
+    qint64& outFirstOffset,
+    int& outOriginalByte,
+    int& outRebuiltByte)
+{
+    const qint64 minSize = std::min(originalBytes.size(), rebuiltBytes.size());
+    for (qint64 i = 0; i < minSize; ++i) {
+        const int o = static_cast<unsigned char>(originalBytes.at(i));
+        const int r = static_cast<unsigned char>(rebuiltBytes.at(i));
+        if (o != r) {
+            outFirstOffset = i;
+            outOriginalByte = o;
+            outRebuiltByte = r;
+            return false;
+        }
+    }
+
+    if (originalBytes.size() != rebuiltBytes.size()) {
+        outFirstOffset = minSize;
+        outOriginalByte = (minSize < originalBytes.size())
+            ? static_cast<unsigned char>(originalBytes.at(minSize))
+            : -1;
+        outRebuiltByte = (minSize < rebuiltBytes.size())
+            ? static_cast<unsigned char>(rebuiltBytes.at(minSize))
+            : -1;
+        return false;
+    }
+
+    outFirstOffset = -1;
+    outOriginalByte = -1;
+    outRebuiltByte = -1;
+    return true;
+}
+
+} // namespace
+
+JsonSerializationMode MainWindow::loadDefaultSerializationModeSetting() const {
+    QSettings settings;
+    const QString token = settings.value(
+        kJsonDefaultModeSettingKey,
+        SerializationModeToken(JsonSerializationMode::StructuredPreferred)).toString();
+
+    JsonSerializationMode mode = JsonSerializationMode::StructuredPreferred;
+    if (!TryParseSerializationModeToken(token, mode)) {
+        mode = JsonSerializationMode::StructuredPreferred;
+    }
+    return mode;
+}
+
+void MainWindow::saveDefaultSerializationModeSetting(JsonSerializationMode mode) const {
+    QSettings settings;
+    settings.setValue(kJsonDefaultModeSettingKey, SerializationModeToken(mode));
+}
+
+bool MainWindow::promptSerializationMode(
+    const QString& title,
+    const QString& prompt,
+    JsonSerializationMode& outMode)
+{
+    const JsonSerializationMode defaultMode = loadDefaultSerializationModeSetting();
+    const QStringList options = {
+        SerializationModeUiLabel(JsonSerializationMode::StructuredPreferred),
+        SerializationModeUiLabel(JsonSerializationMode::HexOnly)
+    };
+    const int defaultIndex = (defaultMode == JsonSerializationMode::HexOnly) ? 1 : 0;
+    bool accepted = false;
+    const QString selected = QInputDialog::getItem(
+        this,
+        title,
+        prompt,
+        options,
+        defaultIndex,
+        false,
+        &accepted);
+    if (!accepted) {
+        return false;
+    }
+
+    outMode = (options.indexOf(selected) == 1)
+        ? JsonSerializationMode::HexOnly
+        : JsonSerializationMode::StructuredPreferred;
+    saveDefaultSerializationModeSetting(outMode);
+    return true;
+}
+
+MainWindow::ValidatorRunMode MainWindow::loadValidatorRunModeSetting() const {
+    QSettings settings;
+    const QString token = settings.value(
+        kJsonValidatorRunModeSettingKey,
+        QStringLiteral("BOTH")).toString().trimmed().toUpper();
+
+    if (token == QStringLiteral("HEX_ONLY")) {
+        return ValidatorRunMode::HexOnly;
+    }
+    if (token == QStringLiteral("STRUCTURED_PREFERRED")) {
+        return ValidatorRunMode::StructuredPreferred;
+    }
+    return ValidatorRunMode::Both;
+}
+
+void MainWindow::saveValidatorRunModeSetting(ValidatorRunMode mode) const {
+    QString token = QStringLiteral("BOTH");
+    switch (mode) {
+    case ValidatorRunMode::HexOnly:
+        token = QStringLiteral("HEX_ONLY");
+        break;
+    case ValidatorRunMode::StructuredPreferred:
+        token = QStringLiteral("STRUCTURED_PREFERRED");
+        break;
+    case ValidatorRunMode::Both:
+    default:
+        token = QStringLiteral("BOTH");
+        break;
+    }
+
+    QSettings settings;
+    settings.setValue(kJsonValidatorRunModeSettingKey, token);
+}
+
+bool MainWindow::promptValidatorRunMode(ValidatorRunMode& outMode) {
+    const ValidatorRunMode defaultMode = loadValidatorRunModeSetting();
+    const QStringList options = {
+        tr("Run Both Modes"),
+        tr("Structured Preferred"),
+        tr("Hex Only")
+    };
+
+    int defaultIndex = 0;
+    switch (defaultMode) {
+    case ValidatorRunMode::StructuredPreferred:
+        defaultIndex = 1;
+        break;
+    case ValidatorRunMode::HexOnly:
+        defaultIndex = 2;
+        break;
+    case ValidatorRunMode::Both:
+    default:
+        defaultIndex = 0;
+        break;
+    }
+
+    bool accepted = false;
+    const QString selected = QInputDialog::getItem(
+        this,
+        tr("Round-Trip Validate"),
+        tr("Serialization mode run selection"),
+        options,
+        defaultIndex,
+        false,
+        &accepted);
+    if (!accepted) {
+        return false;
+    }
+
+    const int selectedIndex = options.indexOf(selected);
+    switch (selectedIndex) {
+    case 1:
+        outMode = ValidatorRunMode::StructuredPreferred;
+        break;
+    case 2:
+        outMode = ValidatorRunMode::HexOnly;
+        break;
+    case 0:
+    default:
+        outMode = ValidatorRunMode::Both;
+        break;
+    }
+
+    saveValidatorRunModeSetting(outMode);
+    return true;
+}
+
 void MainWindow::on_actionExportChunkList_triggered()
 {
     // 1) pick source folder
@@ -3794,6 +4215,15 @@ void MainWindow::on_actionExportJsonBatch_triggered()
         return;
     }
 
+    JsonSerializationMode selectedMode = JsonSerializationMode::StructuredPreferred;
+    if (!promptSerializationMode(
+        tr("Export JSON Batch"),
+        tr("Serialization mode"),
+        selectedMode))
+    {
+        return;
+    }
+
     QDir outputDir(outDir);
     int successCount = 0;
     QStringList failures;
@@ -3806,7 +4236,7 @@ void MainWindow::on_actionExportJsonBatch_triggered()
             continue;
         }
 
-        const ordered_json doc = cd.toJson();
+        const ordered_json doc = cd.toJson(selectedMode);
         QString baseName = QFileInfo(fileName).completeBaseName();
         QString outputPath = outputDir.absoluteFilePath(baseName + ".json");
         QFile outFile(outputPath);
@@ -3828,7 +4258,10 @@ void MainWindow::on_actionExportJsonBatch_triggered()
 
     lastDirectory = srcDir;
 
-    QString summary = tr("Exported %1 file(s) to %2.").arg(successCount).arg(outDir);
+    QString summary = tr("Exported %1 file(s) to %2.\nMode: %3")
+        .arg(successCount)
+        .arg(outDir)
+        .arg(SerializationModeToken(selectedMode));
     if (failures.isEmpty()) {
         QMessageBox::information(this, tr("Export JSON"), summary);
     }
@@ -3838,11 +4271,325 @@ void MainWindow::on_actionExportJsonBatch_triggered()
     }
 }
 
+void MainWindow::on_actionValidateRoundTripBatch_triggered()
+{
+    const QString startDir = lastDirectory.isEmpty() ? QDir::homePath() : lastDirectory;
+    const QString srcDir = QFileDialog::getExistingDirectory(
+        this,
+        tr("Select W3D Directory"),
+        startDir,
+        QFileDialog::ShowDirsOnly | QFileDialog::DontResolveSymlinks);
+    if (srcDir.isEmpty()) return;
+
+    const QString outDir = QFileDialog::getExistingDirectory(
+        this,
+        tr("Select Output Directory"),
+        srcDir,
+        QFileDialog::ShowDirsOnly | QFileDialog::DontResolveSymlinks);
+    if (outDir.isEmpty()) return;
+
+    QStringList inputFiles;
+    QDirIterator it(
+        srcDir,
+        QStringList{ "*.w3d", "*.W3D", "*.wlt", "*.WLT" },
+        QDir::Files | QDir::NoSymLinks,
+        QDirIterator::Subdirectories);
+    while (it.hasNext()) {
+        inputFiles << QDir::cleanPath(it.next());
+    }
+    std::sort(inputFiles.begin(), inputFiles.end(), [](const QString& a, const QString& b) {
+        return a.compare(b, Qt::CaseInsensitive) < 0;
+        });
+
+    if (inputFiles.isEmpty()) {
+        QMessageBox::information(this, tr("Round-Trip Validate"),
+            tr("No W3D/WLT files found in %1.").arg(srcDir));
+        return;
+    }
+    const int discoveredFileCount = static_cast<int>(inputFiles.size());
+
+    ValidatorRunMode selectedRunMode = ValidatorRunMode::Both;
+    if (!promptValidatorRunMode(selectedRunMode)) {
+        return;
+    }
+
+    std::vector<JsonSerializationMode> modesToRun;
+    switch (selectedRunMode) {
+    case ValidatorRunMode::StructuredPreferred:
+        modesToRun = { JsonSerializationMode::StructuredPreferred };
+        break;
+    case ValidatorRunMode::HexOnly:
+        modesToRun = { JsonSerializationMode::HexOnly };
+        break;
+    case ValidatorRunMode::Both:
+    default:
+        modesToRun = { JsonSerializationMode::StructuredPreferred, JsonSerializationMode::HexOnly };
+        break;
+    }
+    const int totalRuns = discoveredFileCount * static_cast<int>(modesToRun.size());
+
+    QDir outputRoot(outDir);
+    const QString runBase = QStringLiteral("roundtrip-%1").arg(QDateTime::currentDateTime().toString("yyyyMMdd-HHmmss"));
+    QString runName = runBase;
+    int runSuffix = 1;
+    while (QFileInfo::exists(outputRoot.absoluteFilePath(runName))) {
+        runName = QStringLiteral("%1-%2").arg(runBase).arg(runSuffix++);
+    }
+
+    const QString runDirPath = outputRoot.absoluteFilePath(runName);
+    const QString failuresRootPath = QDir(runDirPath).absoluteFilePath(QStringLiteral("failures"));
+    const QString workRootPath = QDir(runDirPath).absoluteFilePath(QStringLiteral("_work"));
+    const QString reportPath = QDir(runDirPath).absoluteFilePath(QStringLiteral("report.csv"));
+
+    if (!QDir().mkpath(runDirPath) || !QDir().mkpath(failuresRootPath) || !QDir().mkpath(workRootPath)) {
+        QMessageBox::warning(this, tr("Round-Trip Validate"),
+            tr("Failed to create output folders under %1").arg(outDir));
+        return;
+    }
+
+    QFile reportFile(reportPath);
+    if (!reportFile.open(QIODevice::WriteOnly | QIODevice::Truncate | QIODevice::Text)) {
+        QMessageBox::warning(this, tr("Round-Trip Validate"),
+            tr("Cannot write report file: %1").arg(reportPath));
+        return;
+    }
+    QTextStream reportStream(&reportFile);
+    WriteRoundTripCsvHeader(reportStream);
+    reportStream.flush();
+
+    QProgressDialog progress(tr("Preparing validation..."), tr("Cancel"), 0, totalRuns, this);
+    progress.setWindowTitle(tr("Round-Trip Validate"));
+    progress.setWindowModality(Qt::WindowModal);
+    progress.setMinimumDuration(0);
+    progress.setAutoClose(false);
+    progress.setAutoReset(false);
+    progress.setValue(0);
+
+    QDir sourceRoot(srcDir);
+    QDir failuresRoot(failuresRootPath);
+
+    int processedRuns = 0;
+    int passCount = 0;
+    int failCount = 0;
+    bool canceled = false;
+    int runCounter = 0;
+
+    for (int i = 0; i < discoveredFileCount; ++i) {
+        const QString sourcePath = QDir::cleanPath(inputFiles[i]);
+        const QString relativePath = SanitizeRelativePath(sourceRoot.relativeFilePath(sourcePath));
+
+        for (const JsonSerializationMode mode : modesToRun) {
+            progress.setValue(runCounter);
+            progress.setLabelText(tr("Validating %1 [%2] (%3/%4)")
+                .arg(relativePath)
+                .arg(SerializationModeToken(mode))
+                .arg(runCounter + 1)
+                .arg(totalRuns));
+            QCoreApplication::processEvents();
+            if (progress.wasCanceled()) {
+                canceled = true;
+                break;
+            }
+
+            QElapsedTimer timer;
+            timer.start();
+
+            RoundTripReportRow row;
+            row.mode = SerializationModeToken(mode);
+            row.sourcePath = QDir::toNativeSeparators(QFileInfo(sourcePath).absoluteFilePath());
+            row.relativePath = relativePath;
+
+            QByteArray originalBytes;
+            QByteArray rebuiltBytes;
+            QString jsonPayload;
+            bool haveJsonPayload = false;
+            bool haveRebuiltBytes = false;
+            RoundTripFallbackMetrics fallbackMetrics;
+            std::vector<std::string> importWarnings;
+
+            do {
+                QString ioError;
+                if (!ReadAllBytes(sourcePath, originalBytes, ioError)) {
+                    row.stage = QStringLiteral("LOAD_W3D");
+                    row.errorMessage = ioError;
+                    break;
+                }
+                row.originalSize = originalBytes.size();
+
+                ChunkData sourceData;
+                if (!sourceData.loadFromFile(sourcePath.toStdString())) {
+                    row.stage = QStringLiteral("LOAD_W3D");
+                    row.errorMessage = tr("Failed to load source W3D/WLT.");
+                    break;
+                }
+
+                ordered_json exportedDoc;
+                row.stage = QStringLiteral("EXPORT_JSON");
+                try {
+                    exportedDoc = sourceData.toJson(mode);
+                    CollectFallbackMetrics(exportedDoc, fallbackMetrics);
+                    jsonPayload = QString::fromStdString(exportedDoc.dump(4));
+                    haveJsonPayload = true;
+                }
+                catch (const std::exception& e) {
+                    row.errorMessage = tr("JSON export failed: %1").arg(QString::fromUtf8(e.what()));
+                    break;
+                }
+
+                ordered_json reparsedDoc;
+                row.stage = QStringLiteral("PARSE_JSON");
+                try {
+                    reparsedDoc = ordered_json::parse(jsonPayload.toStdString());
+                }
+                catch (const std::exception& e) {
+                    row.errorMessage = tr("JSON parse failed: %1").arg(QString::fromUtf8(e.what()));
+                    break;
+                }
+
+                ChunkData rebuiltData;
+                row.stage = QStringLiteral("IMPORT_JSON");
+                try {
+                    if (!rebuiltData.fromJson(reparsedDoc, &importWarnings)) {
+                        row.errorMessage = tr("ChunkData::fromJson returned false.");
+                        break;
+                    }
+                }
+                catch (const std::exception& e) {
+                    row.errorMessage = tr("JSON import failed: %1").arg(QString::fromUtf8(e.what()));
+                    break;
+                }
+
+                row.stage = QStringLiteral("SAVE_REBUILT");
+                QTemporaryFile rebuiltTempFile(QDir(workRootPath).absoluteFilePath(QStringLiteral("rebuilt-XXXXXX.tmp")));
+                rebuiltTempFile.setAutoRemove(true);
+                if (!rebuiltTempFile.open()) {
+                    row.errorMessage = tr("Failed to create temporary rebuilt file.");
+                    break;
+                }
+                const QString rebuiltTempPath = rebuiltTempFile.fileName();
+                rebuiltTempFile.close();
+
+                if (!rebuiltData.saveToFile(rebuiltTempPath.toStdString())) {
+                    row.errorMessage = tr("Failed to save rebuilt W3D/WLT.");
+                    break;
+                }
+
+                QString rebuiltReadError;
+                if (!ReadAllBytes(rebuiltTempPath, rebuiltBytes, rebuiltReadError)) {
+                    row.stage = QStringLiteral("COMPARE_BYTES");
+                    row.errorMessage = rebuiltReadError;
+                    break;
+                }
+                haveRebuiltBytes = true;
+                row.rebuiltSize = rebuiltBytes.size();
+
+                qint64 firstDiffOffset = -1;
+                int originalByte = -1;
+                int rebuiltByte = -1;
+                row.stage = QStringLiteral("COMPARE_BYTES");
+                if (!CompareBytes(originalBytes, rebuiltBytes, firstDiffOffset, originalByte, rebuiltByte)) {
+                    row.firstDiffOffset = firstDiffOffset;
+                    row.originalByte = originalByte;
+                    row.rebuiltByte = rebuiltByte;
+                    row.errorMessage = tr("Byte mismatch at offset %1.").arg(firstDiffOffset);
+                    break;
+                }
+
+                row.status = QStringLiteral("PASS");
+            } while (false);
+
+            row.fallbackNodeCount = fallbackMetrics.nodeCount;
+            row.fallbackChunkIds = FormatFallbackChunkCounts(fallbackMetrics.chunkCounts);
+            row.durationMs = timer.elapsed();
+            row.warningCount = static_cast<int>(importWarnings.size());
+            if (!importWarnings.empty()) {
+                QStringList warningLines;
+                warningLines.reserve(static_cast<int>(importWarnings.size()));
+                for (const std::string& warning : importWarnings) {
+                    warningLines << QString::fromStdString(warning);
+                }
+                row.warnings = warningLines.join(QStringLiteral(" | "));
+            }
+
+            if (row.status == QStringLiteral("PASS")) {
+                ++passCount;
+            }
+            else {
+                ++failCount;
+                if (row.errorMessage.isEmpty()) {
+                    row.errorMessage = tr("Validation failed at stage %1.").arg(row.stage);
+                }
+
+                if (haveJsonPayload) {
+                    const QString jsonRelPath = BuildFailureJsonRelativePath(relativePath);
+                    const QString jsonAbsPath = failuresRoot.absoluteFilePath(
+                        QDir::cleanPath(SerializationModeToken(mode) + "/" + jsonRelPath));
+                    QString writeError;
+                    if (WriteAllBytes(jsonAbsPath, jsonPayload.toUtf8(), writeError)) {
+                        row.jsonArtifactPath = QDir::toNativeSeparators(jsonAbsPath);
+                    }
+                    else {
+                        row.errorMessage += QStringLiteral(" | ") + writeError;
+                    }
+                }
+
+                if (haveRebuiltBytes) {
+                    const QString rebuiltRelPath = BuildFailureRebuiltRelativePath(relativePath);
+                    const QString rebuiltAbsPath = failuresRoot.absoluteFilePath(
+                        QDir::cleanPath(SerializationModeToken(mode) + "/" + rebuiltRelPath));
+                    QString writeError;
+                    if (WriteAllBytes(rebuiltAbsPath, rebuiltBytes, writeError)) {
+                        row.rebuiltArtifactPath = QDir::toNativeSeparators(rebuiltAbsPath);
+                    }
+                    else {
+                        row.errorMessage += QStringLiteral(" | ") + writeError;
+                    }
+                }
+            }
+
+            WriteRoundTripCsvRow(reportStream, row);
+            reportStream.flush();
+            ++processedRuns;
+            ++runCounter;
+        }
+
+        if (canceled) {
+            break;
+        }
+    }
+
+    progress.setValue(runCounter);
+    reportFile.close();
+    lastDirectory = srcDir;
+
+    const QString summary = tr("%1\n\nDiscovered files: %2\nTotal mode-runs: %3\nProcessed mode-runs: %4\nPass: %5\nFail: %6\nReport: %7\nFailure artifacts: %8")
+        .arg(canceled ? tr("Validation canceled.") : tr("Validation completed."))
+        .arg(discoveredFileCount)
+        .arg(totalRuns)
+        .arg(processedRuns)
+        .arg(passCount)
+        .arg(failCount)
+        .arg(QDir::toNativeSeparators(reportPath))
+        .arg(QDir::toNativeSeparators(failuresRootPath));
+
+    if (canceled || failCount > 0) {
+        QMessageBox::warning(this, tr("Round-Trip Validate"), summary);
+    }
+    else {
+        QMessageBox::information(this, tr("Round-Trip Validate"), summary);
+    }
+}
+
 
 void MainWindow::exportJson() {
     QString path = QFileDialog::getSaveFileName(this, tr("Export to JSON"), lastDirectory, tr("JSON Files (*.json);;All Files (*)"));
     if (path.isEmpty()) return;
-    const ordered_json doc = chunkData->toJson();
+    JsonSerializationMode selectedMode = JsonSerializationMode::StructuredPreferred;
+    if (!promptSerializationMode(tr("Export to JSON"), tr("Serialization mode"), selectedMode)) {
+        return;
+    }
+
+    const ordered_json doc = chunkData->toJson(selectedMode);
     QFile file(path);
     if (!file.open(QIODevice::WriteOnly)) {
         QMessageBox::warning(this, tr("Error"), tr("Cannot write JSON file."));
@@ -3873,8 +4620,9 @@ void MainWindow::importJson() {
         return;
     }
 
+    std::vector<std::string> importWarnings;
     try {
-        if (!chunkData->fromJson(doc)) {
+        if (!chunkData->fromJson(doc, &importWarnings)) {
             QMessageBox::warning(this, tr("Error"), tr("Invalid JSON content."));
             return;
         }
@@ -3885,6 +4633,24 @@ void MainWindow::importJson() {
     }
     ClearChunkTree();
     populateTree();
+    if (!importWarnings.empty()) {
+        QStringList preview;
+        const std::size_t previewCount = std::min<std::size_t>(importWarnings.size(), 10);
+        preview.reserve(static_cast<int>(previewCount));
+        for (std::size_t i = 0; i < previewCount; ++i) {
+            preview << QString::fromStdString(importWarnings[i]);
+        }
+        if (importWarnings.size() > previewCount) {
+            preview << tr("... (%1 additional warnings)").arg(static_cast<int>(importWarnings.size() - previewCount));
+        }
+
+        QMessageBox::information(
+            this,
+            tr("JSON Import Warnings"),
+            tr("Import completed with %1 warning(s).\n\n%2")
+                .arg(static_cast<int>(importWarnings.size()))
+                .arg(preview.join("\n")));
+    }
     if (QMessageBox::question(this, tr("Rebuild"), tr("Save rebuilt W3D file?"),
         QMessageBox::Yes | QMessageBox::No) == QMessageBox::Yes) {
         QString out = QFileDialog::getSaveFileName(this, tr("Save W3D File"), lastDirectory, tr("W3D Files (*.w3d);;All Files (*)"));
