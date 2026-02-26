@@ -11,10 +11,47 @@
 #include <vector>
 #include <cstring>
 #include <algorithm>
+#include <cstdint>
+#include <cstddef>
 
 using ordered_json = QJsonObject;
 
 namespace {
+
+    QString BytesToHexUpper(const uint8_t* data, size_t size) {
+        if (!data || size == 0) {
+            return {};
+        }
+        QByteArray bytes(reinterpret_cast<const char*>(data), static_cast<int>(size));
+        return QString::fromLatin1(bytes.toHex().toUpper());
+    }
+
+    bool HexUpperToBytes(const QString& text, std::vector<uint8_t>& out) {
+        const QByteArray hex = text.toLatin1().trimmed();
+        if (hex.size() % 2 != 0) {
+            return false;
+        }
+
+        auto nibble = [](char c) -> int {
+            if (c >= '0' && c <= '9') return c - '0';
+            if (c >= 'a' && c <= 'f') return 10 + (c - 'a');
+            if (c >= 'A' && c <= 'F') return 10 + (c - 'A');
+            return -1;
+        };
+
+        out.clear();
+        out.reserve(static_cast<size_t>(hex.size() / 2));
+        for (int i = 0; i < hex.size(); i += 2) {
+            const int hi = nibble(hex[i]);
+            const int lo = nibble(hex[i + 1]);
+            if (hi < 0 || lo < 0) {
+                out.clear();
+                return false;
+            }
+            out.push_back(static_cast<uint8_t>((hi << 4) | lo));
+        }
+        return true;
+    }
 
     // helper function: convert array of structs to QJsonArray
     template <typename T, typename Converter>
@@ -673,8 +710,8 @@ namespace {
                 const auto* h = reinterpret_cast<const W3dMeshHeader3Struct*>(item.data.data());
                 dataObj["VERSION"] = QString::fromStdString(FormatUtils::FormatVersion(h->Version));
                 dataObj["ATTRIBUTES"] = int(h->Attributes);
-                dataObj["MESHNAME"] = QString::fromUtf8(h->MeshName, strnlen(h->MeshName, W3D_NAME_LEN));
-                dataObj["CONTAINERNAME"] = QString::fromUtf8(h->ContainerName, strnlen(h->ContainerName, W3D_NAME_LEN));
+                dataObj["MESHNAME"] = QString::fromLatin1(h->MeshName, W3D_NAME_LEN);
+                dataObj["CONTAINERNAME"] = QString::fromLatin1(h->ContainerName, W3D_NAME_LEN);
                 dataObj["NUMTRIS"] = int(h->NumTris);
                 dataObj["NUMVERTICES"] = int(h->NumVertices);
                 dataObj["NUMMATERIALS"] = int(h->NumMaterials);
@@ -699,10 +736,10 @@ namespace {
             auto parts = verStr.split('.');
             if (parts.size() == 2) { h.Version = (parts[0].toUInt() << 16) | parts[1].toUInt(); }
             h.Attributes = dataObj.value("ATTRIBUTES").toInt();
-            QByteArray mn = dataObj.value("MESHNAME").toString().toUtf8();
+            QByteArray mn = dataObj.value("MESHNAME").toString().toLatin1();
             std::memset(h.MeshName, 0, W3D_NAME_LEN);
             std::memcpy(h.MeshName, mn.constData(), std::min<int>(mn.size(), W3D_NAME_LEN));
-            QByteArray cn = dataObj.value("CONTAINERNAME").toString().toUtf8();
+            QByteArray cn = dataObj.value("CONTAINERNAME").toString().toLatin1();
             std::memset(h.ContainerName, 0, W3D_NAME_LEN);
             std::memcpy(h.ContainerName, cn.constData(), std::min<int>(cn.size(), W3D_NAME_LEN));
             h.NumTris = dataObj.value("NUMTRIS").toInt();
@@ -863,6 +900,7 @@ namespace {
                     o["ALPHATEST"] = int(s.AlphaTest);
                     o["POSTDETAILCOLORFUNC"] = int(s.PostDetailColorFunc);
                     o["POSTDETAILALPHAFUNC"] = int(s.PostDetailAlphaFunc);
+                    o["PAD"] = int(s.pad[0]);
                     return o;
                 }
             );
@@ -889,6 +927,7 @@ namespace {
                 s.AlphaTest = uint8_t(o.value("ALPHATEST").toInt());
                 s.PostDetailColorFunc = uint8_t(o.value("POSTDETAILCOLORFUNC").toInt());
                 s.PostDetailAlphaFunc = uint8_t(o.value("POSTDETAILALPHAFUNC").toInt());
+                s.pad[0] = uint8_t(o.value("PAD").toInt());
                 return s;
                 });
             item.length = uint32_t(item.data.size());
@@ -899,17 +938,29 @@ namespace {
     struct VertexMaterialNameSerializer : ChunkSerializer {
         ordered_json toJson(const ChunkItem& item) const override {
             ordered_json obj;
-            QString text = QString::fromUtf8(reinterpret_cast<const char*>(item.data.data()), int(item.data.size()));
+            QString text = QString::fromLatin1(reinterpret_cast<const char*>(item.data.data()), int(item.data.size()));
             obj["NAME"] = text;
             return obj;
         }
 
         void fromJson(const ordered_json& dataObj, ChunkItem& item) const override {
-            QByteArray text = dataObj.value("NAME").toString().toUtf8();
-            item.length = uint32_t(text.size() + 1);
+            QByteArray text = dataObj.value("NAME").toString().toLatin1();
+            uint32_t outLen = item.length;
+            if (outLen == 0) {
+                outLen = static_cast<uint32_t>(text.size());
+                if (text.isEmpty() || text.back() != '\0') {
+                    outLen += 1;
+                }
+            }
+            item.length = outLen;
             item.data.resize(item.length);
-            std::memcpy(item.data.data(), text.constData(), text.size());
-            item.data[text.size()] = 0;
+            const int copyLen = std::min<int>(int(item.length), text.size());
+            if (copyLen > 0) {
+                std::memcpy(item.data.data(), text.constData(), copyLen);
+            }
+            if (copyLen < int(item.length)) {
+                std::memset(item.data.data() + copyLen, 0, item.length - copyLen);
+            }
         }
     };
 
@@ -920,10 +971,10 @@ namespace {
             if (item.data.size() >= sizeof(W3dVertexMaterialStruct)) {
                 const auto* m = reinterpret_cast<const W3dVertexMaterialStruct*>(item.data.data());
                 obj["ATTRIBUTES"] = int(m->Attributes);
-                obj["AMBIENT"] = QJsonArray{ int(m->Ambient.R), int(m->Ambient.G), int(m->Ambient.B) };
-                obj["DIFFUSE"] = QJsonArray{ int(m->Diffuse.R), int(m->Diffuse.G), int(m->Diffuse.B) };
-                obj["SPECULAR"] = QJsonArray{ int(m->Specular.R), int(m->Specular.G), int(m->Specular.B) };
-                obj["EMISSIVE"] = QJsonArray{ int(m->Emissive.R), int(m->Emissive.G), int(m->Emissive.B) };
+                obj["AMBIENT"] = QJsonArray{ int(m->Ambient.R), int(m->Ambient.G), int(m->Ambient.B), int(m->Ambient.pad) };
+                obj["DIFFUSE"] = QJsonArray{ int(m->Diffuse.R), int(m->Diffuse.G), int(m->Diffuse.B), int(m->Diffuse.pad) };
+                obj["SPECULAR"] = QJsonArray{ int(m->Specular.R), int(m->Specular.G), int(m->Specular.B), int(m->Specular.pad) };
+                obj["EMISSIVE"] = QJsonArray{ int(m->Emissive.R), int(m->Emissive.G), int(m->Emissive.B), int(m->Emissive.pad) };
                 obj["SHININESS"] = m->Shininess;
                 obj["OPACITY"] = m->Opacity;
                 obj["TRANSLUCENCY"] = m->Translucency;
@@ -936,12 +987,16 @@ namespace {
             m.Attributes = dataObj.value("ATTRIBUTES").toInt();
             QJsonArray amb = dataObj.value("AMBIENT").toArray();
             if (amb.size() >= 3) { m.Ambient.R = amb[0].toInt(); m.Ambient.G = amb[1].toInt(); m.Ambient.B = amb[2].toInt(); }
+            if (amb.size() >= 4) { m.Ambient.pad = amb[3].toInt(); }
             QJsonArray dif = dataObj.value("DIFFUSE").toArray();
             if (dif.size() >= 3) { m.Diffuse.R = dif[0].toInt(); m.Diffuse.G = dif[1].toInt(); m.Diffuse.B = dif[2].toInt(); }
+            if (dif.size() >= 4) { m.Diffuse.pad = dif[3].toInt(); }
             QJsonArray spec = dataObj.value("SPECULAR").toArray();
             if (spec.size() >= 3) { m.Specular.R = spec[0].toInt(); m.Specular.G = spec[1].toInt(); m.Specular.B = spec[2].toInt(); }
+            if (spec.size() >= 4) { m.Specular.pad = spec[3].toInt(); }
             QJsonArray emis = dataObj.value("EMISSIVE").toArray();
             if (emis.size() >= 3) { m.Emissive.R = emis[0].toInt(); m.Emissive.G = emis[1].toInt(); m.Emissive.B = emis[2].toInt(); }
+            if (emis.size() >= 4) { m.Emissive.pad = emis[3].toInt(); }
             m.Shininess = dataObj.value("SHININESS").toDouble();
             m.Opacity = dataObj.value("OPACITY").toDouble();
             m.Translucency = dataObj.value("TRANSLUCENCY").toDouble();
@@ -955,17 +1010,29 @@ namespace {
     struct VertexMapperArgs0Serializer : ChunkSerializer {
         ordered_json toJson(const ChunkItem& item) const override {
             ordered_json obj;
-            QString text = QString::fromUtf8(reinterpret_cast<const char*>(item.data.data()), int(item.data.size()));
+            QString text = QString::fromLatin1(reinterpret_cast<const char*>(item.data.data()), int(item.data.size()));
             obj["ARGS"] = text;
             return obj;
         }
 
         void fromJson(const ordered_json& dataObj, ChunkItem& item) const override {
-            QByteArray text = dataObj.value("ARGS").toString().toUtf8();
-            item.length = uint32_t(text.size() + 1);
+            QByteArray text = dataObj.value("ARGS").toString().toLatin1();
+            uint32_t outLen = item.length;
+            if (outLen == 0) {
+                outLen = static_cast<uint32_t>(text.size());
+                if (text.isEmpty() || text.back() != '\0') {
+                    outLen += 1;
+                }
+            }
+            item.length = outLen;
             item.data.resize(item.length);
-            std::memcpy(item.data.data(), text.constData(), text.size());
-            item.data[text.size()] = 0;
+            const int copyLen = std::min<int>(int(item.length), text.size());
+            if (copyLen > 0) {
+                std::memcpy(item.data.data(), text.constData(), copyLen);
+            }
+            if (copyLen < int(item.length)) {
+                std::memset(item.data.data() + copyLen, 0, item.length - copyLen);
+            }
         }
     };
 
@@ -973,17 +1040,29 @@ namespace {
     struct VertexMapperArgs1Serializer : ChunkSerializer {
         ordered_json toJson(const ChunkItem& item) const override {
             ordered_json obj;
-            QString text = QString::fromUtf8(reinterpret_cast<const char*>(item.data.data()), int(item.data.size()));
+            QString text = QString::fromLatin1(reinterpret_cast<const char*>(item.data.data()), int(item.data.size()));
             obj["ARGS"] = text;
             return obj;
         }
 
         void fromJson(const ordered_json& dataObj, ChunkItem& item) const override {
-            QByteArray text = dataObj.value("ARGS").toString().toUtf8();
-            item.length = uint32_t(text.size() + 1);
+            QByteArray text = dataObj.value("ARGS").toString().toLatin1();
+            uint32_t outLen = item.length;
+            if (outLen == 0) {
+                outLen = static_cast<uint32_t>(text.size());
+                if (text.isEmpty() || text.back() != '\0') {
+                    outLen += 1;
+                }
+            }
+            item.length = outLen;
             item.data.resize(item.length);
-            std::memcpy(item.data.data(), text.constData(), text.size());
-            item.data[text.size()] = 0;
+            const int copyLen = std::min<int>(int(item.length), text.size());
+            if (copyLen > 0) {
+                std::memcpy(item.data.data(), text.constData(), copyLen);
+            }
+            if (copyLen < int(item.length)) {
+                std::memset(item.data.data() + copyLen, 0, item.length - copyLen);
+            }
         }
     };
 
@@ -991,17 +1070,29 @@ namespace {
     struct TextureNameSerializer : ChunkSerializer {
         ordered_json toJson(const ChunkItem& item) const override {
             ordered_json obj;
-            QString text = QString::fromUtf8(reinterpret_cast<const char*>(item.data.data()), int(item.data.size()));
+            QString text = QString::fromLatin1(reinterpret_cast<const char*>(item.data.data()), int(item.data.size()));
             obj["NAME"] = text;
             return obj;
         }
 
         void fromJson(const ordered_json& dataObj, ChunkItem& item) const override {
-            QByteArray text = dataObj.value("NAME").toString().toUtf8();
-            item.length = uint32_t(text.size() + 1);
+            QByteArray text = dataObj.value("NAME").toString().toLatin1();
+            uint32_t outLen = item.length;
+            if (outLen == 0) {
+                outLen = static_cast<uint32_t>(text.size());
+                if (text.isEmpty() || text.back() != '\0') {
+                    outLen += 1;
+                }
+            }
+            item.length = outLen;
             item.data.resize(item.length);
-            std::memcpy(item.data.data(), text.constData(), text.size());
-            item.data[text.size()] = 0;
+            const int copyLen = std::min<int>(int(item.length), text.size());
+            if (copyLen > 0) {
+                std::memcpy(item.data.data(), text.constData(), copyLen);
+            }
+            if (copyLen < int(item.length)) {
+                std::memset(item.data.data() + copyLen, 0, item.length - copyLen);
+            }
         }
     };
 
@@ -1209,10 +1300,20 @@ namespace {
     struct StageTexCoordsSerializer : ChunkSerializer {
         ordered_json toJson(const ChunkItem& item) const override {
             ordered_json obj;
-            obj["STAGE_TEXCOORDS"] = structsToJsonArray<W3dTexCoordStruct>(
-                item.data,
-                [](const W3dTexCoordStruct& t) { return QJsonArray{ t.U, t.V }; }
-            );
+            QJsonArray arr;
+            if (item.data.size() % sizeof(W3dTexCoordStruct) == 0) {
+                const auto* begin = reinterpret_cast<const W3dTexCoordStruct*>(item.data.data());
+                const size_t count = item.data.size() / sizeof(W3dTexCoordStruct);
+                for (size_t i = 0; i < count; ++i) {
+                    ordered_json e;
+                    e["U"] = begin[i].U;
+                    e["V"] = begin[i].V;
+                    e["U_BITS_HEX"] = BytesToHexUpper(reinterpret_cast<const uint8_t*>(&begin[i].U), sizeof(float));
+                    e["V_BITS_HEX"] = BytesToHexUpper(reinterpret_cast<const uint8_t*>(&begin[i].V), sizeof(float));
+                    arr.append(e);
+                }
+            }
+            obj["STAGE_TEXCOORDS"] = arr;
             return obj;
         }
 
@@ -1220,10 +1321,35 @@ namespace {
             QJsonArray arr = dataObj.value("STAGE_TEXCOORDS").toArray();
             item.data = jsonArrayToStructs<W3dTexCoordStruct>(arr, [](const QJsonValue& val) {
                 W3dTexCoordStruct t{};
-                QJsonArray a = val.toArray();
-                if (a.size() >= 2) { t.U = a[0].toDouble(); t.V = a[1].toDouble(); }
+                if (val.isArray()) {
+                    QJsonArray a = val.toArray();
+                    if (a.size() >= 2) {
+                        t.U = float(a[0].toDouble());
+                        t.V = float(a[1].toDouble());
+                    }
+                    return t;
+                }
+                ordered_json o = val.toObject();
+                t.U = float(o.value("U").toDouble());
+                t.V = float(o.value("V").toDouble());
+                auto decodeFloatBits = [](const QString& bitsHex, float& out) -> bool {
+                    std::vector<uint8_t> raw;
+                    if (!HexUpperToBytes(bitsHex, raw) || raw.size() != sizeof(float)) {
+                        return false;
+                    }
+                    std::memcpy(&out, raw.data(), sizeof(float));
+                    return true;
+                };
+                const QString uBits = o.value("U_BITS_HEX").toString();
+                const QString vBits = o.value("V_BITS_HEX").toString();
+                if (!uBits.isEmpty()) {
+                    decodeFloatBits(uBits, t.U);
+                }
+                if (!vBits.isEmpty()) {
+                    decodeFloatBits(vBits, t.V);
+                }
                 return t;
-                });
+            });
             item.length = uint32_t(item.data.size());
         }
     };
@@ -1401,6 +1527,13 @@ namespace {
                 const auto* d = reinterpret_cast<const W3dMeshDeform*>(item.data.data());
                 obj["SETCOUNT"] = int(d->SetCount);
                 obj["ALPHAPASSES"] = int(d->AlphaPasses);
+                if (item.data.size() > sizeof(W3dMeshDeform)) {
+                    QJsonArray tailPad;
+                    for (size_t i = sizeof(W3dMeshDeform); i < item.data.size(); ++i) {
+                        tailPad.append(int(item.data[i]));
+                    }
+                    obj["TAIL_PADDING"] = tailPad;
+                }
             }
             return obj;
         }
@@ -1409,9 +1542,18 @@ namespace {
             W3dMeshDeform d{};
             d.SetCount = dataObj.value("SETCOUNT").toInt();
             d.AlphaPasses = dataObj.value("ALPHAPASSES").toInt();
-            item.length = sizeof(W3dMeshDeform);
+            uint32_t outLen = item.length;
+            if (outLen < sizeof(W3dMeshDeform)) {
+                outLen = uint32_t(sizeof(W3dMeshDeform));
+            }
+            item.length = outLen;
             item.data.resize(item.length);
+            std::memset(item.data.data(), 0, item.data.size());
             std::memcpy(item.data.data(), &d, sizeof(d));
+            QJsonArray tailPad = dataObj.value("TAIL_PADDING").toArray();
+            for (int i = 0; i < tailPad.size() && (int(sizeof(W3dMeshDeform)) + i) < int(item.data.size()); ++i) {
+                item.data[int(sizeof(W3dMeshDeform)) + i] = uint8_t(tailPad[i].toInt());
+            }
         }
     };
 
@@ -1714,7 +1856,7 @@ namespace {
                 item.data,
                 [](const W3dPivotStruct& p) {
                     ordered_json o;
-                    o["NAME"] = QString::fromUtf8(p.Name, strnlen(p.Name, W3D_NAME_LEN));
+                    o["NAME"] = QString::fromLatin1(p.Name, W3D_NAME_LEN);
                     o["PARENTIDX"] = int(p.ParentIdx);
                     o["TRANSLATION"] = QJsonArray{ p.Translation.X, p.Translation.Y, p.Translation.Z };
                     o["EULERANGLES"] = QJsonArray{ p.EulerAngles.X, p.EulerAngles.Y, p.EulerAngles.Z };
@@ -1732,7 +1874,7 @@ namespace {
             item.data = jsonArrayToStructs<W3dPivotStruct>(arr, [](const QJsonValue& val) {
                 W3dPivotStruct p{};
                 ordered_json o = val.toObject();
-                QByteArray name = o.value("NAME").toString().toUtf8();
+                QByteArray name = o.value("NAME").toString().toLatin1();
                 std::memset(p.Name, 0, W3D_NAME_LEN);
                 std::memcpy(p.Name, name.constData(), std::min<int>(name.size(), W3D_NAME_LEN));
                 p.ParentIdx = uint32_t(o.value("PARENTIDX").toInt());
@@ -1833,28 +1975,53 @@ namespace {
                 obj["VECTORLEN"] = int(hdr.VectorLen);
                 obj["FLAGS"] = int(hdr.Flags);
                 obj["PIVOT"] = int(hdr.Pivot);
+                obj["PAD"] = int(hdr.pad);
 
-                int frameCount = int(hdr.LastFrame) - int(hdr.FirstFrame) + 1;
-                int vectorLen = int(hdr.VectorLen);
-                size_t valueCount = size_t(frameCount) * size_t(vectorLen);
-                size_t headerBytes = sizeof(W3dAnimChannelStruct);
-                size_t neededBytes = headerBytes + (valueCount > 0 ? (valueCount - 1) * sizeof(float) : 0);
-                if (buf.size() >= neededBytes && valueCount > 0) {
+                constexpr size_t dataOffset = offsetof(W3dAnimChannelStruct, Data);
+                const size_t headerBytes = sizeof(W3dAnimChannelStruct);
+                if (buf.size() >= dataOffset + sizeof(float)) {
+                    obj["DATA0_HEX"] = BytesToHexUpper(
+                        reinterpret_cast<const uint8_t*>(buf.data() + dataOffset),
+                        sizeof(float));
+                }
+                if (buf.size() > headerBytes) {
+                    obj["DATA_TAIL_HEX"] = BytesToHexUpper(
+                        reinterpret_cast<const uint8_t*>(buf.data() + headerBytes),
+                        buf.size() - headerBytes);
+                }
+
+                const int frameCount = std::max(0, int(hdr.LastFrame) - int(hdr.FirstFrame) + 1);
+                const int vectorLen = std::max(0, int(hdr.VectorLen));
+                if (frameCount > 0 && vectorLen > 0 && buf.size() >= dataOffset + sizeof(float)) {
+                    const size_t expectedValueCount = size_t(frameCount) * size_t(vectorLen);
+                    const size_t availableValueCount =
+                        1 + ((buf.size() > headerBytes) ? ((buf.size() - headerBytes) / sizeof(float)) : 0);
+                    const size_t valueCount = std::min(expectedValueCount, availableValueCount);
+
                     std::vector<float> values(valueCount);
-                    values[0] = hdr.Data[0];
+                    std::memcpy(values.data(), buf.data() + dataOffset, sizeof(float));
                     if (valueCount > 1) {
-                        const float* tail = reinterpret_cast<const float*>(buf.data() + headerBytes);
-                        std::memcpy(values.data() + 1, tail, (valueCount - 1) * sizeof(float));
+                        std::memcpy(values.data() + 1, buf.data() + headerBytes, (valueCount - 1) * sizeof(float));
                     }
+
                     QJsonArray dataArr;
                     for (int f = 0; f < frameCount; ++f) {
                         QJsonArray frameArr;
                         for (int v = 0; v < vectorLen; ++v) {
-                            frameArr.append(values[size_t(f) * vectorLen + v]);
+                            const size_t idx = size_t(f) * size_t(vectorLen) + size_t(v);
+                            if (idx >= valueCount) {
+                                break;
+                            }
+                            frameArr.append(values[idx]);
+                        }
+                        if (frameArr.isEmpty()) {
+                            break;
                         }
                         dataArr.append(frameArr);
                     }
-                    obj["DATA"] = dataArr;
+                    if (!dataArr.isEmpty()) {
+                        obj["DATA"] = dataArr;
+                    }
                 }
             }
             return obj;
@@ -1867,28 +2034,90 @@ namespace {
             hdr.VectorLen = dataObj.value("VECTORLEN").toInt();
             hdr.Flags = dataObj.value("FLAGS").toInt();
             hdr.Pivot = dataObj.value("PIVOT").toInt();
-            hdr.pad = 0;
+            hdr.pad = uint16_t(dataObj.value("PAD").toInt());
 
-            QJsonArray dataArr = dataObj.value("DATA").toArray();
-            int frameCount = dataArr.size();
-            int vectorLen = int(hdr.VectorLen);
-            size_t valueCount = size_t(frameCount) * size_t(vectorLen);
-            std::vector<float> values(valueCount);
-            for (int f = 0; f < frameCount; ++f) {
-                QJsonArray frameArr = dataArr[f].toArray();
-                for (int v = 0; v < vectorLen && v < frameArr.size(); ++v) {
-                    values[size_t(f) * vectorLen + v] = float(frameArr[v].toDouble());
+            const int frameCount = std::max<int>(0, int(hdr.LastFrame) - int(hdr.FirstFrame) + 1);
+            const int vectorLen = std::max<int>(0, int(hdr.VectorLen));
+            const size_t valueCount = size_t(frameCount) * size_t(vectorLen);
+            const size_t expectedLength = sizeof(W3dAnimChannelStruct)
+                + ((valueCount > 1) ? ((valueCount - 1) * sizeof(float)) : 0);
+
+            uint32_t outLength = item.length;
+            if (outLength == 0) {
+                outLength = static_cast<uint32_t>(expectedLength);
+            }
+            item.length = outLength;
+            item.data.assign(item.length, 0);
+
+            constexpr size_t dataOffset = offsetof(W3dAnimChannelStruct, Data);
+            const size_t headerBytes = sizeof(W3dAnimChannelStruct);
+            const size_t tailCapacity = item.data.size() > headerBytes ? (item.data.size() - headerBytes) : 0;
+
+            bool appliedData0Hex = false;
+            const QString data0Hex = dataObj.value("DATA0_HEX").toString();
+            if (!data0Hex.isEmpty()) {
+                std::vector<uint8_t> decoded;
+                if (HexUpperToBytes(data0Hex, decoded) && decoded.size() == sizeof(float)) {
+                    float rawValue = 0.0f;
+                    std::memcpy(&rawValue, decoded.data(), sizeof(float));
+                    hdr.Data[0] = rawValue;
+                    appliedData0Hex = true;
                 }
             }
 
-            hdr.Data[0] = valueCount > 0 ? values[0] : 0.0f;
-            size_t headerBytes = sizeof(W3dAnimChannelStruct);
-            item.length = uint32_t(headerBytes + (valueCount > 1 ? (valueCount - 1) * sizeof(float) : 0));
-            item.data.resize(item.length);
-            std::memcpy(item.data.data(), &hdr, sizeof(W3dAnimChannelStruct));
-            if (valueCount > 1) {
-                std::memcpy(item.data.data() + headerBytes, values.data() + 1, (valueCount - 1) * sizeof(float));
+            bool appliedTailHex = false;
+            const QString tailHex = dataObj.value("DATA_TAIL_HEX").toString();
+            if (!tailHex.isEmpty()) {
+                std::vector<uint8_t> decoded;
+                if (HexUpperToBytes(tailHex, decoded)) {
+                    const size_t tailCopy = std::min(tailCapacity, decoded.size());
+                    if (tailCopy > 0) {
+                        std::memcpy(item.data.data() + headerBytes, decoded.data(), tailCopy);
+                    }
+                    appliedTailHex = true;
+                }
             }
+
+            if (!appliedData0Hex) {
+                QJsonArray dataArr = dataObj.value("DATA").toArray();
+                if (!dataArr.isEmpty()) {
+                    const QJsonArray firstFrame = dataArr[0].toArray();
+                    if (!firstFrame.isEmpty()) {
+                        hdr.Data[0] = float(firstFrame[0].toDouble());
+                    }
+                }
+            }
+
+            const size_t headerCopyBytes = std::min(item.data.size(), sizeof(W3dAnimChannelStruct));
+            if (headerCopyBytes > 0) {
+                std::memcpy(item.data.data(), &hdr, headerCopyBytes);
+            }
+
+            if (!appliedTailHex) {
+                QJsonArray dataArr = dataObj.value("DATA").toArray();
+                size_t valueIndex = 0;
+                for (int f = 0; f < dataArr.size(); ++f) {
+                    const QJsonArray frameArr = dataArr[f].toArray();
+                    for (int v = 0; v < frameArr.size(); ++v) {
+                        if (valueIndex == 0) {
+                            ++valueIndex;
+                            continue;
+                        }
+
+                        const size_t tailIndex = (valueIndex - 1) * sizeof(float);
+                        if (tailIndex + sizeof(float) > tailCapacity) {
+                            ++valueIndex;
+                            continue;
+                        }
+
+                        const float value = float(frameArr[v].toDouble());
+                        std::memcpy(item.data.data() + headerBytes + tailIndex, &value, sizeof(float));
+                        ++valueIndex;
+                    }
+                }
+            }
+
+            item.length = uint32_t(item.data.size());
         }
     };
 
@@ -1923,6 +2152,7 @@ namespace {
                         arr.append(val);
                     }
                     obj["DATA"] = arr;
+                    obj["DATA_BYTES_HEX"] = BytesToHexUpper(bits.data(), bits.size());
                 }
             }
             return obj;
@@ -1936,12 +2166,25 @@ namespace {
             hdr.Pivot = dataObj.value("PIVOT").toInt();
             hdr.DefaultVal = uint8_t(dataObj.value("DEFAULTVAL").toInt());
 
-            QJsonArray arr = dataObj.value("DATA").toArray();
-            int count = arr.size();
+            const int count = std::max<int>(0, int(hdr.LastFrame) - int(hdr.FirstFrame) + 1);
             size_t bitBytes = size_t((count + 7) / 8);
             std::vector<uint8_t> bits(bitBytes, 0);
-            for (int i = 0; i < count; ++i) {
-                if (arr[i].toBool()) bits[size_t(i) / 8] |= uint8_t(1 << (i % 8));
+
+            bool loadedPackedBytes = false;
+            const QString packedHex = dataObj.value("DATA_BYTES_HEX").toString();
+            if (!packedHex.isEmpty()) {
+                std::vector<uint8_t> packed;
+                if (HexUpperToBytes(packedHex, packed) && packed.size() == bitBytes) {
+                    bits = std::move(packed);
+                    loadedPackedBytes = true;
+                }
+            }
+
+            if (!loadedPackedBytes) {
+                QJsonArray arr = dataObj.value("DATA").toArray();
+                for (int i = 0; i < count && i < arr.size(); ++i) {
+                    if (arr[i].toBool()) bits[size_t(i) / 8] |= uint8_t(1 << (i % 8));
+                }
             }
 
             std::vector<uint8_t> out((sizeof(W3dBitChannelStruct) - 1) + bitBytes);
@@ -2226,12 +2469,21 @@ namespace {
     struct HModelHeaderSerializer : ChunkSerializer {
         ordered_json toJson(const ChunkItem& item) const override {
             ordered_json obj;
-            if (item.data.size() >= sizeof(W3dHModelHeaderStruct)) {
-                const auto* h = reinterpret_cast<const W3dHModelHeaderStruct*>(item.data.data());
-                obj["VERSION"] = QString::fromStdString(FormatUtils::FormatVersion(h->Version));
-                obj["NAME"] = QString::fromUtf8(h->Name, strnlen(h->Name, W3D_NAME_LEN));
-                obj["HIERARCHYNAME"] = QString::fromUtf8(h->HierarchyName, strnlen(h->HierarchyName, W3D_NAME_LEN));
-                obj["NUMCONNECTIONS"] = int(h->NumConnections);
+            if (item.data.size() >= 38) {
+                W3dHModelHeaderStruct h{};
+                const size_t copyLen = std::min(item.data.size(), sizeof(W3dHModelHeaderStruct));
+                std::memcpy(&h, item.data.data(), copyLen);
+                obj["VERSION"] = QString::fromStdString(FormatUtils::FormatVersion(h.Version));
+                obj["NAME"] = QString::fromLatin1(h.Name, W3D_NAME_LEN);
+                obj["HIERARCHYNAME"] = QString::fromLatin1(h.HierarchyName, W3D_NAME_LEN);
+                obj["NUMCONNECTIONS"] = int(h.NumConnections);
+                if (item.data.size() > 38) {
+                    QJsonArray tailPad;
+                    for (size_t i = 38; i < item.data.size(); ++i) {
+                        tailPad.append(int(item.data[i]));
+                    }
+                    obj["TAIL_PADDING"] = tailPad;
+                }
             }
             return obj;
         }
@@ -2243,16 +2495,30 @@ namespace {
             if (parts.size() == 2) {
                 h.Version = (parts[0].toUInt() << 16) | parts[1].toUInt();
             }
-            QByteArray name = dataObj.value("NAME").toString().toUtf8();
+            QByteArray name = dataObj.value("NAME").toString().toLatin1();
             std::memset(h.Name, 0, W3D_NAME_LEN);
             std::memcpy(h.Name, name.constData(), std::min<int>(name.size(), W3D_NAME_LEN));
-            QByteArray hname = dataObj.value("HIERARCHYNAME").toString().toUtf8();
+            QByteArray hname = dataObj.value("HIERARCHYNAME").toString().toLatin1();
             std::memset(h.HierarchyName, 0, W3D_NAME_LEN);
             std::memcpy(h.HierarchyName, hname.constData(), std::min<int>(hname.size(), W3D_NAME_LEN));
             h.NumConnections = uint16_t(dataObj.value("NUMCONNECTIONS").toInt());
-            item.length = sizeof(W3dHModelHeaderStruct);
+            QJsonArray tailPad = dataObj.value("TAIL_PADDING").toArray();
+            uint8_t* hb = reinterpret_cast<uint8_t*>(&h);
+            for (int i = 0; i < tailPad.size() && (38 + i) < int(sizeof(W3dHModelHeaderStruct)); ++i) {
+                hb[38 + i] = uint8_t(tailPad[i].toInt());
+            }
+            uint32_t outLen = item.length;
+            if (outLen == 0) {
+                outLen = uint32_t(sizeof(W3dHModelHeaderStruct));
+            }
+            item.length = outLen;
             item.data.resize(item.length);
-            std::memcpy(item.data.data(), &h, sizeof(h));
+            std::memset(item.data.data(), 0, item.data.size());
+            const size_t copyLen = std::min(item.data.size(), sizeof(h));
+            std::memcpy(item.data.data(), &h, copyLen);
+            for (int i = 0; i < tailPad.size() && (38 + i) < int(item.data.size()); ++i) {
+                item.data[38 + i] = uint8_t(tailPad[i].toInt());
+            }
         }
     };
 
@@ -2263,14 +2529,14 @@ namespace {
             ordered_json obj;
             if (item.data.size() >= sizeof(W3dHModelNodeStruct)) {
                 const auto* n = reinterpret_cast<const W3dHModelNodeStruct*>(item.data.data());
-                obj[fieldName] = QString::fromUtf8(n->RenderObjName, strnlen(n->RenderObjName, W3D_NAME_LEN));
+                obj[fieldName] = QString::fromLatin1(n->RenderObjName, W3D_NAME_LEN);
                 obj["PIVOTIDX"] = int(n->PivotIdx);
             }
             return obj;
         }
         void fromJson(const ordered_json& dataObj, ChunkItem& item) const override {
             W3dHModelNodeStruct n{};
-            QByteArray name = dataObj.value(fieldName).toString().toUtf8();
+            QByteArray name = dataObj.value(fieldName).toString().toLatin1();
             std::memset(n.RenderObjName, 0, W3D_NAME_LEN);
             std::memcpy(n.RenderObjName, name.constData(), std::min<int>(name.size(), W3D_NAME_LEN));
             n.PivotIdx = uint16_t(dataObj.value("PIVOTIDX").toInt());
@@ -2383,7 +2649,7 @@ namespace {
             if (item.data.size() >= sizeof(W3dCollectionHeaderStruct)) {
                 const auto* h = reinterpret_cast<const W3dCollectionHeaderStruct*>(item.data.data());
                 obj["VERSION"] = QString::fromStdString(FormatUtils::FormatVersion(h->Version));
-                obj["NAME"] = QString::fromUtf8(h->Name, strnlen(h->Name, W3D_NAME_LEN));
+                obj["NAME"] = QString::fromLatin1(h->Name, W3D_NAME_LEN);
                 obj["RENDEROBJECTCOUNT"] = int(h->RenderObjectCount);
                 QJsonArray pad;
                 for (int i = 0; i < 2; ++i) pad.append(int(h->pad[i]));
@@ -2399,7 +2665,7 @@ namespace {
             if (parts.size() == 2) {
                 h.Version = (parts[0].toUInt() << 16) | parts[1].toUInt();
             }
-            QByteArray name = dataObj.value("NAME").toString().toUtf8();
+            QByteArray name = dataObj.value("NAME").toString().toLatin1();
             std::memset(h.Name, 0, W3D_NAME_LEN);
             std::memcpy(h.Name, name.constData(), std::min<int>(name.size(), W3D_NAME_LEN));
             h.RenderObjectCount = dataObj.value("RENDEROBJECTCOUNT").toInt();
@@ -2414,17 +2680,29 @@ namespace {
     struct CollectionObjNameSerializer : ChunkSerializer {
         ordered_json toJson(const ChunkItem& item) const override {
             ordered_json obj;
-            QString text = QString::fromUtf8(reinterpret_cast<const char*>(item.data.data()), int(item.data.size()));
+            QString text = QString::fromLatin1(reinterpret_cast<const char*>(item.data.data()), int(item.data.size()));
             obj["NAME"] = text;
             return obj;
         }
 
         void fromJson(const ordered_json& dataObj, ChunkItem& item) const override {
-            QByteArray text = dataObj.value("NAME").toString().toUtf8();
-            item.length = uint32_t(text.size() + 1);
+            QByteArray text = dataObj.value("NAME").toString().toLatin1();
+            uint32_t outLen = item.length;
+            if (outLen == 0) {
+                outLen = static_cast<uint32_t>(text.size());
+                if (text.isEmpty() || text.back() != '\0') {
+                    outLen += 1;
+                }
+            }
+            item.length = outLen;
             item.data.resize(item.length);
-            std::memcpy(item.data.data(), text.constData(), text.size());
-            item.data[text.size()] = 0;
+            const int copyLen = std::min<int>(int(item.length), text.size());
+            if (copyLen > 0) {
+                std::memcpy(item.data.data(), text.constData(), copyLen);
+            }
+            if (copyLen < int(item.length)) {
+                std::memset(item.data.data() + copyLen, 0, item.length - copyLen);
+            }
         }
     };
 
@@ -2445,7 +2723,8 @@ namespace {
                 size_t available = item.data.size() > headerBytes ? item.data.size() - headerBytes : 0;
                 uint32_t nameLen = h->name_len;
                 if (nameLen > available) nameLen = uint32_t(available);
-                obj["NAME"] = QString::fromUtf8(reinterpret_cast<const char*>(item.data.data() + headerBytes), int(nameLen));
+                obj["NAME_LEN"] = int(h->name_len);
+                obj["NAME"] = QString::fromLatin1(reinterpret_cast<const char*>(item.data.data() + headerBytes), int(nameLen));
             }
             return obj;
         }
@@ -2462,12 +2741,25 @@ namespace {
                 QJsonArray row = tf[i].toArray();
                 for (int j = 0; j < 3 && j < row.size(); ++j) h.transform[i][j] = float(row[j].toDouble());
             }
-            QByteArray name = dataObj.value("NAME").toString().toUtf8();
-            h.name_len = uint32_t(name.size());
-            item.length = sizeof(W3dPlaceholderStruct) + h.name_len;
+            QByteArray name = dataObj.value("NAME").toString().toLatin1();
+            uint32_t outLen = item.length;
+            if (outLen < sizeof(W3dPlaceholderStruct)) {
+                outLen = uint32_t(sizeof(W3dPlaceholderStruct) + name.size());
+            }
+            const uint32_t available = outLen - uint32_t(sizeof(W3dPlaceholderStruct));
+            uint32_t declaredNameLen = uint32_t(dataObj.value("NAME_LEN").toInt(name.size()));
+            if (declaredNameLen > available) {
+                declaredNameLen = available;
+            }
+            h.name_len = declaredNameLen;
+            item.length = outLen;
             item.data.resize(item.length);
+            std::memset(item.data.data(), 0, item.data.size());
             std::memcpy(item.data.data(), &h, sizeof(h));
-            if (h.name_len > 0) std::memcpy(item.data.data() + sizeof(h), name.constData(), name.size());
+            if (h.name_len > 0 && !name.isEmpty()) {
+                const uint32_t copyLen = std::min<uint32_t>(h.name_len, uint32_t(name.size()));
+                std::memcpy(item.data.data() + sizeof(h), name.constData(), copyLen);
+            }
         }
     };
 
@@ -2488,7 +2780,8 @@ namespace {
                 size_t available = item.data.size() > headerBytes ? item.data.size() - headerBytes : 0;
                 uint32_t nameLen = h->name_len;
                 if (nameLen > available) nameLen = uint32_t(available);
-                obj["NAME"] = QString::fromUtf8(reinterpret_cast<const char*>(item.data.data() + headerBytes), int(nameLen));
+                obj["NAME_LEN"] = int(h->name_len);
+                obj["NAME"] = QString::fromLatin1(reinterpret_cast<const char*>(item.data.data() + headerBytes), int(nameLen));
             }
             return obj;
         }
@@ -2505,12 +2798,25 @@ namespace {
                 QJsonArray row = tf[i].toArray();
                 for (int j = 0; j < 3 && j < row.size(); ++j) h.transform[i][j] = float(row[j].toDouble());
             }
-            QByteArray name = dataObj.value("NAME").toString().toUtf8();
-            h.name_len = uint32_t(name.size());
-            item.length = sizeof(W3dTransformNodeStruct) + h.name_len;
+            QByteArray name = dataObj.value("NAME").toString().toLatin1();
+            uint32_t outLen = item.length;
+            if (outLen < sizeof(W3dTransformNodeStruct)) {
+                outLen = uint32_t(sizeof(W3dTransformNodeStruct) + name.size());
+            }
+            const uint32_t available = outLen - uint32_t(sizeof(W3dTransformNodeStruct));
+            uint32_t declaredNameLen = uint32_t(dataObj.value("NAME_LEN").toInt(name.size()));
+            if (declaredNameLen > available) {
+                declaredNameLen = available;
+            }
+            h.name_len = declaredNameLen;
+            item.length = outLen;
             item.data.resize(item.length);
+            std::memset(item.data.data(), 0, item.data.size());
             std::memcpy(item.data.data(), &h, sizeof(h));
-            if (h.name_len > 0) std::memcpy(item.data.data() + sizeof(h), name.constData(), name.size());
+            if (h.name_len > 0 && !name.isEmpty()) {
+                const uint32_t copyLen = std::min<uint32_t>(h.name_len, uint32_t(name.size()));
+                std::memcpy(item.data.data() + sizeof(h), name.constData(), copyLen);
+            }
         }
     };
     struct PointsSerializer : ChunkSerializer {
@@ -2696,20 +3002,30 @@ namespace {
     struct EmitterUserDataSerializer : ChunkSerializer {
         ordered_json toJson(const ChunkItem& item) const override {
             ordered_json obj;
-            obj["USER_DATA"] = QString::fromUtf8(
+            obj["USER_DATA"] = QString::fromLatin1(
                 reinterpret_cast<const char*>(item.data.data()),
                 item.data.size());
             return obj;
         }
 
         void fromJson(const ordered_json& dataObj, ChunkItem& item) const override {
-            QByteArray arr = dataObj.value("USER_DATA").toString().toUtf8();
-            item.length = uint32_t(arr.size() + 1);
-            item.data.resize(item.length);
-            if (!arr.isEmpty()) {
-                std::memcpy(item.data.data(), arr.constData(), arr.size());
+            QByteArray arr = dataObj.value("USER_DATA").toString().toLatin1();
+            uint32_t outLen = item.length;
+            if (outLen == 0) {
+                outLen = static_cast<uint32_t>(arr.size());
+                if (arr.isEmpty() || arr.back() != '\0') {
+                    outLen += 1;
+                }
             }
-            item.data[item.length - 1] = 0;
+            item.length = outLen;
+            item.data.resize(item.length);
+            const int copyLen = std::min<int>(int(item.length), arr.size());
+            if (copyLen > 0) {
+                std::memcpy(item.data.data(), arr.constData(), copyLen);
+            }
+            if (copyLen < int(item.length)) {
+                std::memset(item.data.data() + copyLen, 0, item.length - copyLen);
+            }
         }
     };
 
@@ -2718,7 +3034,7 @@ namespace {
             ordered_json obj;
             if (item.data.size() >= sizeof(W3dEmitterInfoStruct)) {
                 const auto* info = reinterpret_cast<const W3dEmitterInfoStruct*>(item.data.data());
-                obj["TEXTURE_FILENAME"] = QString::fromUtf8(info->TextureFilename, strnlen(info->TextureFilename, 260));
+                obj["TEXTURE_FILENAME"] = QString::fromLatin1(info->TextureFilename, int(sizeof(info->TextureFilename)));
                 obj["START_SIZE"] = info->StartSize;
                 obj["END_SIZE"] = info->EndSize;
                 obj["LIFETIME"] = info->Lifetime;
@@ -2739,7 +3055,7 @@ namespace {
 
         void fromJson(const ordered_json& dataObj, ChunkItem& item) const override {
             W3dEmitterInfoStruct info{};
-            QByteArray tex = dataObj.value("TEXTURE_FILENAME").toString().toUtf8();
+            QByteArray tex = dataObj.value("TEXTURE_FILENAME").toString().toLatin1();
             std::memset(info.TextureFilename, 0, sizeof(info.TextureFilename));
             std::memcpy(info.TextureFilename, tex.constData(), std::min<int>(tex.size(), int(sizeof(info.TextureFilename))));
             info.StartSize = float(dataObj.value("START_SIZE").toDouble());
@@ -2774,12 +3090,18 @@ namespace {
                 obj["BURST_SIZE"] = int(info->BurstSize);
 
                 auto volToJson = [](const W3dVolumeRandomizerStruct& v) {
-                    return ordered_json{
+                    ordered_json o{
                         {"CLASS_ID", int(v.ClassID)},
                         {"VALUE1", v.Value1},
                         {"VALUE2", v.Value2},
                         {"VALUE3", v.Value3}
                     };
+                    QJsonArray reserved;
+                    for (int i = 0; i < 4; ++i) {
+                        reserved.append(int(v.reserved[i]));
+                    }
+                    o["RESERVED"] = reserved;
+                    return o;
                     };
 
                 obj["CREATION_VOLUME"] = volToJson(info->CreationVolume);
@@ -2790,18 +3112,29 @@ namespace {
                 ordered_json shader;
                 shader["DEPTH_COMPARE"] = info->Shader.DepthCompare;
                 shader["DEPTH_MASK"] = info->Shader.DepthMask;
+                shader["COLOR_MASK"] = info->Shader.ColorMask;
                 shader["DEST_BLEND"] = info->Shader.DestBlend;
+                shader["FOG_FUNC"] = info->Shader.FogFunc;
                 shader["PRI_GRADIENT"] = info->Shader.PriGradient;
                 shader["SEC_GRADIENT"] = info->Shader.SecGradient;
                 shader["SRC_BLEND"] = info->Shader.SrcBlend;
                 shader["TEXTURING"] = info->Shader.Texturing;
                 shader["DETAIL_COLOR_FUNC"] = info->Shader.DetailColorFunc;
                 shader["DETAIL_ALPHA_FUNC"] = info->Shader.DetailAlphaFunc;
+                shader["SHADER_PRESET"] = info->Shader.ShaderPreset;
                 shader["ALPHA_TEST"] = info->Shader.AlphaTest;
+                shader["POST_DETAIL_COLOR_FUNC"] = info->Shader.PostDetailColorFunc;
+                shader["POST_DETAIL_ALPHA_FUNC"] = info->Shader.PostDetailAlphaFunc;
+                shader["PAD"] = info->Shader.pad[0];
                 obj["SHADER"] = shader;
 
                 obj["RENDER_MODE"] = int(info->RenderMode);
                 obj["FRAME_MODE"] = int(info->FrameMode);
+                QJsonArray reserved;
+                for (int i = 0; i < 6; ++i) {
+                    reserved.append(int(info->reserved[i]));
+                }
+                obj["RESERVED"] = reserved;
             }
             return obj;
         }
@@ -2816,6 +3149,10 @@ namespace {
                 v.Value1 = float(o.value("VALUE1").toDouble());
                 v.Value2 = float(o.value("VALUE2").toDouble());
                 v.Value3 = float(o.value("VALUE3").toDouble());
+                const QJsonArray reserved = o.value("RESERVED").toArray();
+                for (int i = 0; i < 4 && i < reserved.size(); ++i) {
+                    v.reserved[i] = uint32_t(reserved[i].toInt());
+                }
                 return v;
                 };
 
@@ -2826,16 +3163,26 @@ namespace {
             ordered_json shader = dataObj.value("SHADER").toObject();
             info.Shader.DepthCompare = shader.value("DEPTH_COMPARE").toInt();
             info.Shader.DepthMask = shader.value("DEPTH_MASK").toInt();
+            info.Shader.ColorMask = shader.value("COLOR_MASK").toInt();
             info.Shader.DestBlend = shader.value("DEST_BLEND").toInt();
+            info.Shader.FogFunc = shader.value("FOG_FUNC").toInt();
             info.Shader.PriGradient = shader.value("PRI_GRADIENT").toInt();
             info.Shader.SecGradient = shader.value("SEC_GRADIENT").toInt();
             info.Shader.SrcBlend = shader.value("SRC_BLEND").toInt();
             info.Shader.Texturing = shader.value("TEXTURING").toInt();
             info.Shader.DetailColorFunc = shader.value("DETAIL_COLOR_FUNC").toInt();
             info.Shader.DetailAlphaFunc = shader.value("DETAIL_ALPHA_FUNC").toInt();
+            info.Shader.ShaderPreset = shader.value("SHADER_PRESET").toInt();
             info.Shader.AlphaTest = shader.value("ALPHA_TEST").toInt();
+            info.Shader.PostDetailColorFunc = shader.value("POST_DETAIL_COLOR_FUNC").toInt();
+            info.Shader.PostDetailAlphaFunc = shader.value("POST_DETAIL_ALPHA_FUNC").toInt();
+            info.Shader.pad[0] = uint8_t(shader.value("PAD").toInt());
             info.RenderMode = dataObj.value("RENDER_MODE").toInt();
             info.FrameMode = dataObj.value("FRAME_MODE").toInt();
+            const QJsonArray reserved = dataObj.value("RESERVED").toArray();
+            for (int i = 0; i < 6 && i < reserved.size(); ++i) {
+                info.reserved[i] = uint32_t(reserved[i].toInt());
+            }
             item.length = sizeof(W3dEmitterInfoStructV2);
             item.data.resize(item.length);
             std::memcpy(item.data.data(), &info, sizeof(info));
@@ -3064,6 +3411,9 @@ namespace {
                 obj["KEYFRAME_COUNT"] = int(h->KeyframeCount);
                 obj["RANDOM"] = h->Random;
                 obj["ORIENTATION_RANDOM"] = h->OrientationRandom;
+                QJsonArray reserved;
+                for (int i = 0; i < 1; ++i) reserved.append(int(h->Reserved[i]));
+                obj["RESERVED"] = reserved;
                 const float* f = reinterpret_cast<const float*>(item.data.data() + sizeof(W3dEmitterRotationHeaderStruct));
                 size_t pairs = (item.data.size() - sizeof(W3dEmitterRotationHeaderStruct)) / (2 * sizeof(float));
                 QJsonArray arr;
@@ -3080,7 +3430,16 @@ namespace {
             h.Random = float(dataObj.value("RANDOM").toDouble());
             h.OrientationRandom = float(dataObj.value("ORIENTATION_RANDOM").toDouble());
             QJsonArray arr = dataObj.value("KEYS").toArray();
-            h.KeyframeCount = arr.size() > 0 ? arr.size() - 1 : 0;
+            if (dataObj.contains("KEYFRAME_COUNT")) {
+                h.KeyframeCount = uint32_t(dataObj.value("KEYFRAME_COUNT").toInt());
+            }
+            else {
+                h.KeyframeCount = uint32_t(arr.size());
+            }
+            QJsonArray reserved = dataObj.value("RESERVED").toArray();
+            for (int i = 0; i < 1 && i < reserved.size(); ++i) {
+                h.Reserved[i] = uint32_t(reserved[i].toInt());
+            }
             size_t total = sizeof(W3dEmitterRotationHeaderStruct) + arr.size() * 2 * sizeof(float);
             item.data.resize(total);
             item.length = uint32_t(total);
@@ -3101,6 +3460,9 @@ namespace {
                 const auto* h = reinterpret_cast<const W3dEmitterFrameHeaderStruct*>(item.data.data());
                 obj["KEYFRAME_COUNT"] = int(h->KeyframeCount);
                 obj["RANDOM"] = h->Random;
+                QJsonArray reserved;
+                for (int i = 0; i < 2; ++i) reserved.append(int(h->Reserved[i]));
+                obj["RESERVED"] = reserved;
                 const auto* keys = reinterpret_cast<const W3dEmitterFrameKeyframeStruct*>(item.data.data() + sizeof(W3dEmitterFrameHeaderStruct));
                 size_t count = (item.data.size() - sizeof(W3dEmitterFrameHeaderStruct)) / sizeof(W3dEmitterFrameKeyframeStruct);
                 QJsonArray arr;
@@ -3116,7 +3478,16 @@ namespace {
             W3dEmitterFrameHeaderStruct h{};
             h.Random = float(dataObj.value("RANDOM").toDouble());
             QJsonArray arr = dataObj.value("KEYS").toArray();
-            h.KeyframeCount = arr.size() > 0 ? arr.size() - 1 : 0;
+            if (dataObj.contains("KEYFRAME_COUNT")) {
+                h.KeyframeCount = uint32_t(dataObj.value("KEYFRAME_COUNT").toInt());
+            }
+            else {
+                h.KeyframeCount = uint32_t(arr.size());
+            }
+            QJsonArray reserved = dataObj.value("RESERVED").toArray();
+            for (int i = 0; i < 2 && i < reserved.size(); ++i) {
+                h.Reserved[i] = uint32_t(reserved[i].toInt());
+            }
             size_t total = sizeof(W3dEmitterFrameHeaderStruct) + arr.size() * sizeof(W3dEmitterFrameKeyframeStruct);
             item.data.resize(total);
             item.length = uint32_t(total);
@@ -3137,6 +3508,9 @@ namespace {
                 const auto* h = reinterpret_cast<const W3dEmitterBlurTimeHeaderStruct*>(item.data.data());
                 obj["KEYFRAME_COUNT"] = int(h->KeyframeCount);
                 obj["RANDOM"] = h->Random;
+                QJsonArray reserved;
+                for (int i = 0; i < 1; ++i) reserved.append(int(h->Reserved[i]));
+                obj["RESERVED"] = reserved;
                 const auto* keys = reinterpret_cast<const W3dEmitterBlurTimeKeyframeStruct*>(item.data.data() + sizeof(W3dEmitterBlurTimeHeaderStruct));
                 size_t count = (item.data.size() - sizeof(W3dEmitterBlurTimeHeaderStruct)) / sizeof(W3dEmitterBlurTimeKeyframeStruct);
                 QJsonArray arr;
@@ -3152,7 +3526,16 @@ namespace {
             W3dEmitterBlurTimeHeaderStruct h{};
             h.Random = float(dataObj.value("RANDOM").toDouble());
             QJsonArray arr = dataObj.value("KEYS").toArray();
-            h.KeyframeCount = arr.size() > 0 ? arr.size() - 1 : 0;
+            if (dataObj.contains("KEYFRAME_COUNT")) {
+                h.KeyframeCount = uint32_t(dataObj.value("KEYFRAME_COUNT").toInt());
+            }
+            else {
+                h.KeyframeCount = uint32_t(arr.size());
+            }
+            QJsonArray reserved = dataObj.value("RESERVED").toArray();
+            for (int i = 0; i < 1 && i < reserved.size(); ++i) {
+                h.Reserved[i] = uint32_t(reserved[i].toInt());
+            }
             size_t total = sizeof(W3dEmitterBlurTimeHeaderStruct) + arr.size() * sizeof(W3dEmitterBlurTimeKeyframeStruct);
             item.data.resize(total);
             item.length = uint32_t(total);
@@ -3213,7 +3596,7 @@ namespace {
             ordered_json obj;
             if (item.data.size() >= sizeof(W3dAggregateInfoStruct)) {
                 const auto* hdr = reinterpret_cast<const W3dAggregateInfoStruct*>(item.data.data());
-                obj["BASE_MODEL_NAME"] = QString::fromUtf8(hdr->BaseModelName, int(strnlen(hdr->BaseModelName, W3D_NAME_LEN * 2)));
+                obj["BASE_MODEL_NAME"] = QString::fromLatin1(hdr->BaseModelName, W3D_NAME_LEN * 2);
                 obj["SUBOBJECT_COUNT"] = int(hdr->SubobjectCount);
                 QJsonArray subsArr;
                 const size_t entrySize = sizeof(W3dAggregateSubobjectStruct);
@@ -3222,8 +3605,8 @@ namespace {
                 const auto* subs = reinterpret_cast<const W3dAggregateSubobjectStruct*>(item.data.data() + sizeof(W3dAggregateInfoStruct));
                 for (size_t i = 0; i < n; ++i) {
                     ordered_json so;
-                    so["SUBOBJECT_NAME"] = QString::fromUtf8(subs[i].SubobjectName, int(strnlen(subs[i].SubobjectName, W3D_NAME_LEN * 2)));
-                    so["BONE_NAME"] = QString::fromUtf8(subs[i].BoneName, int(strnlen(subs[i].BoneName, W3D_NAME_LEN * 2)));
+                    so["SUBOBJECT_NAME"] = QString::fromLatin1(subs[i].SubobjectName, W3D_NAME_LEN * 2);
+                    so["BONE_NAME"] = QString::fromLatin1(subs[i].BoneName, W3D_NAME_LEN * 2);
                     subsArr.append(so);
                 }
                 obj["SUBOBJECTS"] = subsArr;
@@ -3233,18 +3616,25 @@ namespace {
 
         void fromJson(const ordered_json& dataObj, ChunkItem& item) const override {
             W3dAggregateInfoStruct hdr{};
-            QByteArray base = dataObj.value("BASE_MODEL_NAME").toString().toUtf8();
+            QByteArray base = dataObj.value("BASE_MODEL_NAME").toString().toLatin1();
             std::memset(hdr.BaseModelName, 0, sizeof(hdr.BaseModelName));
             std::memcpy(hdr.BaseModelName, base.constData(), std::min<int>(base.size(), int(sizeof(hdr.BaseModelName))));
             QJsonArray arr = dataObj.value("SUBOBJECTS").toArray();
-            hdr.SubobjectCount = arr.size();
-            std::vector<W3dAggregateSubobjectStruct> subs(hdr.SubobjectCount);
-            for (int i = 0; i < arr.size(); ++i) {
+            int subobjectCount = dataObj.value("SUBOBJECT_COUNT").toInt(arr.size());
+            if (subobjectCount < arr.size()) {
+                subobjectCount = arr.size();
+            }
+            if (subobjectCount < 0) {
+                subobjectCount = 0;
+            }
+            hdr.SubobjectCount = static_cast<uint32_t>(subobjectCount);
+            std::vector<W3dAggregateSubobjectStruct> subs(static_cast<size_t>(hdr.SubobjectCount));
+            for (int i = 0; i < arr.size() && i < subobjectCount; ++i) {
                 ordered_json so = arr[i].toObject();
-                QByteArray sn = so.value("SUBOBJECT_NAME").toString().toUtf8();
+                QByteArray sn = so.value("SUBOBJECT_NAME").toString().toLatin1();
                 std::memset(subs[i].SubobjectName, 0, sizeof(subs[i].SubobjectName));
                 std::memcpy(subs[i].SubobjectName, sn.constData(), std::min<int>(sn.size(), int(sizeof(subs[i].SubobjectName))));
-                QByteArray bn = so.value("BONE_NAME").toString().toUtf8();
+                QByteArray bn = so.value("BONE_NAME").toString().toLatin1();
                 std::memset(subs[i].BoneName, 0, sizeof(subs[i].BoneName));
                 std::memcpy(subs[i].BoneName, bn.constData(), std::min<int>(bn.size(), int(sizeof(subs[i].BoneName))));
             }
@@ -3357,8 +3747,8 @@ namespace {
                 const auto* h = reinterpret_cast<const W3dHLodHeaderStruct*>(item.data.data());
                 obj["VERSION"] = int(h->Version);
                 obj["LOD_COUNT"] = int(h->LodCount);
-                obj["NAME"] = QString::fromUtf8(h->Name, int(strnlen(h->Name, W3D_NAME_LEN)));
-                obj["HIERARCHY_NAME"] = QString::fromUtf8(h->HierarchyName, int(strnlen(h->HierarchyName, W3D_NAME_LEN)));
+                obj["NAME"] = QString::fromLatin1(h->Name, W3D_NAME_LEN);
+                obj["HIERARCHY_NAME"] = QString::fromLatin1(h->HierarchyName, W3D_NAME_LEN);
             }
             return obj;
         }
@@ -3367,10 +3757,10 @@ namespace {
             W3dHLodHeaderStruct h{};
             h.Version = dataObj.value("VERSION").toInt();
             h.LodCount = dataObj.value("LOD_COUNT").toInt();
-            QByteArray name = dataObj.value("NAME").toString().toUtf8();
+            QByteArray name = dataObj.value("NAME").toString().toLatin1();
             std::memset(h.Name, 0, sizeof(h.Name));
             std::memcpy(h.Name, name.constData(), std::min<int>(name.size(), W3D_NAME_LEN));
-            QByteArray hier = dataObj.value("HIERARCHY_NAME").toString().toUtf8();
+            QByteArray hier = dataObj.value("HIERARCHY_NAME").toString().toLatin1();
             std::memset(h.HierarchyName, 0, sizeof(h.HierarchyName));
             std::memcpy(h.HierarchyName, hier.constData(), std::min<int>(hier.size(), W3D_NAME_LEN));
             item.length = sizeof(W3dHLodHeaderStruct);
@@ -3406,7 +3796,7 @@ namespace {
             if (item.data.size() >= sizeof(W3dHLodSubObjectStruct)) {
                 const auto* h = reinterpret_cast<const W3dHLodSubObjectStruct*>(item.data.data());
                 obj["BONE_INDEX"] = int(h->BoneIndex);
-                obj["NAME"] = QString::fromUtf8(h->Name, int(strnlen(h->Name, W3D_NAME_LEN * 2)));
+                obj["NAME"] = QString::fromLatin1(h->Name, W3D_NAME_LEN * 2);
             }
             return obj;
         }
@@ -3414,7 +3804,7 @@ namespace {
         void fromJson(const ordered_json& dataObj, ChunkItem& item) const override {
             W3dHLodSubObjectStruct h{};
             h.BoneIndex = dataObj.value("BONE_INDEX").toInt();
-            QByteArray name = dataObj.value("NAME").toString().toUtf8();
+            QByteArray name = dataObj.value("NAME").toString().toLatin1();
             std::memset(h.Name, 0, sizeof(h.Name));
             std::memcpy(h.Name, name.constData(), std::min<int>(name.size(), int(sizeof(h.Name))));
             item.length = sizeof(W3dHLodSubObjectStruct);
@@ -3641,34 +4031,58 @@ namespace {
     struct DazzleNameSerializer : ChunkSerializer {
         ordered_json toJson(const ChunkItem& item) const override {
             ordered_json obj;
-            QString text = QString::fromUtf8(reinterpret_cast<const char*>(item.data.data()), int(item.data.size()));
+            QString text = QString::fromLatin1(reinterpret_cast<const char*>(item.data.data()), int(item.data.size()));
             obj["NAME"] = text;
             return obj;
         }
 
         void fromJson(const ordered_json& dataObj, ChunkItem& item) const override {
-            QByteArray text = dataObj.value("NAME").toString().toUtf8();
-            item.length = uint32_t(text.size() + 1);
+            QByteArray text = dataObj.value("NAME").toString().toLatin1();
+            uint32_t outLen = item.length;
+            if (outLen == 0) {
+                outLen = static_cast<uint32_t>(text.size());
+                if (text.isEmpty() || text.back() != '\0') {
+                    outLen += 1;
+                }
+            }
+            item.length = outLen;
             item.data.resize(item.length);
-            std::memcpy(item.data.data(), text.constData(), text.size());
-            item.data[text.size()] = 0;
+            const int copyLen = std::min<int>(int(item.length), text.size());
+            if (copyLen > 0) {
+                std::memcpy(item.data.data(), text.constData(), copyLen);
+            }
+            if (copyLen < int(item.length)) {
+                std::memset(item.data.data() + copyLen, 0, item.length - copyLen);
+            }
         }
     };
 
     struct DazzleTypenameSerializer : ChunkSerializer {
         ordered_json toJson(const ChunkItem& item) const override {
             ordered_json obj;
-            QString text = QString::fromUtf8(reinterpret_cast<const char*>(item.data.data()), int(item.data.size()));
+            QString text = QString::fromLatin1(reinterpret_cast<const char*>(item.data.data()), int(item.data.size()));
             obj["TYPENAME"] = text;
             return obj;
         }
 
         void fromJson(const ordered_json& dataObj, ChunkItem& item) const override {
-            QByteArray text = dataObj.value("TYPENAME").toString().toUtf8();
-            item.length = uint32_t(text.size() + 1);
+            QByteArray text = dataObj.value("TYPENAME").toString().toLatin1();
+            uint32_t outLen = item.length;
+            if (outLen == 0) {
+                outLen = static_cast<uint32_t>(text.size());
+                if (text.isEmpty() || text.back() != '\0') {
+                    outLen += 1;
+                }
+            }
+            item.length = outLen;
             item.data.resize(item.length);
-            std::memcpy(item.data.data(), text.constData(), text.size());
-            item.data[text.size()] = 0;
+            const int copyLen = std::min<int>(int(item.length), text.size());
+            if (copyLen > 0) {
+                std::memcpy(item.data.data(), text.constData(), copyLen);
+            }
+            if (copyLen < int(item.length)) {
+                std::memset(item.data.data() + copyLen, 0, item.length - copyLen);
+            }
         }
     };
 
@@ -3678,8 +4092,13 @@ namespace {
             if (item.data.size() >= sizeof(W3dSoundRObjHeaderStruct)) {
                 const auto* h = reinterpret_cast<const W3dSoundRObjHeaderStruct*>(item.data.data());
                 obj["VERSION"] = int(h->Version);
-                obj["NAME"] = QString::fromUtf8(h->Name, int(strnlen(h->Name, W3D_NAME_LEN)));
+                obj["NAME"] = QString::fromLatin1(h->Name, W3D_NAME_LEN);
                 obj["FLAGS"] = int(h->Flags);
+                QJsonArray padding;
+                for (int i = 0; i < 8; ++i) {
+                    padding.append(int(h->Padding[i]));
+                }
+                obj["PADDING"] = padding;
             }
             return obj;
         }
@@ -3687,10 +4106,14 @@ namespace {
         void fromJson(const ordered_json& dataObj, ChunkItem& item) const override {
             W3dSoundRObjHeaderStruct h{};
             h.Version = dataObj.value("VERSION").toInt();
-            QByteArray name = dataObj.value("NAME").toString().toUtf8();
+            QByteArray name = dataObj.value("NAME").toString().toLatin1();
             std::memset(h.Name, 0, sizeof(h.Name));
             std::memcpy(h.Name, name.constData(), std::min<int>(name.size(), W3D_NAME_LEN));
             h.Flags = dataObj.value("FLAGS").toInt();
+            QJsonArray padding = dataObj.value("PADDING").toArray();
+            for (int i = 0; i < 8 && i < padding.size(); ++i) {
+                h.Padding[i] = uint32_t(padding[i].toInt());
+            }
             item.length = sizeof(W3dSoundRObjHeaderStruct);
             item.data.resize(item.length);
             std::memcpy(item.data.data(), &h, sizeof(h));

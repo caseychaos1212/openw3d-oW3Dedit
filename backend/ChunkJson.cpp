@@ -95,6 +95,25 @@ bool shouldUseSerializerForItem(const ChunkItem& item) {
             return false;
         }
     }
+
+    // SOUNDROBJ_DEFINITION embeds another chunk dialect where IDs overlap with
+    // standard W3D chunks. Force raw payloads in that subtree to avoid
+    // misapplying normal W3D serializers.
+    for (const ChunkItem* p = item.parent; p != nullptr; p = p->parent) {
+        if (p->id == 0x0A02) {
+            return false;
+        }
+    }
+
+    // Some .ddb resources embed another chunk dialect rooted at 0x00050008
+    // where IDs (e.g. 0x0101) do not map to standard W3D structures.
+    // Use raw payloads in this subtree to preserve bytes.
+    for (const ChunkItem* p = item.parent; p != nullptr; p = p->parent) {
+        if (p->id == 0x00050008u) {
+            return false;
+        }
+    }
+
     return true;
 }
 
@@ -125,6 +144,9 @@ ordered_json ChunkJson::toJson(const ChunkItem& item, JsonSerializationMode mode
     obj["SUBCHUNKS"] = item.hasSubChunks;
     obj["CHUNK_ID"] = item.id;
     obj["LENGTH"] = item.length;
+    if (item.isMicro) {
+        obj["IS_MICRO"] = true;
+    }
 
     if (!item.children.empty()) {
         ordered_json arr = ordered_json::array();
@@ -174,6 +196,12 @@ std::shared_ptr<ChunkItem> ChunkJson::fromJson(
         }
         if (!readBoolField(obj, "SUBCHUNKS", item->hasSubChunks)) {
             return nullptr;
+        }
+        if (obj.contains("IS_MICRO")) {
+            if (!obj.at("IS_MICRO").is_boolean()) {
+                return nullptr;
+            }
+            item->isMicro = obj.at("IS_MICRO").get<bool>();
         }
         if (obj.contains("CHUNK_NAME")) {
             if (!obj.at("CHUNK_NAME").is_string()) {

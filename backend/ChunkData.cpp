@@ -4,6 +4,7 @@
 #include <memory>
 #include <vector>
 #include <filesystem>
+#include <algorithm>
 #include <nlohmann/json.hpp>
 
 using ordered_json = nlohmann::ordered_json;
@@ -125,6 +126,66 @@ static bool SerializeChunk(ChunkItem& chunk, std::vector<uint8_t>& out) {
     return true;
 }
 
+static bool SerializeChunkReadOnly(const ChunkItem& chunk, std::vector<uint8_t>& out) {
+    out.clear();
+
+    if (chunk.isMicro) {
+        if (chunk.data.size() > 0xFF) {
+            return false;
+        }
+        out.reserve(2 + chunk.data.size());
+        out.push_back(static_cast<uint8_t>(chunk.id & 0xFF));
+        out.push_back(static_cast<uint8_t>(chunk.data.size() & 0xFF));
+        out.insert(out.end(), chunk.data.begin(), chunk.data.end());
+        return true;
+    }
+
+    std::vector<uint8_t> payload;
+    if (!chunk.children.empty()) {
+        std::vector<uint8_t> childBuffer;
+        for (const auto& child : chunk.children) {
+            if (!child) {
+                continue;
+            }
+            if (!SerializeChunkReadOnly(*child, childBuffer)) {
+                return false;
+            }
+            payload.insert(payload.end(), childBuffer.begin(), childBuffer.end());
+        }
+    }
+    else {
+        payload = chunk.data;
+    }
+
+    out.reserve(8 + payload.size());
+    AppendUint32LE(out, chunk.id);
+    const bool hasChildren = !chunk.children.empty();
+    const bool markHasSubChunks = chunk.hasSubChunks || (hasChildren && !IsForcedWrapper(chunk.id));
+    const uint32_t lengthField =
+        static_cast<uint32_t>(payload.size()) | (markHasSubChunks ? 0x80000000u : 0u);
+    AppendUint32LE(out, lengthField);
+    out.insert(out.end(), payload.begin(), payload.end());
+    return true;
+}
+
+static bool RebuildPayloadFromChildren(
+    const std::vector<std::shared_ptr<ChunkItem>>& children,
+    std::vector<uint8_t>& out)
+{
+    out.clear();
+    std::vector<uint8_t> childBuffer;
+    for (const auto& childPtr : children) {
+        if (!childPtr) {
+            continue;
+        }
+        if (!SerializeChunkReadOnly(*childPtr, childBuffer)) {
+            return false;
+        }
+        out.insert(out.end(), childBuffer.begin(), childBuffer.end());
+    }
+    return true;
+}
+
 
 bool ChunkData::loadFromFile(const std::string& filename) {
     // Ensure previous data does not persist between loads
@@ -186,7 +247,20 @@ bool ChunkData::loadFromFile(const std::string& filename) {
         if (wraps) {
             std::string buf(reinterpret_cast<char*>(chunk->data.data()), chunk->length);
             std::istringstream subStream(buf);
-            parseChunk(subStream, chunk);
+            const bool subOk = parseChunk(subStream, chunk);
+            bool keepParsedChildren = false;
+            if (subOk && !chunk->children.empty()) {
+                std::vector<uint8_t> rebuiltPayload;
+                if (RebuildPayloadFromChildren(chunk->children, rebuiltPayload)
+                    && rebuiltPayload.size() == chunk->data.size()
+                    && std::equal(rebuiltPayload.begin(), rebuiltPayload.end(), chunk->data.begin()))
+                {
+                    keepParsedChildren = true;
+                }
+            }
+            if (!keepParsedChildren) {
+                chunk->children.clear();
+            }
         }
 
 
@@ -211,10 +285,9 @@ bool ChunkData::parseChunk(std::istream& stream, std::shared_ptr<ChunkItem>& par
         DATA_WRAPPER = 0x03150809, // legacy data wrapper
         SOUNDROBJ_DEF = 0x0A02,
         SOUND_RENDER_DEF = 0x0100,
-        SOUND_RENDER_DEF_EXT = 0x0200,
-        SPHERE_DEF = 0x0741,
-        RING_DEF = 0x0742;
+        SOUND_RENDER_DEF_EXT = 0x0200;
 
+    bool parseOk = true;
     while (stream && stream.peek() != EOF) {
         auto pos = stream.tellg();
 
@@ -238,7 +311,10 @@ bool ChunkData::parseChunk(std::istream& stream, std::shared_ptr<ChunkItem>& par
 
         if (microMode) {
             // need at least 2 bytes for micro ID + micro length
-            if (stream.rdbuf()->in_avail() < 2) break;
+            if (stream.rdbuf()->in_avail() < 2) {
+                parseOk = false;
+                break;
+            }
             uint8_t mid, mlen;
             stream.read(reinterpret_cast<char*>(&mid), 1);
             stream.read(reinterpret_cast<char*>(&mlen), 1);
@@ -247,6 +323,7 @@ bool ChunkData::parseChunk(std::istream& stream, std::shared_ptr<ChunkItem>& par
                 std::cerr << "Truncated microchunk at " << pos
                     << " id=0x" << std::hex << int(mid) << std::dec
                     << " size=" << int(mlen) << "\n";
+                parseOk = false;
                 break;
             }
 
@@ -263,7 +340,10 @@ bool ChunkData::parseChunk(std::istream& stream, std::shared_ptr<ChunkItem>& par
         }
 
         // 2) otherwise it's a normal 4 byte ID + 4 byte length + payload
-        if (stream.rdbuf()->in_avail() < 8) break;
+        if (stream.rdbuf()->in_avail() < 8) {
+            parseOk = false;
+            break;
+        }
         auto child = std::make_shared<ChunkItem>();
         if (!readUint32(stream, child->id)) break;
 
@@ -277,6 +357,7 @@ bool ChunkData::parseChunk(std::istream& stream, std::shared_ptr<ChunkItem>& par
             std::cerr << "Truncated child chunk at " << pos
                 << " ID=0x" << std::hex << child->id << std::dec
                 << " expected=" << child->length << "\n";
+            parseOk = false;
             break;
         }
 
@@ -287,15 +368,37 @@ bool ChunkData::parseChunk(std::istream& stream, std::shared_ptr<ChunkItem>& par
         child->parent = parent.get();
         parent->children.push_back(child);
 
-        // 3) recurse only if MSB was set
-        if (child->hasSubChunks) {
+        // 3) recurse when MSB was set or when ID is a known wrapper that
+        // sometimes omits the subchunk bit in real assets.
+        const bool wrapsById = IsForcedWrapper(
+            child->id,
+            parent ? parent->id : 0u);
+        const bool shouldAttemptSubParse = child->hasSubChunks || wrapsById;
+        if (shouldAttemptSubParse) {
             std::string buf(reinterpret_cast<char*>(child->data.data()), child->length);
             std::istringstream subStream(buf);
-            parseChunk(subStream, child);
+            const bool subOk = parseChunk(subStream, child);
+
+            // Keep parsed children only when that parse is lossless:
+            // serializing parsed children must exactly reproduce the raw payload.
+            bool keepParsedChildren = false;
+            if (subOk && !child->children.empty()) {
+                std::vector<uint8_t> rebuiltPayload;
+                if (RebuildPayloadFromChildren(child->children, rebuiltPayload)
+                    && rebuiltPayload.size() == child->data.size()
+                    && std::equal(rebuiltPayload.begin(), rebuiltPayload.end(), child->data.begin()))
+                {
+                    keepParsedChildren = true;
+                }
+            }
+
+            if (!keepParsedChildren) {
+                child->children.clear();
+            }
         }
     }
 
-    return true;
+    return parseOk;
 }
 
 bool ChunkData::saveToFile(const std::string& filename) {

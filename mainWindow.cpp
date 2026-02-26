@@ -179,6 +179,768 @@ static uint8_t ComboValue(const QComboBox* combo) {
 Q_DECLARE_METATYPE(void*)
 
 namespace {
+struct MixEntryInfo {
+    uint32_t id = 0;      // CRC/hash in the mix directory.
+    uint32_t offset = 0;  // Absolute offset in the archive.
+    uint32_t size = 0;
+    QString name;
+};
+
+struct MixArchiveInfo {
+    std::vector<MixEntryInfo> entries;
+    bool isMix1 = false;
+    bool hasNames = false;
+    uint32_t flags = 0;
+    bool hasFlags = false;
+};
+
+static bool ReadUInt16LE(const QByteArray& bytes, qsizetype offset, uint16_t& out) {
+    if (offset < 0 || (offset + 2) > bytes.size()) {
+        return false;
+    }
+    const auto* p = reinterpret_cast<const unsigned char*>(bytes.constData() + offset);
+    out = static_cast<uint16_t>(p[0]) | (static_cast<uint16_t>(p[1]) << 8);
+    return true;
+}
+
+static bool ReadUInt32LE(const QByteArray& bytes, qsizetype offset, uint32_t& out) {
+    if (offset < 0 || (offset + 4) > bytes.size()) {
+        return false;
+    }
+    const auto* p = reinterpret_cast<const unsigned char*>(bytes.constData() + offset);
+    out = static_cast<uint32_t>(p[0])
+        | (static_cast<uint32_t>(p[1]) << 8)
+        | (static_cast<uint32_t>(p[2]) << 16)
+        | (static_cast<uint32_t>(p[3]) << 24);
+    return true;
+}
+
+static bool ParseMix1Archive(const QByteArray& bytes, MixArchiveInfo& outArchive, QString* outError) {
+    outArchive = {};
+    if (bytes.size() < 16) {
+        if (outError) {
+            *outError = "File is too small to be a valid MIX1 archive.";
+        }
+        return false;
+    }
+    if (std::memcmp(bytes.constData(), "MIX1", 4) != 0) {
+        if (outError) {
+            *outError = "Missing MIX1 signature.";
+        }
+        return false;
+    }
+
+    uint32_t headerOffset = 0;
+    uint32_t namesOffset = 0;
+    if (!ReadUInt32LE(bytes, 4, headerOffset) || !ReadUInt32LE(bytes, 8, namesOffset)) {
+        if (outError) {
+            *outError = "MIX1 header is truncated.";
+        }
+        return false;
+    }
+    if (headerOffset > static_cast<uint32_t>(bytes.size() - 4)
+        || namesOffset > static_cast<uint32_t>(bytes.size() - 4)) {
+        if (outError) {
+            *outError = "MIX1 header offsets are invalid.";
+        }
+        return false;
+    }
+
+    uint32_t fileCount32 = 0;
+    if (!ReadUInt32LE(bytes, static_cast<qsizetype>(headerOffset), fileCount32)) {
+        if (outError) {
+            *outError = "Failed to read MIX1 file count.";
+        }
+        return false;
+    }
+    if (fileCount32 == 0) {
+        if (outError) {
+            *outError = "MIX1 archive has no entries.";
+        }
+        return false;
+    }
+
+    const qsizetype fileCount = static_cast<qsizetype>(fileCount32);
+    const qsizetype indexStart = static_cast<qsizetype>(headerOffset) + 4;
+    const qsizetype indexBytes = fileCount * 12;
+    if (indexStart + indexBytes > bytes.size()) {
+        if (outError) {
+            *outError = "MIX1 directory is truncated.";
+        }
+        return false;
+    }
+
+    outArchive.entries.reserve(static_cast<std::size_t>(fileCount));
+    qsizetype pos = indexStart;
+    for (qsizetype i = 0; i < fileCount; ++i) {
+        MixEntryInfo entry;
+        if (!ReadUInt32LE(bytes, pos, entry.id)
+            || !ReadUInt32LE(bytes, pos + 4, entry.offset)
+            || !ReadUInt32LE(bytes, pos + 8, entry.size)) {
+            if (outError) {
+                *outError = "MIX1 directory is truncated.";
+            }
+            return false;
+        }
+        pos += 12;
+
+        if (entry.offset > static_cast<uint32_t>(bytes.size())
+            || entry.size > static_cast<uint32_t>(bytes.size() - static_cast<qsizetype>(entry.offset))) {
+            if (outError) {
+                *outError = "MIX1 entry has an invalid offset/size.";
+            }
+            return false;
+        }
+        outArchive.entries.push_back(entry);
+    }
+
+    uint32_t namesCount32 = 0;
+    if (ReadUInt32LE(bytes, static_cast<qsizetype>(namesOffset), namesCount32)
+        && namesCount32 == fileCount32) {
+        qsizetype namePos = static_cast<qsizetype>(namesOffset) + 4;
+        bool namesOk = true;
+        for (qsizetype i = 0; i < fileCount; ++i) {
+            if (namePos >= bytes.size()) {
+                namesOk = false;
+                break;
+            }
+
+            const uint8_t nameLen = static_cast<uint8_t>(bytes.at(namePos));
+            ++namePos;
+            if (nameLen == 0 || (namePos + nameLen) > bytes.size()) {
+                namesOk = false;
+                break;
+            }
+
+            QByteArray rawName = bytes.mid(namePos, nameLen);
+            namePos += nameLen;
+
+            const int nulIndex = rawName.indexOf('\0');
+            if (nulIndex >= 0) {
+                rawName.truncate(nulIndex);
+            }
+            outArchive.entries[static_cast<std::size_t>(i)].name = QString::fromLatin1(rawName);
+        }
+
+        if (namesOk) {
+            outArchive.hasNames = true;
+        }
+    }
+
+    outArchive.isMix1 = true;
+    return true;
+}
+
+static bool ParseClassicMixArchive(const QByteArray& bytes, MixArchiveInfo& outArchive, QString* outError) {
+    outArchive = {};
+    if (bytes.size() < 6) {
+        if (outError) {
+            *outError = "File is too small to be a valid MIX archive.";
+        }
+        return false;
+    }
+
+    qsizetype cursor = 0;
+    uint32_t firstWord = 0;
+    if (!ReadUInt32LE(bytes, 0, firstWord)) {
+        if (outError) {
+            *outError = "Failed to read MIX header.";
+        }
+        return false;
+    }
+
+    constexpr uint32_t kMixFlagChecksum = 0x00010000u;
+    constexpr uint32_t kMixFlagEncrypted = 0x00020000u;
+    constexpr uint32_t kKnownMixFlags = kMixFlagChecksum | kMixFlagEncrypted;
+
+    if ((firstWord & kKnownMixFlags) != 0u && (firstWord & ~kKnownMixFlags) == 0u) {
+        outArchive.hasFlags = true;
+        outArchive.flags = firstWord;
+        cursor = 4;
+        if ((outArchive.flags & kMixFlagEncrypted) != 0u) {
+            if (outError) {
+                *outError = "Encrypted MIX archives are not supported.";
+            }
+            return false;
+        }
+    }
+
+    uint16_t fileCount = 0;
+    uint32_t dataSize = 0;
+    if (!ReadUInt16LE(bytes, cursor, fileCount) || !ReadUInt32LE(bytes, cursor + 2, dataSize)) {
+        if (outError) {
+            *outError = "MIX header is truncated.";
+        }
+        return false;
+    }
+    if (fileCount == 0) {
+        if (outError) {
+            *outError = "MIX archive has no entries.";
+        }
+        return false;
+    }
+
+    const qsizetype indexStart = cursor + 6;
+    const qsizetype entryBytes = static_cast<qsizetype>(fileCount) * 12;
+    if (indexStart + entryBytes > bytes.size()) {
+        if (outError) {
+            *outError = "MIX entry index is truncated.";
+        }
+        return false;
+    }
+
+    if (dataSize > static_cast<uint32_t>(bytes.size())) {
+        if (outError) {
+            *outError = "MIX data size is invalid.";
+        }
+        return false;
+    }
+    const qsizetype dataStart = bytes.size() - static_cast<qsizetype>(dataSize);
+    if (dataStart < indexStart + entryBytes) {
+        if (outError) {
+            *outError = "MIX header/index overlaps file data.";
+        }
+        return false;
+    }
+
+    outArchive.entries.reserve(fileCount);
+
+    qsizetype pos = indexStart;
+    for (uint16_t i = 0; i < fileCount; ++i) {
+        MixEntryInfo entry;
+        if (!ReadUInt32LE(bytes, pos, entry.id)
+            || !ReadUInt32LE(bytes, pos + 4, entry.offset)
+            || !ReadUInt32LE(bytes, pos + 8, entry.size)) {
+            if (outError) {
+                *outError = "MIX entry index is truncated.";
+            }
+            return false;
+        }
+        pos += 12;
+
+        if (entry.offset > dataSize || entry.size > (dataSize - entry.offset)) {
+            if (outError) {
+                *outError = "MIX entry has an invalid offset/size.";
+            }
+            return false;
+        }
+        entry.offset = static_cast<uint32_t>(dataStart + static_cast<qsizetype>(entry.offset));
+        outArchive.entries.push_back(entry);
+    }
+
+    return true;
+}
+
+static bool ParseMixArchive(
+    const QByteArray& bytes,
+    bool allowClassicFallback,
+    MixArchiveInfo& outArchive,
+    QString* outError) {
+    if (bytes.size() >= 4 && std::memcmp(bytes.constData(), "MIX1", 4) == 0) {
+        return ParseMix1Archive(bytes, outArchive, outError);
+    }
+
+    if (!allowClassicFallback) {
+        if (outError) {
+            *outError = "Archive is not in MIX1 format.";
+        }
+        return false;
+    }
+
+    return ParseClassicMixArchive(bytes, outArchive, outError);
+}
+
+static bool IsMixArchivePath(const QString& path) {
+    const QString normalized = QDir::fromNativeSeparators(path).trimmed();
+    return normalized.endsWith(QStringLiteral(".mix"), Qt::CaseInsensitive)
+        || normalized.endsWith(QStringLiteral(".dat"), Qt::CaseInsensitive)
+        || normalized.endsWith(QStringLiteral(".dbs"), Qt::CaseInsensitive);
+}
+
+static bool LooksLikeW3DStream(
+    const QByteArray& bytes,
+    qsizetype absoluteOffset,
+    uint32_t size,
+    uint32_t* outTopChunkId = nullptr,
+    QString* outTopChunkName = nullptr) {
+    if (size < 8 || absoluteOffset < 0 || absoluteOffset + 8 > bytes.size()) {
+        return false;
+    }
+
+    uint32_t topId = 0;
+    uint32_t rawLength = 0;
+    if (!ReadUInt32LE(bytes, absoluteOffset, topId)
+        || !ReadUInt32LE(bytes, absoluteOffset + 4, rawLength)) {
+        return false;
+    }
+
+    const uint32_t payloadLength = rawLength & 0x7FFFFFFFu;
+    if (payloadLength > (size - 8)) {
+        return false;
+    }
+
+    const std::string chunkName = GetChunkName(topId);
+    const bool knownChunk = (chunkName != "UNKNOWN");
+
+    if (outTopChunkId) {
+        *outTopChunkId = topId;
+    }
+    if (outTopChunkName) {
+        *outTopChunkName = QString::fromStdString(chunkName);
+    }
+
+    return knownChunk;
+}
+
+static QString BuildMixEntryLabel(
+    const MixEntryInfo& entry,
+    bool likelyW3d,
+    bool hasTopChunkInfo,
+    uint32_t topChunkId,
+    const QString& topChunkName) {
+    QString label;
+    if (!entry.name.isEmpty()) {
+        label = QStringLiteral("%1 (%2 bytes)")
+            .arg(entry.name)
+            .arg(entry.size);
+        label += QStringLiteral(" [0x%1]")
+            .arg(entry.id, 8, 16, QLatin1Char('0'))
+            .toUpper();
+    }
+    else {
+        label = QStringLiteral("0x%1 (%2 bytes)")
+            .arg(entry.id, 8, 16, QLatin1Char('0'))
+            .arg(entry.size)
+            .toUpper();
+    }
+    if (likelyW3d && hasTopChunkInfo) {
+        label += QStringLiteral("  -> 0x%1 (%2)")
+            .arg(topChunkId, 8, 16, QLatin1Char('0'))
+            .arg(topChunkName);
+    }
+    return label;
+}
+
+static bool LoadW3DFromMixArchive(
+    QWidget* parent,
+    const QString& mixPath,
+    ChunkData& chunkData,
+    QString* outError) {
+    const QString normalizedPath = QDir::fromNativeSeparators(mixPath).trimmed();
+    const bool allowClassicFallback = normalizedPath.endsWith(QStringLiteral(".mix"), Qt::CaseInsensitive);
+
+    QFile file(mixPath);
+    if (!file.open(QIODevice::ReadOnly)) {
+        if (outError) {
+            *outError = QStringLiteral("Failed to open archive file:\n%1").arg(file.errorString());
+        }
+        return false;
+    }
+    const QByteArray mixBytes = file.readAll();
+    file.close();
+
+    MixArchiveInfo archive;
+    QString parseError;
+    if (!ParseMixArchive(mixBytes, allowClassicFallback, archive, &parseError)) {
+        if (outError) {
+            *outError = parseError;
+        }
+        return false;
+    }
+
+    struct Candidate {
+        int entryIndex = -1;
+        QString label;
+        bool likelyByName = false;
+        bool likelyW3d = false;
+    };
+    std::vector<Candidate> candidates;
+    candidates.reserve(archive.entries.size());
+
+    for (int i = 0; i < static_cast<int>(archive.entries.size()); ++i) {
+        const auto& entry = archive.entries[static_cast<std::size_t>(i)];
+        const qsizetype absoluteOffset = static_cast<qsizetype>(entry.offset);
+        uint32_t topChunkId = 0;
+        QString topChunkName;
+        const bool isLikelyByName =
+            entry.name.endsWith(QStringLiteral(".w3d"), Qt::CaseInsensitive)
+            || entry.name.endsWith(QStringLiteral(".wlt"), Qt::CaseInsensitive);
+        const bool isLikelyByContent = LooksLikeW3DStream(
+            mixBytes,
+            absoluteOffset,
+            entry.size,
+            &topChunkId,
+            &topChunkName);
+        const bool likelyW3d = isLikelyByName || isLikelyByContent;
+        candidates.push_back(Candidate{
+            i,
+            BuildMixEntryLabel(entry, likelyW3d, isLikelyByContent, topChunkId, topChunkName),
+            isLikelyByName,
+            likelyW3d
+            });
+    }
+
+    std::vector<int> candidateIndexes;
+    for (int i = 0; i < static_cast<int>(candidates.size()); ++i) {
+        if (candidates[static_cast<std::size_t>(i)].likelyW3d) {
+            candidateIndexes.push_back(i);
+        }
+    }
+
+    int chosenCandidateIndex = candidateIndexes.empty() ? -1 : candidateIndexes.front();
+    const bool needsExplicitSelection =
+        candidateIndexes.empty()
+        || (candidateIndexes.size() > 1)
+        || !candidates[static_cast<std::size_t>(candidateIndexes.front())].likelyByName;
+    if (needsExplicitSelection) {
+        std::vector<int> sortedCandidateIndexes;
+        sortedCandidateIndexes.reserve(candidates.size());
+        for (int i = 0; i < static_cast<int>(candidates.size()); ++i) {
+            sortedCandidateIndexes.push_back(i);
+        }
+        std::sort(
+            sortedCandidateIndexes.begin(),
+            sortedCandidateIndexes.end(),
+            [&](int lhs, int rhs) {
+                const auto& lhsEntry = archive.entries[static_cast<std::size_t>(candidates[static_cast<std::size_t>(lhs)].entryIndex)];
+                const auto& rhsEntry = archive.entries[static_cast<std::size_t>(candidates[static_cast<std::size_t>(rhs)].entryIndex)];
+
+                const QString lhsName = lhsEntry.name.isEmpty()
+                    ? QStringLiteral("entry_%1.bin").arg(lhsEntry.id, 8, 16, QLatin1Char('0')).toUpper()
+                    : QDir::fromNativeSeparators(lhsEntry.name);
+                const QString rhsName = rhsEntry.name.isEmpty()
+                    ? QStringLiteral("entry_%1.bin").arg(rhsEntry.id, 8, 16, QLatin1Char('0')).toUpper()
+                    : QDir::fromNativeSeparators(rhsEntry.name);
+
+                const int nameCompare = QString::compare(lhsName, rhsName, Qt::CaseInsensitive);
+                if (nameCompare != 0) return nameCompare < 0;
+                if (lhsEntry.size != rhsEntry.size) return lhsEntry.size < rhsEntry.size;
+                return lhsEntry.id < rhsEntry.id;
+            });
+
+        QDialog picker(parent);
+        picker.setWindowTitle(QStringLiteral("Open Archive Entry"));
+        picker.resize(920, 560);
+
+        auto* layout = new QVBoxLayout(&picker);
+        const QString promptText = candidateIndexes.empty()
+            ? QStringLiteral("Browsing entries in %1. No W3D/WLT entries are currently openable (use \"Show all file types\" to inspect unsupported entries).")
+            : QStringLiteral("Select a W3D/WLT entry from %1 (unsupported types are hidden by default):");
+        auto* promptLabel = new QLabel(
+            promptText.arg(QFileInfo(mixPath).fileName()),
+            &picker);
+        promptLabel->setWordWrap(true);
+        layout->addWidget(promptLabel);
+
+        auto* filterEdit = new QLineEdit(&picker);
+        filterEdit->setPlaceholderText(QStringLiteral("Filter by name or CRC..."));
+        layout->addWidget(filterEdit);
+
+        auto* showAllCheck = new QCheckBox(QStringLiteral("Show all file types"), &picker);
+        showAllCheck->setChecked(false);
+        layout->addWidget(showAllCheck);
+
+        auto* entryTree = new QTreeWidget(&picker);
+        entryTree->setColumnCount(4);
+        entryTree->setHeaderLabels(QStringList{
+            QStringLiteral("Name"),
+            QStringLiteral("Size"),
+            QStringLiteral("CRC"),
+            QStringLiteral("Hint")
+            });
+        entryTree->setRootIsDecorated(true);
+        entryTree->setAlternatingRowColors(true);
+        entryTree->setSelectionMode(QAbstractItemView::SingleSelection);
+        entryTree->header()->setSectionResizeMode(0, QHeaderView::Stretch);
+        entryTree->header()->setSectionResizeMode(1, QHeaderView::ResizeToContents);
+        entryTree->header()->setSectionResizeMode(2, QHeaderView::ResizeToContents);
+        entryTree->header()->setSectionResizeMode(3, QHeaderView::ResizeToContents);
+        layout->addWidget(entryTree, 1);
+
+        auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &picker);
+        auto* openButton = buttons->button(QDialogButtonBox::Ok);
+        if (openButton) {
+            openButton->setText(QStringLiteral("Open"));
+            openButton->setEnabled(false);
+        }
+        layout->addWidget(buttons);
+
+        constexpr int kRoleCandidateIndex = Qt::UserRole;
+        constexpr int kRoleIsLeaf = Qt::UserRole + 1;
+        constexpr int kRoleOpenable = Qt::UserRole + 2;
+
+        const auto findFolderChild = [&](QTreeWidgetItem* parentItem, const QString& name) -> QTreeWidgetItem* {
+            if (parentItem) {
+                for (int i = 0; i < parentItem->childCount(); ++i) {
+                    QTreeWidgetItem* child = parentItem->child(i);
+                    if (!child->data(0, kRoleIsLeaf).toBool() && child->text(0) == name) {
+                        return child;
+                    }
+                }
+                return nullptr;
+            }
+
+            for (int i = 0; i < entryTree->topLevelItemCount(); ++i) {
+                QTreeWidgetItem* child = entryTree->topLevelItem(i);
+                if (!child->data(0, kRoleIsLeaf).toBool() && child->text(0) == name) {
+                    return child;
+                }
+            }
+            return nullptr;
+        };
+
+        const auto ensureFolder = [&](QTreeWidgetItem* parentItem, const QString& name) -> QTreeWidgetItem* {
+            if (QTreeWidgetItem* existing = findFolderChild(parentItem, name)) {
+                return existing;
+            }
+            QTreeWidgetItem* folder = parentItem ? new QTreeWidgetItem(parentItem) : new QTreeWidgetItem(entryTree);
+            folder->setText(0, name);
+            folder->setText(3, QStringLiteral("Folder"));
+            folder->setData(0, kRoleIsLeaf, false);
+            return folder;
+        };
+
+        for (int idx : sortedCandidateIndexes) {
+            const auto& candidate = candidates[static_cast<std::size_t>(idx)];
+            const auto& entry = archive.entries[static_cast<std::size_t>(candidate.entryIndex)];
+
+            QString entryPath = entry.name.isEmpty()
+                ? QStringLiteral("entry_%1.bin").arg(entry.id, 8, 16, QLatin1Char('0')).toUpper()
+                : QDir::fromNativeSeparators(entry.name);
+            QStringList parts = entryPath.split('/', Qt::SkipEmptyParts);
+            if (parts.isEmpty()) {
+                parts << entryPath;
+            }
+
+            QTreeWidgetItem* parentItem = nullptr;
+            for (int p = 0; p + 1 < parts.size(); ++p) {
+                parentItem = ensureFolder(parentItem, parts[p]);
+            }
+
+            QTreeWidgetItem* item = parentItem ? new QTreeWidgetItem(parentItem) : new QTreeWidgetItem(entryTree);
+            item->setText(0, parts.last());
+            item->setText(1, QString::number(entry.size));
+            item->setText(2, QStringLiteral("0x%1").arg(entry.id, 8, 16, QLatin1Char('0')).toUpper());
+            if (candidate.likelyW3d) {
+                item->setText(3, candidate.likelyByName ? QStringLiteral("W3D by name") : QStringLiteral("W3D by content"));
+            }
+            else {
+                item->setText(3, QStringLiteral("Unsupported"));
+            }
+            item->setToolTip(0, candidate.label);
+            item->setToolTip(3, candidate.label);
+            item->setData(0, kRoleCandidateIndex, idx);
+            item->setData(0, kRoleIsLeaf, true);
+            item->setData(0, kRoleOpenable, candidate.likelyW3d);
+        }
+
+        std::function<bool(QTreeWidgetItem*, const QString&)> applyFilterRecursive =
+            [&](QTreeWidgetItem* item, const QString& term) -> bool {
+            bool visibleChild = false;
+            for (int i = 0; i < item->childCount(); ++i) {
+                visibleChild |= applyFilterRecursive(item->child(i), term);
+            }
+
+            const bool isLeaf = item->data(0, kRoleIsLeaf).toBool();
+            bool selfMatch = term.isEmpty();
+            if (!selfMatch) {
+                selfMatch = item->text(0).contains(term, Qt::CaseInsensitive)
+                    || item->text(2).contains(term, Qt::CaseInsensitive)
+                    || item->toolTip(0).contains(term, Qt::CaseInsensitive);
+            }
+
+            const bool visible = selfMatch || visibleChild;
+            item->setHidden(!visible);
+            if (!term.isEmpty() && !isLeaf && visibleChild) {
+                item->setExpanded(true);
+            }
+            return visible;
+            };
+
+        const auto refreshOpenButton = [&]() {
+            if (!openButton) return;
+            QTreeWidgetItem* current = entryTree->currentItem();
+            const bool canOpen = current
+                && current->data(0, kRoleIsLeaf).toBool()
+                && current->data(0, kRoleOpenable).toBool()
+                && !current->isHidden();
+            openButton->setEnabled(canOpen);
+        };
+
+        const auto applyFilter = [&]() {
+            const QString term = filterEdit->text().trimmed();
+            const bool showAll = showAllCheck->isChecked();
+            for (int i = 0; i < entryTree->topLevelItemCount(); ++i) {
+                applyFilterRecursive(entryTree->topLevelItem(i), term);
+            }
+
+            // Default view: show only openable (W3D/WLT) entries unless requested otherwise.
+            std::function<void(QTreeWidgetItem*)> applyTypeVisibility =
+                [&](QTreeWidgetItem* item) {
+                if (!item) return;
+
+                const bool isLeaf = item->data(0, kRoleIsLeaf).toBool();
+                if (isLeaf) {
+                    const bool openable = item->data(0, kRoleOpenable).toBool();
+                    if (!showAll && !openable) {
+                        item->setHidden(true);
+                    }
+                    return;
+                }
+
+                bool anyVisibleChild = false;
+                for (int i = 0; i < item->childCount(); ++i) {
+                    QTreeWidgetItem* child = item->child(i);
+                    applyTypeVisibility(child);
+                    if (!child->isHidden()) {
+                        anyVisibleChild = true;
+                    }
+                }
+                if (!anyVisibleChild) {
+                    item->setHidden(true);
+                }
+                };
+
+            for (int i = 0; i < entryTree->topLevelItemCount(); ++i) {
+                applyTypeVisibility(entryTree->topLevelItem(i));
+            }
+
+            QTreeWidgetItem* current = entryTree->currentItem();
+            if (current && current->isHidden()) {
+                entryTree->clearSelection();
+            }
+            refreshOpenButton();
+        };
+
+        std::function<QTreeWidgetItem*(QTreeWidgetItem*)> firstVisibleOpenableLeaf =
+            [&](QTreeWidgetItem* item) -> QTreeWidgetItem* {
+            if (!item || item->isHidden()) return nullptr;
+            if (item->data(0, kRoleIsLeaf).toBool()) {
+                if (item->data(0, kRoleOpenable).toBool()) {
+                    return item;
+                }
+                return nullptr;
+            }
+            for (int i = 0; i < item->childCount(); ++i) {
+                if (QTreeWidgetItem* found = firstVisibleOpenableLeaf(item->child(i))) {
+                    return found;
+                }
+            }
+            return nullptr;
+            };
+
+        QObject::connect(filterEdit, &QLineEdit::textChanged, &picker, [&](const QString&) {
+            applyFilter();
+            QTreeWidgetItem* current = entryTree->currentItem();
+            if (current) return;
+            for (int i = 0; i < entryTree->topLevelItemCount(); ++i) {
+                if (QTreeWidgetItem* found = firstVisibleOpenableLeaf(entryTree->topLevelItem(i))) {
+                    entryTree->setCurrentItem(found);
+                    break;
+                }
+            }
+        });
+        QObject::connect(showAllCheck, &QCheckBox::toggled, &picker, [&](bool) {
+            applyFilter();
+            QTreeWidgetItem* current = entryTree->currentItem();
+            if (current) return;
+            for (int i = 0; i < entryTree->topLevelItemCount(); ++i) {
+                if (QTreeWidgetItem* found = firstVisibleOpenableLeaf(entryTree->topLevelItem(i))) {
+                    entryTree->setCurrentItem(found);
+                    break;
+                }
+            }
+        });
+        QObject::connect(entryTree, &QTreeWidget::itemSelectionChanged, &picker, [&]() {
+            refreshOpenButton();
+        });
+        QObject::connect(entryTree, &QTreeWidget::itemDoubleClicked, &picker,
+            [&](QTreeWidgetItem* item, int) {
+                if (!item
+                    || !item->data(0, kRoleIsLeaf).toBool()
+                    || !item->data(0, kRoleOpenable).toBool()
+                    || item->isHidden()) return;
+                picker.accept();
+            });
+        QObject::connect(buttons, &QDialogButtonBox::accepted, &picker, [&]() {
+            QTreeWidgetItem* current = entryTree->currentItem();
+            if (!current
+                || !current->data(0, kRoleIsLeaf).toBool()
+                || !current->data(0, kRoleOpenable).toBool()
+                || current->isHidden()) return;
+            picker.accept();
+        });
+        QObject::connect(buttons, &QDialogButtonBox::rejected, &picker, &QDialog::reject);
+
+        applyFilter();
+        for (int i = 0; i < entryTree->topLevelItemCount(); ++i) {
+            if (QTreeWidgetItem* found = firstVisibleOpenableLeaf(entryTree->topLevelItem(i))) {
+                entryTree->setCurrentItem(found);
+                break;
+            }
+        }
+
+        if (picker.exec() != QDialog::Accepted) {
+            if (outError) {
+                outError->clear();
+            }
+            return false;
+        }
+
+        QTreeWidgetItem* selectedItem = entryTree->currentItem();
+        if (!selectedItem
+            || !selectedItem->data(0, kRoleIsLeaf).toBool()
+            || !selectedItem->data(0, kRoleOpenable).toBool()) {
+            if (outError) {
+                *outError = "Selected entry type is not supported yet.";
+            }
+            return false;
+        }
+
+        chosenCandidateIndex = selectedItem->data(0, kRoleCandidateIndex).toInt();
+        if (chosenCandidateIndex < 0
+            || chosenCandidateIndex >= static_cast<int>(candidates.size())) {
+            if (outError) {
+                *outError = "Selected archive entry is invalid.";
+            }
+            return false;
+        }
+    }
+
+    const auto& chosen = candidates[static_cast<std::size_t>(chosenCandidateIndex)];
+    const auto& entry = archive.entries[static_cast<std::size_t>(chosen.entryIndex)];
+    const qsizetype absoluteOffset = static_cast<qsizetype>(entry.offset);
+
+    QTemporaryFile tempFile;
+    if (!tempFile.open()) {
+        if (outError) {
+            *outError = QStringLiteral("Failed to create a temporary file: %1")
+                .arg(tempFile.errorString());
+        }
+        return false;
+    }
+
+    const qint64 expectedSize = static_cast<qint64>(entry.size);
+    const qint64 written = tempFile.write(mixBytes.constData() + absoluteOffset, expectedSize);
+    if (written != expectedSize) {
+        if (outError) {
+            *outError = QStringLiteral("Failed to extract the selected MIX entry.");
+        }
+        return false;
+    }
+    tempFile.flush();
+    tempFile.close();
+
+    if (!chunkData.loadFromFile(tempFile.fileName().toStdString()) || chunkData.getChunks().empty()) {
+        if (outError) {
+            *outError = QStringLiteral("Failed to parse selected MIX entry as W3D data.");
+        }
+        return false;
+    }
+
+    return true;
+}
+
 struct PivotInfo {
     QString name;
     int parent = -1;
@@ -2252,11 +3014,25 @@ void MainWindow::openFile(const QString& path) {
     QString filePath = path;
     if (filePath.isEmpty()) {
         QString startDir = lastDirectory.isEmpty() ? QDir::homePath() : lastDirectory;
-        filePath = QFileDialog::getOpenFileName(this, "Open W3D File", startDir, "W3D Files (*.w3d);;All Files (*)");
+        filePath = QFileDialog::getOpenFileName(
+            this,
+            "Open W3D/Archive File",
+            startDir,
+            "W3D and Archive Files (*.w3d *.W3D *.wlt *.WLT *.mix *.MIX *.dat *.DAT *.dbs *.DBS);;W3D Files (*.w3d *.W3D *.wlt *.WLT);;Archive Files (*.mix *.MIX *.dat *.DAT *.dbs *.DBS);;All Files (*)");
         if (filePath.isEmpty()) return;
     }
 
-    if (!chunkData->loadFromFile(filePath.toStdString())) {
+    QString loadError;
+    const bool isArchiveFile = IsMixArchivePath(filePath);
+    if (isArchiveFile) {
+        if (!LoadW3DFromMixArchive(this, filePath, *chunkData, &loadError)) {
+            if (!loadError.isEmpty()) {
+                QMessageBox::warning(this, "Error", loadError);
+            }
+            return;
+        }
+    }
+    else if (!chunkData->loadFromFile(filePath.toStdString()) || chunkData->getChunks().empty()) {
         QMessageBox::warning(this, "Error", "Failed to open file.");
         return;
     }
@@ -2264,6 +3040,7 @@ void MainWindow::openFile(const QString& path) {
     ClearChunkTree();
     currentFilePath = filePath;
     setDirty(false);
+    updateWindowTitle();
     clearDetails();
     populateTree();
     AddRecentFile(filePath);
@@ -2677,6 +3454,10 @@ void MainWindow::saveFile() {
     }
 
     if (currentFilePath.isEmpty()) {
+        saveFileAs();
+        return;
+    }
+    if (IsMixArchivePath(currentFilePath)) {
         saveFileAs();
         return;
     }
@@ -3988,6 +4769,292 @@ static bool CompareBytes(
     return true;
 }
 
+struct BatchInputSource {
+    bool fromArchive = false;
+    QString sourcePath;
+    QString relativePath;
+    QString standalonePath;
+    QString archivePath;
+    QString archiveEntryPath;
+    uint32_t archiveEntryId = 0;
+    uint32_t archiveEntryOffset = 0;
+    uint32_t archiveEntrySize = 0;
+};
+
+static QString SanitizePathComponent(QString component) {
+    component = component.trimmed();
+    for (qsizetype i = 0; i < component.size(); ++i) {
+        const QChar ch = component.at(i);
+        if (ch == QLatin1Char('<')
+            || ch == QLatin1Char('>')
+            || ch == QLatin1Char(':')
+            || ch == QLatin1Char('"')
+            || ch == QLatin1Char('|')
+            || ch == QLatin1Char('?')
+            || ch == QLatin1Char('*'))
+        {
+            component[i] = QLatin1Char('_');
+        }
+    }
+    return component;
+}
+
+static QString NormalizeArchiveEntryPath(QString entryName, uint32_t entryId) {
+    entryName = QDir::fromNativeSeparators(entryName).trimmed();
+    if (entryName.isEmpty()) {
+        return QStringLiteral("entry_%1.w3d").arg(entryId, 8, 16, QLatin1Char('0')).toUpper();
+    }
+
+    const QStringList rawParts = QDir::cleanPath(entryName).split('/', Qt::SkipEmptyParts);
+    QStringList cleanParts;
+    cleanParts.reserve(rawParts.size());
+    for (QString part : rawParts) {
+        if (part == QStringLiteral(".") || part == QStringLiteral("..")) {
+            continue;
+        }
+        part = SanitizePathComponent(part);
+        if (!part.isEmpty()) {
+            cleanParts << part;
+        }
+    }
+
+    if (cleanParts.isEmpty()) {
+        return QStringLiteral("entry_%1.w3d").arg(entryId, 8, 16, QLatin1Char('0')).toUpper();
+    }
+    return cleanParts.join('/');
+}
+
+static QString BuildArchiveEntryRelativePath(
+    const QString& archiveRelativePath,
+    const QString& entryPath)
+{
+    return SanitizeRelativePath(
+        QDir::cleanPath(archiveRelativePath + QStringLiteral("/_entries/") + entryPath));
+}
+
+static QString BuildBatchSourceDisplayPath(const BatchInputSource& input) {
+    if (!input.fromArchive) {
+        return QDir::toNativeSeparators(QFileInfo(input.standalonePath).absoluteFilePath());
+    }
+    return QDir::toNativeSeparators(QFileInfo(input.archivePath).absoluteFilePath())
+        + QStringLiteral("::")
+        + QDir::toNativeSeparators(input.archiveEntryPath);
+}
+
+static QString BuildBatchJsonRelativePath(const QString& relativePath) {
+    QFileInfo relInfo(relativePath);
+    const QString dir = (relInfo.path() == ".") ? QString() : relInfo.path();
+
+    QString base = relInfo.completeBaseName();
+    if (base.isEmpty()) {
+        base = relInfo.fileName();
+    }
+    if (base.isEmpty()) {
+        base = QStringLiteral("unnamed");
+    }
+
+    const QString jsonName = base + QStringLiteral(".json");
+    return dir.isEmpty() ? jsonName : QDir::cleanPath(dir + QStringLiteral("/") + jsonName);
+}
+
+static bool ReadBatchInputOriginalBytes(
+    const BatchInputSource& input,
+    QByteArray& outBytes,
+    QString& outError,
+    QString& cachedArchivePath,
+    QByteArray& cachedArchiveBytes)
+{
+    if (!input.fromArchive) {
+        return ReadAllBytes(input.standalonePath, outBytes, outError);
+    }
+
+    const QString archiveAbsPath = QDir::cleanPath(QFileInfo(input.archivePath).absoluteFilePath());
+    if (cachedArchivePath.compare(archiveAbsPath, Qt::CaseInsensitive) != 0) {
+        if (!ReadAllBytes(archiveAbsPath, cachedArchiveBytes, outError)) {
+            return false;
+        }
+        cachedArchivePath = archiveAbsPath;
+    }
+
+    const qint64 offset = static_cast<qint64>(input.archiveEntryOffset);
+    const qint64 size = static_cast<qint64>(input.archiveEntrySize);
+    const qint64 archiveSize = static_cast<qint64>(cachedArchiveBytes.size());
+    if (offset < 0 || size < 0 || offset > archiveSize || size > (archiveSize - offset)) {
+        outError = QObject::tr("Archive entry has an invalid offset/size: %1")
+            .arg(BuildBatchSourceDisplayPath(input));
+        return false;
+    }
+
+    outBytes = cachedArchiveBytes.mid(static_cast<qsizetype>(offset), static_cast<qsizetype>(size));
+    return true;
+}
+
+static bool LoadChunkDataFromBytes(
+    const QByteArray& bytes,
+    ChunkData& outChunkData,
+    QString& outError)
+{
+    QTemporaryFile tempFile;
+    tempFile.setAutoRemove(true);
+    if (!tempFile.open()) {
+        outError = QObject::tr("Failed to create temporary file: %1").arg(tempFile.errorString());
+        return false;
+    }
+
+    if (tempFile.write(bytes) != bytes.size()) {
+        outError = QObject::tr("Failed to write temporary file: %1").arg(tempFile.errorString());
+        return false;
+    }
+    if (!tempFile.flush()) {
+        outError = QObject::tr("Failed to flush temporary file: %1").arg(tempFile.errorString());
+        return false;
+    }
+
+    const QString tempPath = tempFile.fileName();
+    tempFile.close();
+
+    if (!outChunkData.loadFromFile(tempPath.toStdString()) || outChunkData.getChunks().empty()) {
+        outError = QObject::tr("Failed to parse source data as W3D/WLT.");
+        return false;
+    }
+
+    return true;
+}
+
+static bool LoadBatchInputChunkData(
+    const BatchInputSource& input,
+    const QByteArray& originalBytes,
+    ChunkData& outChunkData,
+    QString& outError)
+{
+    if (!input.fromArchive) {
+        if (!outChunkData.loadFromFile(input.standalonePath.toStdString())
+            || outChunkData.getChunks().empty())
+        {
+            outError = QObject::tr("Failed to load source W3D/WLT.");
+            return false;
+        }
+        return true;
+    }
+
+    return LoadChunkDataFromBytes(originalBytes, outChunkData, outError);
+}
+
+static void DiscoverBatchInputs(
+    const QString& sourceDirectory,
+    std::vector<BatchInputSource>& outInputs,
+    QStringList* outWarnings = nullptr)
+{
+    outInputs.clear();
+
+    QDir sourceRoot(sourceDirectory);
+
+    QDirIterator fileIt(
+        sourceDirectory,
+        QStringList{ "*.w3d", "*.W3D", "*.wlt", "*.WLT" },
+        QDir::Files | QDir::NoSymLinks,
+        QDirIterator::Subdirectories);
+    while (fileIt.hasNext()) {
+        const QString absolutePath = QDir::cleanPath(fileIt.next());
+        BatchInputSource input;
+        input.fromArchive = false;
+        input.standalonePath = absolutePath;
+        input.relativePath = SanitizeRelativePath(sourceRoot.relativeFilePath(absolutePath));
+        input.sourcePath = BuildBatchSourceDisplayPath(input);
+        outInputs.push_back(std::move(input));
+    }
+
+    QDirIterator archiveIt(
+        sourceDirectory,
+        QStringList{ "*.mix", "*.MIX", "*.dat", "*.DAT" },
+        QDir::Files | QDir::NoSymLinks,
+        QDirIterator::Subdirectories);
+    while (archiveIt.hasNext()) {
+        const QString archivePath = QDir::cleanPath(archiveIt.next());
+        QByteArray archiveBytes;
+        QString readError;
+        if (!ReadAllBytes(archivePath, archiveBytes, readError)) {
+            if (outWarnings) {
+                outWarnings->append(
+                    QObject::tr("%1: %2")
+                        .arg(QDir::toNativeSeparators(archivePath), readError));
+            }
+            continue;
+        }
+
+        MixArchiveInfo archiveInfo;
+        QString parseError;
+        const bool allowClassicFallback = archivePath.endsWith(QStringLiteral(".mix"), Qt::CaseInsensitive);
+        if (!ParseMixArchive(archiveBytes, allowClassicFallback, archiveInfo, &parseError)) {
+            if (outWarnings) {
+                outWarnings->append(
+                    QObject::tr("%1: %2")
+                        .arg(QDir::toNativeSeparators(archivePath), parseError));
+            }
+            continue;
+        }
+
+        const QString archiveRelativePath = SanitizeRelativePath(sourceRoot.relativeFilePath(archivePath));
+        for (const MixEntryInfo& entry : archiveInfo.entries) {
+            const bool likelyByName = entry.name.endsWith(QStringLiteral(".w3d"), Qt::CaseInsensitive)
+                || entry.name.endsWith(QStringLiteral(".wlt"), Qt::CaseInsensitive);
+            const bool likelyByContent = LooksLikeW3DStream(
+                archiveBytes,
+                static_cast<qsizetype>(entry.offset),
+                entry.size);
+            if (!likelyByName && !likelyByContent) {
+                continue;
+            }
+
+            BatchInputSource input;
+            input.fromArchive = true;
+            input.archivePath = archivePath;
+            input.archiveEntryPath = NormalizeArchiveEntryPath(entry.name, entry.id);
+            input.archiveEntryId = entry.id;
+            input.archiveEntryOffset = entry.offset;
+            input.archiveEntrySize = entry.size;
+            input.relativePath = BuildArchiveEntryRelativePath(archiveRelativePath, input.archiveEntryPath);
+            input.sourcePath = BuildBatchSourceDisplayPath(input);
+            outInputs.push_back(std::move(input));
+        }
+    }
+
+    std::sort(outInputs.begin(), outInputs.end(), [](const BatchInputSource& lhs, const BatchInputSource& rhs) {
+        const int relCompare = lhs.relativePath.compare(rhs.relativePath, Qt::CaseInsensitive);
+        if (relCompare != 0) {
+            return relCompare < 0;
+        }
+        return lhs.sourcePath.compare(rhs.sourcePath, Qt::CaseInsensitive) < 0;
+        });
+
+    std::map<QString, int> seenRelativePaths;
+    for (BatchInputSource& input : outInputs) {
+        const QString key = input.relativePath.toLower();
+        int& seenCount = seenRelativePaths[key];
+        if (seenCount > 0) {
+            QFileInfo relInfo(input.relativePath);
+            const QString dir = (relInfo.path() == ".") ? QString() : relInfo.path();
+
+            QString base = relInfo.completeBaseName();
+            if (base.isEmpty()) {
+                base = relInfo.fileName();
+            }
+            if (base.isEmpty()) {
+                base = QStringLiteral("unnamed");
+            }
+
+            const QString suffix = relInfo.completeSuffix();
+            const QString dedupName = suffix.isEmpty()
+                ? QStringLiteral("%1__dup%2").arg(base).arg(seenCount + 1)
+                : QStringLiteral("%1__dup%2.%3").arg(base).arg(seenCount + 1).arg(suffix);
+            input.relativePath = dir.isEmpty()
+                ? dedupName
+                : QDir::cleanPath(dir + QStringLiteral("/") + dedupName);
+        }
+        ++seenCount;
+    }
+}
+
 } // namespace
 
 JsonSerializationMode MainWindow::loadDefaultSerializationModeSetting() const {
@@ -4128,16 +5195,24 @@ bool MainWindow::promptValidatorRunMode(ValidatorRunMode& outMode) {
 
 void MainWindow::on_actionExportChunkList_triggered()
 {
-    // 1) pick source folder
+    const QString startDir = lastDirectory.isEmpty() ? QDir::homePath() : lastDirectory;
     QString srcDir = QFileDialog::getExistingDirectory(
         this,
-        tr("Select W3D Directory"),
-        QString(),
+        tr("Select Source Directory"),
+        startDir,
         QFileDialog::ShowDirsOnly | QFileDialog::DontResolveSymlinks
     );
     if (srcDir.isEmpty()) return;
 
-    // 2) pick output file
+    std::vector<BatchInputSource> inputs;
+    QStringList discoveryWarnings;
+    DiscoverBatchInputs(srcDir, inputs, &discoveryWarnings);
+    if (inputs.empty()) {
+        QMessageBox::information(this, tr("Export Chunk List"),
+            tr("No W3D/WLT files or archive entries found in %1.").arg(srcDir));
+        return;
+    }
+
     QString outPath = QFileDialog::getSaveFileName(
         this,
         tr("Save Chunk List As..."),
@@ -4146,7 +5221,6 @@ void MainWindow::on_actionExportChunkList_triggered()
     );
     if (outPath.isEmpty()) return;
 
-    // 3) open output file
     QFile file(outPath);
     if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) {
         QMessageBox::warning(this, tr("Error"),
@@ -4155,27 +5229,45 @@ void MainWindow::on_actionExportChunkList_triggered()
     }
     QTextStream txt(&file);
 
-    // 4) iterate .w3d files and collect counts
     std::map<uint32_t, int> counts;
-    QDir dir(srcDir);
-    auto w3dFiles = dir.entryList(QStringList{ "*.w3d", "*.W3D", "*.wlt" },
-        QDir::Files | QDir::NoSymLinks);
-    for (auto& fn : w3dFiles) {
-        QString full = dir.absoluteFilePath(fn);
-        txt << "=== " << full << " ===\n";
+    QString cachedArchivePath;
+    QByteArray cachedArchiveBytes;
+    for (const BatchInputSource& input : inputs) {
+        txt << "=== " << input.sourcePath << " ===\n";
 
-        ChunkData cd;
-        if (!cd.loadFromFile(full.toStdString())) {
-            txt << "[ parse error ]\n\n";
+        QByteArray sourceBytes;
+        QString readError;
+        if (!ReadBatchInputOriginalBytes(
+            input,
+            sourceBytes,
+            readError,
+            cachedArchivePath,
+            cachedArchiveBytes))
+        {
+            txt << "[ read error ] " << readError << "\n\n";
             continue;
         }
-        // for each top chunk, recurse
+
+        ChunkData cd;
+        QString loadError;
+        if (!LoadBatchInputChunkData(input, sourceBytes, cd, loadError)) {
+            txt << "[ parse error ] " << loadError << "\n\n";
+            continue;
+        }
+
         for (auto& top : cd.getChunks()) {
             recursePrint(top, 1, txt, counts);
         }
         txt << "\n";
     }
-    // 5) Output totals
+    if (!discoveryWarnings.isEmpty()) {
+        txt << "=== Archive Scan Warnings ===\n";
+        for (const QString& warning : discoveryWarnings) {
+            txt << warning << "\n";
+        }
+        txt << "\n";
+    }
+
     txt << "=== Chunk Type Totals ===\n";
     for (const auto& [id, count] : counts) {
         txt << QString("0x%1 ").arg(id, 8, 16, QChar('0')).toUpper()
@@ -4184,8 +5276,18 @@ void MainWindow::on_actionExportChunkList_triggered()
     }
 
     file.close();
-    QMessageBox::information(this, tr("Done"),
-        tr("Chunk list exported to %1").arg(outPath));
+    lastDirectory = srcDir;
+
+    QString summary = tr("Chunk list exported to %1.\nInputs scanned: %2")
+        .arg(outPath)
+        .arg(static_cast<int>(inputs.size()));
+    if (!discoveryWarnings.isEmpty()) {
+        summary += tr("\nArchive scan warnings: %1").arg(discoveryWarnings.size());
+        QMessageBox::warning(this, tr("Done"), summary);
+        return;
+    }
+
+    QMessageBox::information(this, tr("Done"), summary);
 }
 
 void MainWindow::on_actionExportJsonBatch_triggered()
@@ -4193,7 +5295,7 @@ void MainWindow::on_actionExportJsonBatch_triggered()
     QString startDir = lastDirectory.isEmpty() ? QDir::homePath() : lastDirectory;
     QString srcDir = QFileDialog::getExistingDirectory(
         this,
-        tr("Select W3D Directory"),
+        tr("Select Source Directory"),
         startDir,
         QFileDialog::ShowDirsOnly | QFileDialog::DontResolveSymlinks);
     if (srcDir.isEmpty()) return;
@@ -4205,13 +5307,12 @@ void MainWindow::on_actionExportJsonBatch_triggered()
         QFileDialog::ShowDirsOnly | QFileDialog::DontResolveSymlinks);
     if (outDir.isEmpty()) return;
 
-    QDir dir(srcDir);
-    auto w3dFiles = dir.entryList(QStringList{ "*.w3d", "*.W3D", "*.wlt" },
-        QDir::Files | QDir::NoSymLinks);
-
-    if (w3dFiles.isEmpty()) {
+    std::vector<BatchInputSource> inputs;
+    QStringList discoveryWarnings;
+    DiscoverBatchInputs(srcDir, inputs, &discoveryWarnings);
+    if (inputs.empty()) {
         QMessageBox::information(this, tr("Export JSON"),
-            tr("No W3D files found in %1.").arg(srcDir));
+            tr("No W3D/WLT files or archive entries found in %1.").arg(srcDir));
         return;
     }
 
@@ -4227,46 +5328,107 @@ void MainWindow::on_actionExportJsonBatch_triggered()
     QDir outputDir(outDir);
     int successCount = 0;
     QStringList failures;
+    bool canceled = false;
 
-    for (const QString& fileName : w3dFiles) {
-        QString inputPath = dir.absoluteFilePath(fileName);
+    QString cachedArchivePath;
+    QByteArray cachedArchiveBytes;
+
+    QProgressDialog progress(tr("Preparing export..."), tr("Cancel"), 0, static_cast<int>(inputs.size()), this);
+    progress.setWindowTitle(tr("Export JSON Batch"));
+    progress.setWindowModality(Qt::WindowModal);
+    progress.setMinimumDuration(0);
+    progress.setAutoClose(false);
+    progress.setAutoReset(false);
+    progress.setValue(0);
+
+    for (int i = 0; i < static_cast<int>(inputs.size()); ++i) {
+        const BatchInputSource& input = inputs[static_cast<std::size_t>(i)];
+        progress.setValue(i);
+        progress.setLabelText(tr("Exporting %1 (%2/%3)")
+            .arg(input.relativePath)
+            .arg(i + 1)
+            .arg(static_cast<int>(inputs.size())));
+        QCoreApplication::processEvents();
+        if (progress.wasCanceled()) {
+            canceled = true;
+            break;
+        }
+
+        QByteArray sourceBytes;
+        QString readError;
+        if (!ReadBatchInputOriginalBytes(
+            input,
+            sourceBytes,
+            readError,
+            cachedArchivePath,
+            cachedArchiveBytes))
+        {
+            failures << tr("%1 (read failed: %2)").arg(input.sourcePath, readError);
+            continue;
+        }
+
         ChunkData cd;
-        if (!cd.loadFromFile(inputPath.toStdString())) {
-            failures << tr("%1 (load failed)").arg(inputPath);
+        QString loadError;
+        if (!LoadBatchInputChunkData(input, sourceBytes, cd, loadError)) {
+            failures << tr("%1 (load failed: %2)").arg(input.sourcePath, loadError);
             continue;
         }
 
-        const ordered_json doc = cd.toJson(selectedMode);
-        QString baseName = QFileInfo(fileName).completeBaseName();
-        QString outputPath = outputDir.absoluteFilePath(baseName + ".json");
-        QFile outFile(outputPath);
-        if (!outFile.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
-            failures << tr("%1 (write open failed)").arg(outputPath);
+        ordered_json doc;
+        try {
+            doc = cd.toJson(selectedMode);
+        }
+        catch (const std::exception& e) {
+            failures << tr("%1 (JSON export failed: %2)")
+                .arg(input.sourcePath, QString::fromUtf8(e.what()));
             continue;
         }
 
-        QByteArray payload = QByteArray::fromStdString(doc.dump(4));
-        auto written = outFile.write(payload);
-        outFile.close();
-        if (written != payload.size()) {
-            failures << tr("%1 (write failed)").arg(outputPath);
+        const QString outputPath = outputDir.absoluteFilePath(
+            BuildBatchJsonRelativePath(input.relativePath));
+        QString writeError;
+        if (!WriteAllBytes(outputPath, QByteArray::fromStdString(doc.dump(4)), writeError)) {
+            failures << tr("%1 (write failed: %2)").arg(outputPath, writeError);
             continue;
         }
 
         ++successCount;
     }
+    progress.setValue(static_cast<int>(inputs.size()));
 
     lastDirectory = srcDir;
 
-    QString summary = tr("Exported %1 file(s) to %2.\nMode: %3")
+    QString summary = tr("%1\nExported %2 of %3 input(s) to %4.\nMode: %5")
+        .arg(canceled ? tr("Export canceled.") : tr("Export completed."))
         .arg(successCount)
+        .arg(static_cast<int>(inputs.size()))
         .arg(outDir)
         .arg(SerializationModeToken(selectedMode));
-    if (failures.isEmpty()) {
+
+    if (!discoveryWarnings.isEmpty()) {
+        QStringList preview = discoveryWarnings.mid(0, 10);
+        if (discoveryWarnings.size() > preview.size()) {
+            preview << tr("... (%1 additional warnings)")
+                .arg(discoveryWarnings.size() - preview.size());
+        }
+        summary += tr("\n\nArchive scan warnings (%1):\n%2")
+            .arg(discoveryWarnings.size())
+            .arg(preview.join("\n"));
+    }
+
+    if (!failures.isEmpty()) {
+        QStringList preview = failures.mid(0, 20);
+        if (failures.size() > preview.size()) {
+            preview << tr("... (%1 additional failures)")
+                .arg(failures.size() - preview.size());
+        }
+        summary += tr("\n\nFailures:\n%1").arg(preview.join("\n"));
+    }
+
+    if (!canceled && failures.isEmpty() && discoveryWarnings.isEmpty()) {
         QMessageBox::information(this, tr("Export JSON"), summary);
     }
     else {
-        summary += tr("\n\nFailures:\n%1").arg(failures.join("\n"));
         QMessageBox::warning(this, tr("Export JSON"), summary);
     }
 }
@@ -4276,7 +5438,7 @@ void MainWindow::on_actionValidateRoundTripBatch_triggered()
     const QString startDir = lastDirectory.isEmpty() ? QDir::homePath() : lastDirectory;
     const QString srcDir = QFileDialog::getExistingDirectory(
         this,
-        tr("Select W3D Directory"),
+        tr("Select Source Directory"),
         startDir,
         QFileDialog::ShowDirsOnly | QFileDialog::DontResolveSymlinks);
     if (srcDir.isEmpty()) return;
@@ -4288,25 +5450,26 @@ void MainWindow::on_actionValidateRoundTripBatch_triggered()
         QFileDialog::ShowDirsOnly | QFileDialog::DontResolveSymlinks);
     if (outDir.isEmpty()) return;
 
-    QStringList inputFiles;
-    QDirIterator it(
-        srcDir,
-        QStringList{ "*.w3d", "*.W3D", "*.wlt", "*.WLT" },
-        QDir::Files | QDir::NoSymLinks,
-        QDirIterator::Subdirectories);
-    while (it.hasNext()) {
-        inputFiles << QDir::cleanPath(it.next());
-    }
-    std::sort(inputFiles.begin(), inputFiles.end(), [](const QString& a, const QString& b) {
-        return a.compare(b, Qt::CaseInsensitive) < 0;
-        });
+    std::vector<BatchInputSource> inputs;
+    QStringList discoveryWarnings;
+    DiscoverBatchInputs(srcDir, inputs, &discoveryWarnings);
 
-    if (inputFiles.isEmpty()) {
-        QMessageBox::information(this, tr("Round-Trip Validate"),
-            tr("No W3D/WLT files found in %1.").arg(srcDir));
+    if (inputs.empty()) {
+        QString summary = tr("No W3D/WLT files or archive entries found in %1.").arg(srcDir);
+        if (!discoveryWarnings.isEmpty()) {
+            QStringList preview = discoveryWarnings.mid(0, 10);
+            if (discoveryWarnings.size() > preview.size()) {
+                preview << tr("... (%1 additional warnings)")
+                    .arg(discoveryWarnings.size() - preview.size());
+            }
+            summary += tr("\n\nArchive scan warnings (%1):\n%2")
+                .arg(discoveryWarnings.size())
+                .arg(preview.join("\n"));
+        }
+        QMessageBox::information(this, tr("Round-Trip Validate"), summary);
         return;
     }
-    const int discoveredFileCount = static_cast<int>(inputFiles.size());
+    const int discoveredFileCount = static_cast<int>(inputs.size());
 
     ValidatorRunMode selectedRunMode = ValidatorRunMode::Both;
     if (!promptValidatorRunMode(selectedRunMode)) {
@@ -4365,7 +5528,6 @@ void MainWindow::on_actionValidateRoundTripBatch_triggered()
     progress.setAutoReset(false);
     progress.setValue(0);
 
-    QDir sourceRoot(srcDir);
     QDir failuresRoot(failuresRootPath);
 
     int processedRuns = 0;
@@ -4373,10 +5535,12 @@ void MainWindow::on_actionValidateRoundTripBatch_triggered()
     int failCount = 0;
     bool canceled = false;
     int runCounter = 0;
+    QString cachedArchivePath;
+    QByteArray cachedArchiveBytes;
 
     for (int i = 0; i < discoveredFileCount; ++i) {
-        const QString sourcePath = QDir::cleanPath(inputFiles[i]);
-        const QString relativePath = SanitizeRelativePath(sourceRoot.relativeFilePath(sourcePath));
+        const BatchInputSource& input = inputs[static_cast<std::size_t>(i)];
+        const QString relativePath = input.relativePath;
 
         for (const JsonSerializationMode mode : modesToRun) {
             progress.setValue(runCounter);
@@ -4396,7 +5560,7 @@ void MainWindow::on_actionValidateRoundTripBatch_triggered()
 
             RoundTripReportRow row;
             row.mode = SerializationModeToken(mode);
-            row.sourcePath = QDir::toNativeSeparators(QFileInfo(sourcePath).absoluteFilePath());
+            row.sourcePath = input.sourcePath;
             row.relativePath = relativePath;
 
             QByteArray originalBytes;
@@ -4409,7 +5573,13 @@ void MainWindow::on_actionValidateRoundTripBatch_triggered()
 
             do {
                 QString ioError;
-                if (!ReadAllBytes(sourcePath, originalBytes, ioError)) {
+                if (!ReadBatchInputOriginalBytes(
+                    input,
+                    originalBytes,
+                    ioError,
+                    cachedArchivePath,
+                    cachedArchiveBytes))
+                {
                     row.stage = QStringLiteral("LOAD_W3D");
                     row.errorMessage = ioError;
                     break;
@@ -4417,9 +5587,10 @@ void MainWindow::on_actionValidateRoundTripBatch_triggered()
                 row.originalSize = originalBytes.size();
 
                 ChunkData sourceData;
-                if (!sourceData.loadFromFile(sourcePath.toStdString())) {
+                QString loadError;
+                if (!LoadBatchInputChunkData(input, originalBytes, sourceData, loadError)) {
                     row.stage = QStringLiteral("LOAD_W3D");
-                    row.errorMessage = tr("Failed to load source W3D/WLT.");
+                    row.errorMessage = loadError;
                     break;
                 }
 
@@ -4562,7 +5733,7 @@ void MainWindow::on_actionValidateRoundTripBatch_triggered()
     reportFile.close();
     lastDirectory = srcDir;
 
-    const QString summary = tr("%1\n\nDiscovered files: %2\nTotal mode-runs: %3\nProcessed mode-runs: %4\nPass: %5\nFail: %6\nReport: %7\nFailure artifacts: %8")
+    QString summary = tr("%1\n\nDiscovered inputs: %2\nTotal mode-runs: %3\nProcessed mode-runs: %4\nPass: %5\nFail: %6\nReport: %7\nFailure artifacts: %8")
         .arg(canceled ? tr("Validation canceled.") : tr("Validation completed."))
         .arg(discoveredFileCount)
         .arg(totalRuns)
@@ -4572,7 +5743,18 @@ void MainWindow::on_actionValidateRoundTripBatch_triggered()
         .arg(QDir::toNativeSeparators(reportPath))
         .arg(QDir::toNativeSeparators(failuresRootPath));
 
-    if (canceled || failCount > 0) {
+    if (!discoveryWarnings.isEmpty()) {
+        QStringList preview = discoveryWarnings.mid(0, 10);
+        if (discoveryWarnings.size() > preview.size()) {
+            preview << tr("... (%1 additional warnings)")
+                .arg(discoveryWarnings.size() - preview.size());
+        }
+        summary += tr("\n\nArchive scan warnings (%1):\n%2")
+            .arg(discoveryWarnings.size())
+            .arg(preview.join("\n"));
+    }
+
+    if (canceled || failCount > 0 || !discoveryWarnings.isEmpty()) {
         QMessageBox::warning(this, tr("Round-Trip Validate"), summary);
     }
     else {
