@@ -350,6 +350,7 @@
     <ClInclude Include="backend\ChunkData.h" />
     <ClInclude Include="backend\ChunkMutators.h" />
     <ClCompile Include="backend\ChunkData.cpp" />
+    <ResourceCompile Include="app_icon.rc" />
   </ItemGroup>
   <ItemGroup />
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />

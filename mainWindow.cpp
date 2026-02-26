@@ -526,8 +526,7 @@ static bool LoadW3DFromMixArchive(
     const QString& mixPath,
     ChunkData& chunkData,
     QString* outError) {
-    const QString normalizedPath = QDir::fromNativeSeparators(mixPath).trimmed();
-    const bool allowClassicFallback = normalizedPath.endsWith(QStringLiteral(".mix"), Qt::CaseInsensitive);
+    const bool allowClassicFallback = IsMixArchivePath(mixPath);
 
     QFile file(mixPath);
     if (!file.open(QIODevice::ReadOnly)) {
@@ -4984,7 +4983,7 @@ static void DiscoverBatchInputs(
 
         MixArchiveInfo archiveInfo;
         QString parseError;
-        const bool allowClassicFallback = archivePath.endsWith(QStringLiteral(".mix"), Qt::CaseInsensitive);
+        const bool allowClassicFallback = IsMixArchivePath(archivePath);
         if (!ParseMixArchive(archiveBytes, allowClassicFallback, archiveInfo, &parseError)) {
             if (outWarnings) {
                 outWarnings->append(
@@ -5783,6 +5782,8 @@ void MainWindow::exportJson() {
 }
 
 void MainWindow::importJson() {
+    if (!confirmDiscardChanges()) return;
+
     QString path = QFileDialog::getOpenFileName(this, tr("Import from JSON"), lastDirectory, tr("JSON Files (*.json);;All Files (*)"));
     if (path.isEmpty()) return;
     QFile file(path);
@@ -5814,6 +5815,10 @@ void MainWindow::importJson() {
         return;
     }
     ClearChunkTree();
+    currentFilePath.clear();
+    updateWindowTitle();
+    setDirty(true);
+    lastDirectory = QFileInfo(path).absolutePath();
     populateTree();
     if (!importWarnings.empty()) {
         QStringList preview;
@@ -5839,6 +5844,12 @@ void MainWindow::importJson() {
         if (!out.isEmpty()) {
             if (!chunkData->saveToFile(out.toStdString())) {
                 QMessageBox::warning(this, tr("Error"), tr("Failed to save W3D file."));
+            }
+            else {
+                currentFilePath = out;
+                AddRecentFile(out);
+                lastDirectory = QFileInfo(out).absolutePath();
+                setDirty(false);
             }
         }
     }

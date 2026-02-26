@@ -127,6 +127,14 @@
     </Filter>
   </ItemGroup>
   <ItemGroup>
+    <ResourceCompile Include="app_icon.rc">
+      <Filter>Resource Files</Filter>
+    </ResourceCompile>
     <QtMoc Include="MainWindow.h" />
+  </ItemGroup>
+  <ItemGroup>
+    <Filter Include="Resource Files">
+      <UniqueIdentifier>{4A782A7C-5972-4E34-B4A2-B4F39D39F5CF}</UniqueIdentifier>
+    </Filter>
   </ItemGroup>
 </Project>
