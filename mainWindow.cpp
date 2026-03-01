@@ -3447,6 +3447,99 @@ void MainWindow::handleTreeSelection() {
     updateRawHex(target);
 }
 
+static bool IsPureAnimationTopLevelChunkId(uint32_t id) {
+    switch (id) {
+    case 0x0200: // W3D_CHUNK_ANIMATION
+    case 0x0201: // W3D_CHUNK_ANIMATION_HEADER
+    case 0x0202: // W3D_CHUNK_ANIMATION_CHANNEL
+    case 0x0280: // W3D_CHUNK_COMPRESSED_ANIMATION
+    case 0x0281: // W3D_CHUNK_COMPRESSED_ANIMATION_HEADER
+    case 0x0282: // W3D_CHUNK_COMPRESSED_ANIMATION_CHANNEL
+    case 0x02C0: // W3D_CHUNK_MORPH_ANIMATION
+    case 0x02C1: // W3D_CHUNK_MORPHANIM_HEADER
+    case 0x02C2: // W3D_CHUNK_MORPHANIM_CHANNEL
+        return true;
+    default:
+        return false;
+    }
+}
+
+static bool IsPureAnimationFile(const std::vector<std::shared_ptr<ChunkItem>>& roots) {
+    if (roots.empty()) {
+        return false;
+    }
+
+    for (const auto& root : roots) {
+        if (!root || !IsPureAnimationTopLevelChunkId(root->id)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static void UpdateAnimationHeaderNameRecursive(
+    const std::shared_ptr<ChunkItem>& node,
+    const std::string& animationName)
+{
+    if (!node) {
+        return;
+    }
+
+    switch (node->id) {
+    case 0x0201: // W3D_CHUNK_ANIMATION_HEADER
+        (void)W3DEdit::MutateStructChunk<W3dAnimHeaderStruct>(
+            node,
+            [&](W3dAnimHeaderStruct& header) {
+                W3DEdit::WriteFixedString(header.Name, W3D_NAME_LEN, animationName);
+            });
+        break;
+    case 0x0281: // W3D_CHUNK_COMPRESSED_ANIMATION_HEADER
+        (void)W3DEdit::MutateStructChunk<W3dCompressedAnimHeaderStruct>(
+            node,
+            [&](W3dCompressedAnimHeaderStruct& header) {
+                W3DEdit::WriteFixedString(header.Name, W3D_NAME_LEN, animationName);
+            });
+        break;
+    case 0x02C1: // W3D_CHUNK_MORPHANIM_HEADER
+        (void)W3DEdit::MutateStructChunk<W3dMorphAnimHeaderStruct>(
+            node,
+            [&](W3dMorphAnimHeaderStruct& header) {
+                W3DEdit::WriteFixedString(header.Name, W3D_NAME_LEN, animationName);
+            });
+        break;
+    default:
+        break;
+    }
+
+    for (const auto& child : node->children) {
+        UpdateAnimationHeaderNameRecursive(child, animationName);
+    }
+}
+
+static void SyncPureAnimationHeaderNameForSave(ChunkData* chunkData, const QString& savePath) {
+    if (!chunkData) {
+        return;
+    }
+
+    auto& roots = chunkData->getChunksMutable();
+    if (!IsPureAnimationFile(roots)) {
+        return;
+    }
+
+    QString baseName = QFileInfo(savePath).completeBaseName().trimmed();
+    if (baseName.isEmpty()) {
+        baseName = QFileInfo(savePath).fileName().trimmed();
+    }
+    if (baseName.isEmpty()) {
+        return;
+    }
+
+    const std::string animationName = baseName.toUpper().toStdString();
+    for (const auto& root : roots) {
+        UpdateAnimationHeaderNameRecursive(root, animationName);
+    }
+}
+
 void MainWindow::saveFile() {
     if (!chunkData || chunkData->getChunks().empty()) {
         return;
@@ -3461,6 +3554,7 @@ void MainWindow::saveFile() {
         return;
     }
 
+    SyncPureAnimationHeaderNameForSave(chunkData.get(), currentFilePath);
     if (!chunkData->saveToFile(currentFilePath.toStdString())) {
         QMessageBox::warning(this, tr("Error"), tr("Failed to save file."));
         return;
@@ -3490,6 +3584,7 @@ void MainWindow::saveFileAs() {
 
     if (filePath.isEmpty()) return;
 
+    SyncPureAnimationHeaderNameForSave(chunkData.get(), filePath);
     if (!chunkData->saveToFile(filePath.toStdString())) {
         QMessageBox::warning(this, tr("Error"), tr("Failed to save file."));
         return;
@@ -3517,14 +3612,17 @@ void MainWindow::onMeshRenamed(const QString& oldMeshName,
     if (!meshChanged && !containerChanged) return;
 
     const bool hasOldContainer = !oldContainerName.isEmpty();
+    auto sameName = [&](const QString& lhs, const QString& rhs) -> bool {
+        return NormalizeName(lhs.toStdString()) == NormalizeName(rhs.toStdString());
+        };
 
     auto renameFullName = [&](const QString& current) -> QString {
         const int dot = current.indexOf(QLatin1Char('.'));
         if (dot < 0) {
-            if (containerChanged && hasOldContainer && current == oldContainerName) {
+            if (containerChanged && hasOldContainer && sameName(current, oldContainerName)) {
                 return newContainerName;
             }
-            if (!hasOldContainer && meshChanged && current == oldMeshName) {
+            if (!hasOldContainer && meshChanged && sameName(current, oldMeshName)) {
                 return newMeshName;
             }
             return current;
@@ -3532,7 +3630,7 @@ void MainWindow::onMeshRenamed(const QString& oldMeshName,
 
         const QString containerPart = current.left(dot);
         const QString objectPart = current.mid(dot + 1);
-        if (!hasOldContainer || containerPart != oldContainerName) {
+        if (!hasOldContainer || !sameName(containerPart, oldContainerName)) {
             return current;
         }
 
@@ -3541,7 +3639,7 @@ void MainWindow::onMeshRenamed(const QString& oldMeshName,
         if (containerChanged) {
             updatedContainer = newContainerName;
         }
-        if (meshChanged && objectPart == oldMeshName) {
+        if (meshChanged && sameName(objectPart, oldMeshName)) {
             updatedObject = newMeshName;
         }
         return updatedContainer + QLatin1Char('.') + updatedObject;
@@ -3555,7 +3653,7 @@ void MainWindow::onMeshRenamed(const QString& oldMeshName,
             auto parsed = ParseChunkStruct<W3dMeshHeader3Struct>(node);
             if (auto header = std::get_if<W3dMeshHeader3Struct>(&parsed)) {
                 const QString containerName = ReadFixedString(header->ContainerName, W3D_NAME_LEN);
-                if (containerName == oldContainerName) {
+                if (sameName(containerName, oldContainerName)) {
                     (void)W3DEdit::MutateStructChunk<W3dMeshHeader3Struct>(
                         node,
                         [&](W3dMeshHeader3Struct& target) {
@@ -3579,17 +3677,17 @@ void MainWindow::onMeshRenamed(const QString& oldMeshName,
                 }
             }
 
-            if (containerChanged && headerChunk && modelName == oldContainerName) {
+            if (containerChanged && headerChunk && sameName(modelName, oldContainerName)) {
                 (void)W3DEdit::MutateStructChunk<W3dHModelHeaderStruct>(
                     headerChunk,
                     [&](W3dHModelHeaderStruct& header) {
-                        if (ReadFixedString(header.Name, W3D_NAME_LEN) == oldContainerName) {
+                        if (sameName(ReadFixedString(header.Name, W3D_NAME_LEN), oldContainerName)) {
                             W3DEdit::WriteFixedString(header.Name, W3D_NAME_LEN, newContainerName.toStdString());
                         }
                     });
             }
 
-            if (modelName == oldContainerName) {
+            if (sameName(modelName, oldContainerName)) {
                 if (meshChanged) {
                     for (const auto& child : node->children) {
                         if (child->id != 0x0302 && child->id != 0x0303
@@ -3600,7 +3698,7 @@ void MainWindow::onMeshRenamed(const QString& oldMeshName,
                         auto parsed = ParseChunkStruct<W3dHModelNodeStruct>(child);
                         if (auto nodeStruct = std::get_if<W3dHModelNodeStruct>(&parsed)) {
                             const QString renderName = ReadFixedString(nodeStruct->RenderObjName, W3D_NAME_LEN);
-                            if (renderName == oldMeshName) {
+                            if (sameName(renderName, oldMeshName)) {
                                 (void)W3DEdit::MutateStructChunk<W3dHModelNodeStruct>(
                                     child,
                                     [&](W3dHModelNodeStruct& n) {
@@ -3619,12 +3717,18 @@ void MainWindow::onMeshRenamed(const QString& oldMeshName,
             auto parsed = ParseChunkStruct<W3dHLodHeaderStruct>(node);
             if (auto header = std::get_if<W3dHLodHeaderStruct>(&parsed)) {
                 const QString currentName = ReadFixedString(header->Name, W3D_NAME_LEN);
-                if (currentName == oldContainerName) {
+                const QString currentHierarchyName = ReadFixedString(header->HierarchyName, W3D_NAME_LEN);
+                const bool renameName = sameName(currentName, oldContainerName);
+                const bool renameHierarchy = sameName(currentHierarchyName, oldContainerName);
+                if (renameName || renameHierarchy) {
                     (void)W3DEdit::MutateStructChunk<W3dHLodHeaderStruct>(
                         node,
                         [&](W3dHLodHeaderStruct& target) {
-                            if (ReadFixedString(target.Name, W3D_NAME_LEN) == oldContainerName) {
+                            if (sameName(ReadFixedString(target.Name, W3D_NAME_LEN), oldContainerName)) {
                                 W3DEdit::WriteFixedString(target.Name, W3D_NAME_LEN, newContainerName.toStdString());
+                            }
+                            if (sameName(ReadFixedString(target.HierarchyName, W3D_NAME_LEN), oldContainerName)) {
+                                W3DEdit::WriteFixedString(target.HierarchyName, W3D_NAME_LEN, newContainerName.toStdString());
                             }
                         });
                 }
@@ -5842,6 +5946,7 @@ void MainWindow::importJson() {
         QMessageBox::Yes | QMessageBox::No) == QMessageBox::Yes) {
         QString out = QFileDialog::getSaveFileName(this, tr("Save W3D File"), lastDirectory, tr("W3D Files (*.w3d);;All Files (*)"));
         if (!out.isEmpty()) {
+            SyncPureAnimationHeaderNameForSave(chunkData.get(), out);
             if (!chunkData->saveToFile(out.toStdString())) {
                 QMessageBox::warning(this, tr("Error"), tr("Failed to save W3D file."));
             }
