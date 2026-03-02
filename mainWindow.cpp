@@ -1038,6 +1038,225 @@ static bool FindChunkLocation(
     return FindChunkLocationRecursive(roots, nullptr, targetPtr, out);
 }
 
+static bool SyncHLodArrayHeaderModelCounts(const std::shared_ptr<ChunkItem>& arrayChunk) {
+    if (!arrayChunk) return false;
+    if (arrayChunk->id != 0x0702 && arrayChunk->id != 0x0706 && arrayChunk->id != 0x0707) {
+        return false;
+    }
+
+    uint32_t modelCount = 0;
+    for (const auto& child : arrayChunk->children) {
+        if (child && child->id == 0x0704) {
+            ++modelCount;
+        }
+    }
+
+    bool changed = false;
+    for (const auto& child : arrayChunk->children) {
+        if (!child || child->id != 0x0703) {
+            continue;
+        }
+        auto parsed = ParseChunkStruct<W3dHLodArrayHeaderStruct>(child);
+        auto* header = std::get_if<W3dHLodArrayHeaderStruct>(&parsed);
+        if (!header || header->ModelCount == modelCount) {
+            continue;
+        }
+
+        if (W3DEdit::MutateStructChunk<W3dHLodArrayHeaderStruct>(
+            child,
+            [&](W3dHLodArrayHeaderStruct& h) {
+                h.ModelCount = modelCount;
+            }))
+        {
+            changed = true;
+        }
+    }
+
+    return changed;
+}
+
+static bool SyncHLodWrapperCounts(const std::shared_ptr<ChunkItem>& hlodChunk) {
+    if (!hlodChunk || hlodChunk->id != 0x0700) {
+        return false;
+    }
+
+    uint32_t lodCount = 0;
+    for (const auto& child : hlodChunk->children) {
+        if (child && child->id == 0x0702) {
+            ++lodCount;
+        }
+    }
+
+    bool changed = false;
+
+    for (const auto& child : hlodChunk->children) {
+        if (!child) {
+            continue;
+        }
+
+        if (child->id == 0x0701) {
+            auto parsed = ParseChunkStruct<W3dHLodHeaderStruct>(child);
+            auto* header = std::get_if<W3dHLodHeaderStruct>(&parsed);
+            if (header && header->LodCount != lodCount) {
+                if (W3DEdit::MutateStructChunk<W3dHLodHeaderStruct>(
+                    child,
+                    [&](W3dHLodHeaderStruct& h) {
+                        h.LodCount = lodCount;
+                    }))
+                {
+                    changed = true;
+                }
+            }
+        }
+
+        if (SyncHLodArrayHeaderModelCounts(child)) {
+            changed = true;
+        }
+    }
+
+    return changed;
+}
+
+static void SyncHLodCountsForSave(ChunkData* chunkData) {
+    if (!chunkData) return;
+
+    auto& roots = chunkData->getChunksMutable();
+    std::function<void(const std::shared_ptr<ChunkItem>&)> dfs =
+        [&](const std::shared_ptr<ChunkItem>& node) {
+        if (!node) return;
+        if (node->id == 0x0700) {
+            (void)SyncHLodWrapperCounts(node);
+        }
+        else if (node->id == 0x0702 || node->id == 0x0706 || node->id == 0x0707) {
+            (void)SyncHLodArrayHeaderModelCounts(node);
+        }
+
+        for (const auto& child : node->children) {
+            dfs(child);
+        }
+        };
+
+    for (const auto& root : roots) {
+        dfs(root);
+    }
+}
+
+static QString FindHierarchyNameForPivotChunk(const std::shared_ptr<ChunkItem>& pivotChunk) {
+    if (!pivotChunk || !pivotChunk->parent || pivotChunk->parent->id != 0x0100) {
+        return {};
+    }
+
+    ChunkItem* hierarchy = pivotChunk->parent;
+    for (const auto& child : hierarchy->children) {
+        if (!child || child->id != 0x0101) {
+            continue;
+        }
+
+        auto parsed = ParseChunkStruct<W3dHierarchyStruct>(child);
+        if (auto* header = std::get_if<W3dHierarchyStruct>(&parsed)) {
+            return ReadFixedString(header->Name, W3D_NAME_LEN);
+        }
+    }
+
+    return {};
+}
+
+static int RenameHLodProxyNamesForHierarchy(
+    const std::vector<std::shared_ptr<ChunkItem>>& roots,
+    const QString& hierarchyName,
+    int pivotIndex,
+    const QString& oldPivotName,
+    const QString& newPivotName)
+{
+    if (oldPivotName.isEmpty() || newPivotName.isEmpty()) {
+        return 0;
+    }
+
+    const std::string targetHierarchyNorm = NormalizeName(hierarchyName.toStdString());
+    const auto sameName = [&](const QString& lhs, const QString& rhs) -> bool {
+        return NormalizeName(lhs.toStdString()) == NormalizeName(rhs.toStdString());
+        };
+
+    int renameCount = 0;
+
+    std::function<void(const std::shared_ptr<ChunkItem>&)> dfs =
+        [&](const std::shared_ptr<ChunkItem>& node) {
+        if (!node) return;
+
+        if (node->id == 0x0700) {
+            bool hierarchyMatches = targetHierarchyNorm.empty();
+
+            for (const auto& child : node->children) {
+                if (!child || child->id != 0x0701) {
+                    continue;
+                }
+                auto parsed = ParseChunkStruct<W3dHLodHeaderStruct>(child);
+                if (auto* header = std::get_if<W3dHLodHeaderStruct>(&parsed)) {
+                    const QString headerName = ReadFixedString(header->Name, W3D_NAME_LEN);
+                    const QString hierarchyRef = ReadFixedString(header->HierarchyName, W3D_NAME_LEN);
+                    const std::string headerNorm = NormalizeName(headerName.toStdString());
+                    const std::string hierarchyNorm = NormalizeName(hierarchyRef.toStdString());
+                    hierarchyMatches =
+                        targetHierarchyNorm.empty()
+                        || (!headerNorm.empty() && headerNorm == targetHierarchyNorm)
+                        || (!hierarchyNorm.empty() && hierarchyNorm == targetHierarchyNorm);
+                }
+                break;
+            }
+
+            if (hierarchyMatches) {
+                std::function<void(const std::shared_ptr<ChunkItem>&, bool)> scanProxyEntries =
+                    [&](const std::shared_ptr<ChunkItem>& cur, bool inProxyArray) {
+                    if (!cur) return;
+                    const bool isProxyContext = inProxyArray || (cur->id == 0x0706);
+
+                    if (isProxyContext && cur->id == 0x0704) {
+                        auto parsed = ParseChunkStruct<W3dHLodSubObjectStruct>(cur);
+                        if (auto* sub = std::get_if<W3dHLodSubObjectStruct>(&parsed)) {
+                            const QString currentName = ReadFixedString(sub->Name, 2 * W3D_NAME_LEN);
+                            const bool nameMatches = sameName(currentName, oldPivotName);
+                            const bool indexMatches = (pivotIndex < 0)
+                                || (static_cast<int>(sub->BoneIndex) == pivotIndex);
+
+                            if (nameMatches && indexMatches) {
+                                if (W3DEdit::MutateStructChunk<W3dHLodSubObjectStruct>(
+                                    cur,
+                                    [&](W3dHLodSubObjectStruct& target) {
+                                        W3DEdit::WriteFixedString(
+                                            target.Name,
+                                            2 * W3D_NAME_LEN,
+                                            newPivotName.toStdString());
+                                    }))
+                                {
+                                    ++renameCount;
+                                }
+                            }
+                        }
+                    }
+
+                    for (const auto& child : cur->children) {
+                        scanProxyEntries(child, isProxyContext);
+                    }
+                    };
+
+                for (const auto& child : node->children) {
+                    scanProxyEntries(child, false);
+                }
+            }
+        }
+
+        for (const auto& child : node->children) {
+            dfs(child);
+        }
+        };
+
+    for (const auto& root : roots) {
+        dfs(root);
+    }
+
+    return renameCount;
+}
+
 static bool ParseChunkIdText(const QString& text, uint32_t& outId) {
     QString normalized = text.trimmed();
     if (normalized.isEmpty()) return false;
@@ -3554,6 +3773,7 @@ void MainWindow::saveFile() {
         return;
     }
 
+    SyncHLodCountsForSave(chunkData.get());
     SyncPureAnimationHeaderNameForSave(chunkData.get(), currentFilePath);
     if (!chunkData->saveToFile(currentFilePath.toStdString())) {
         QMessageBox::warning(this, tr("Error"), tr("Failed to save file."));
@@ -3584,6 +3804,7 @@ void MainWindow::saveFileAs() {
 
     if (filePath.isEmpty()) return;
 
+    SyncHLodCountsForSave(chunkData.get());
     SyncPureAnimationHeaderNameForSave(chunkData.get(), filePath);
     if (!chunkData->saveToFile(filePath.toStdString())) {
         QMessageBox::warning(this, tr("Error"), tr("Failed to save file."));
@@ -3643,6 +3864,29 @@ void MainWindow::onMeshRenamed(const QString& oldMeshName,
             updatedObject = newMeshName;
         }
         return updatedContainer + QLatin1Char('.') + updatedObject;
+        };
+
+    auto renameAnimationToken = [&](const QString& current) -> QString {
+        QString updated = renameFullName(current);
+        if (updated != current) {
+            return updated;
+        }
+
+        if (!containerChanged || !hasOldContainer) {
+            return current;
+        }
+
+        if (current.startsWith(oldContainerName, Qt::CaseInsensitive)
+            && current.size() > oldContainerName.size()) {
+            const QChar boundary = current.at(oldContainerName.size());
+            if (boundary == QLatin1Char('_')
+                || boundary == QLatin1Char('.')
+                || boundary == QLatin1Char('-')) {
+                return newContainerName + current.mid(oldContainerName.size());
+            }
+        }
+
+        return current;
         };
 
     std::function<void(const std::shared_ptr<ChunkItem>&)> dfs =
@@ -3712,6 +3956,60 @@ void MainWindow::onMeshRenamed(const QString& oldMeshName,
         }
 
         switch (node->id) {
+        case 0x0201: { // W3D_CHUNK_ANIMATION_HEADER
+            auto parsed = ParseChunkStruct<W3dAnimHeaderStruct>(node);
+            if (auto header = std::get_if<W3dAnimHeaderStruct>(&parsed)) {
+                const QString curName = ReadFixedString(header->Name, W3D_NAME_LEN);
+                const QString curHierarchy = ReadFixedString(header->HierarchyName, W3D_NAME_LEN);
+                const QString updatedName = renameAnimationToken(curName);
+                const QString updatedHierarchy = renameAnimationToken(curHierarchy);
+                if (updatedName != curName || updatedHierarchy != curHierarchy) {
+                    (void)W3DEdit::MutateStructChunk<W3dAnimHeaderStruct>(
+                        node,
+                        [&](W3dAnimHeaderStruct& target) {
+                            W3DEdit::WriteFixedString(target.Name, W3D_NAME_LEN, updatedName.toStdString());
+                            W3DEdit::WriteFixedString(target.HierarchyName, W3D_NAME_LEN, updatedHierarchy.toStdString());
+                        });
+                }
+            }
+            break;
+        }
+        case 0x0281: { // W3D_CHUNK_COMPRESSED_ANIMATION_HEADER
+            auto parsed = ParseChunkStruct<W3dCompressedAnimHeaderStruct>(node);
+            if (auto header = std::get_if<W3dCompressedAnimHeaderStruct>(&parsed)) {
+                const QString curName = ReadFixedString(header->Name, W3D_NAME_LEN);
+                const QString curHierarchy = ReadFixedString(header->HierarchyName, W3D_NAME_LEN);
+                const QString updatedName = renameAnimationToken(curName);
+                const QString updatedHierarchy = renameAnimationToken(curHierarchy);
+                if (updatedName != curName || updatedHierarchy != curHierarchy) {
+                    (void)W3DEdit::MutateStructChunk<W3dCompressedAnimHeaderStruct>(
+                        node,
+                        [&](W3dCompressedAnimHeaderStruct& target) {
+                            W3DEdit::WriteFixedString(target.Name, W3D_NAME_LEN, updatedName.toStdString());
+                            W3DEdit::WriteFixedString(target.HierarchyName, W3D_NAME_LEN, updatedHierarchy.toStdString());
+                        });
+                }
+            }
+            break;
+        }
+        case 0x02C1: { // W3D_CHUNK_MORPHANIM_HEADER
+            auto parsed = ParseChunkStruct<W3dMorphAnimHeaderStruct>(node);
+            if (auto header = std::get_if<W3dMorphAnimHeaderStruct>(&parsed)) {
+                const QString curName = ReadFixedString(header->Name, W3D_NAME_LEN);
+                const QString curHierarchy = ReadFixedString(header->HierarchyName, W3D_NAME_LEN);
+                const QString updatedName = renameAnimationToken(curName);
+                const QString updatedHierarchy = renameAnimationToken(curHierarchy);
+                if (updatedName != curName || updatedHierarchy != curHierarchy) {
+                    (void)W3DEdit::MutateStructChunk<W3dMorphAnimHeaderStruct>(
+                        node,
+                        [&](W3dMorphAnimHeaderStruct& target) {
+                            W3DEdit::WriteFixedString(target.Name, W3D_NAME_LEN, updatedName.toStdString());
+                            W3DEdit::WriteFixedString(target.HierarchyName, W3D_NAME_LEN, updatedHierarchy.toStdString());
+                        });
+                }
+            }
+            break;
+        }
         case 0x0701: { // W3D_CHUNK_HLOD_HEADER
             if (!containerChanged || !hasOldContainer) break;
             auto parsed = ParseChunkStruct<W3dHLodHeaderStruct>(node);
@@ -4127,6 +4425,24 @@ void MainWindow::showHierarchyBrowser() {
                 return false;
             }
 
+            auto parsedPivots = ParseChunkArray<W3dPivotStruct>(pivotChunk);
+            if (auto parseError = std::get_if<std::string>(&parsedPivots)) {
+                if (error) {
+                    *error = QString::fromStdString(*parseError);
+                }
+                return false;
+            }
+            const auto& pivots = std::get<std::vector<W3dPivotStruct>>(parsedPivots);
+            if (pivotIndex >= static_cast<int>(pivots.size())) {
+                if (error) {
+                    *error = tr("Pivot index is out of range.");
+                }
+                return false;
+            }
+            const QString oldName = ReadFixedString(
+                pivots[static_cast<std::size_t>(pivotIndex)].Name,
+                W3D_NAME_LEN);
+
             std::string mutateError;
             const bool mutated = W3DEdit::MutateStructAtIndex<W3dPivotStruct>(
                 pivotChunk,
@@ -4145,6 +4461,14 @@ void MainWindow::showHierarchyBrowser() {
                 }
                 return false;
             }
+
+            const QString hierarchyName = FindHierarchyNameForPivotChunk(pivotChunk);
+            (void)RenameHLodProxyNamesForHierarchy(
+                chunkData->getChunks(),
+                hierarchyName,
+                pivotIndex,
+                oldName,
+                newName);
 
             onChunkEdited();
             return true;
@@ -4170,6 +4494,7 @@ void MainWindow::addTopLevelChunk() {
     auto& roots = chunkData->getChunksMutable();
     roots.push_back(newChunk);
 
+    SyncHLodCountsForSave(chunkData.get());
     setDirty(true);
     populateTree();
     selectChunkInTree(newChunk.get());
@@ -4208,6 +4533,7 @@ void MainWindow::insertChunkBefore() {
 
     location.siblings->insert(location.siblings->begin() + static_cast<std::ptrdiff_t>(location.index), newChunk);
 
+    SyncHLodCountsForSave(chunkData.get());
     setDirty(true);
     populateTree();
     selectChunkInTree(newChunk.get());
@@ -4247,6 +4573,7 @@ void MainWindow::insertChunkAfter() {
     const std::size_t insertIndex = location.index + 1;
     location.siblings->insert(location.siblings->begin() + static_cast<std::ptrdiff_t>(insertIndex), newChunk);
 
+    SyncHLodCountsForSave(chunkData.get());
     setDirty(true);
     populateTree();
     selectChunkInTree(newChunk.get());
@@ -4299,6 +4626,7 @@ void MainWindow::addChildChunk() {
     parentChunk->children.push_back(newChunk);
     parentChunk->hasSubChunks = true;
 
+    SyncHLodCountsForSave(chunkData.get());
     setDirty(true);
     populateTree();
     selectChunkInTree(newChunk.get());
@@ -4353,6 +4681,7 @@ void MainWindow::deleteSelectedChunk() {
 
     siblings.erase(siblings.begin() + static_cast<std::ptrdiff_t>(location.index));
 
+    SyncHLodCountsForSave(chunkData.get());
     setDirty(true);
     populateTree();
     if (nextSelection) {
@@ -4387,6 +4716,7 @@ void MainWindow::moveChunkUp() {
     auto& siblings = *location.siblings;
     std::swap(siblings[location.index], siblings[location.index - 1]);
 
+    SyncHLodCountsForSave(chunkData.get());
     setDirty(true);
     populateTree();
     selectChunkInTree(selectedPtr);
@@ -4416,6 +4746,7 @@ void MainWindow::moveChunkDown() {
 
     std::swap(siblings[location.index], siblings[location.index + 1]);
 
+    SyncHLodCountsForSave(chunkData.get());
     setDirty(true);
     populateTree();
     selectChunkInTree(selectedPtr);
@@ -5946,6 +6277,7 @@ void MainWindow::importJson() {
         QMessageBox::Yes | QMessageBox::No) == QMessageBox::Yes) {
         QString out = QFileDialog::getSaveFileName(this, tr("Save W3D File"), lastDirectory, tr("W3D Files (*.w3d);;All Files (*)"));
         if (!out.isEmpty()) {
+            SyncHLodCountsForSave(chunkData.get());
             SyncPureAnimationHeaderNameForSave(chunkData.get(), out);
             if (!chunkData->saveToFile(out.toStdString())) {
                 QMessageBox::warning(this, tr("Error"), tr("Failed to save W3D file."));

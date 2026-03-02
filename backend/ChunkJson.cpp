@@ -339,7 +339,7 @@ std::shared_ptr<ChunkItem> ChunkJson::fromJson(
                         currentPath,
                         "DATA could not be imported; falling back to RAW_DATA_HEX.");
                 }
-                else {
+                else if (it != registry.end() && canUseSerializer) {
                     appendWarning(
                         warnings,
                         currentPath,
