@@ -314,6 +314,9 @@ void D3D11RenderBackend::Shutdown() {
     m_gpuTextures.clear();
     m_scene = {};
     m_lastFrameStats = {};
+    m_selectedInstance.reset();
+    m_transformOverrides.clear();
+    m_hiddenInstances.clear();
 
     m_defaultTexture = {};
     m_objectCBuffer.Reset();
@@ -344,6 +347,7 @@ bool D3D11RenderBackend::UploadScene(const RenderScene& scene) {
     m_scene = scene;
     m_gpuMeshes.clear();
     m_gpuTextures.clear();
+    m_startTime = std::chrono::steady_clock::now();
 
     m_gpuMeshes.reserve(scene.meshes.size());
     for (const auto& mesh : scene.meshes) {
@@ -399,7 +403,23 @@ void D3D11RenderBackend::SetRenderSettings(const RenderSettings& settings) {
     m_settings = settings;
 }
 
-void D3D11RenderBackend::RenderFrame() {
+void D3D11RenderBackend::SetSelectedInstance(const std::optional<RenderInstanceKey>& selected) {
+    m_selectedInstance = selected;
+}
+
+void D3D11RenderBackend::SetTransformOverrides(
+    const std::unordered_map<RenderInstanceKey, Mat4, RenderInstanceKeyHash>& overrides)
+{
+    m_transformOverrides = overrides;
+}
+
+void D3D11RenderBackend::SetHiddenInstances(
+    const std::unordered_set<RenderInstanceKey, RenderInstanceKeyHash>& hidden)
+{
+    m_hiddenInstances = hidden;
+}
+
+void D3D11RenderBackend::RenderFrame(const std::function<void()>& overlayCallback) {
     if (!m_initialized || !m_context || !m_rtv || !m_dsv || !m_swapChain) {
         return;
     }
@@ -518,9 +538,25 @@ void D3D11RenderBackend::RenderFrame() {
     };
 
     FrameStats stats{};
+    const auto now = std::chrono::steady_clock::now();
+    const float timeSeconds = std::chrono::duration<float>(now - m_startTime).count();
 
-    for (const auto& lodGroup : m_scene.lodGroups) {
-        for (const auto& entry : lodGroup.entries) {
+    for (std::size_t lodGroupIndex = 0; lodGroupIndex < m_scene.lodGroups.size(); ++lodGroupIndex) {
+        const auto& lodGroup = m_scene.lodGroups[lodGroupIndex];
+        int forcedEntryIndex = -1;
+        if (m_settings.lockLodLevel && !lodGroup.entries.empty()) {
+            forcedEntryIndex = std::clamp(
+                m_settings.lockedLodLevel,
+                0,
+                static_cast<int>(lodGroup.entries.size()) - 1);
+        }
+
+        for (std::size_t entryIndex = 0; entryIndex < lodGroup.entries.size(); ++entryIndex) {
+            if (forcedEntryIndex >= 0 && static_cast<int>(entryIndex) != forcedEntryIndex) {
+                continue;
+            }
+
+            const auto& entry = lodGroup.entries[entryIndex];
             if (entry.meshIndex < 0 || entry.meshIndex >= static_cast<int>(m_gpuMeshes.size())) {
                 continue;
             }
@@ -530,11 +566,22 @@ void D3D11RenderBackend::RenderFrame() {
                 continue;
             }
 
-            const Mat4 world = getWorldForBinding(entry.hierarchyIndex, entry.pivotIndex, Mat4::Identity());
+            RenderInstanceKey key{};
+            key.kind = RenderInstanceKind::LodEntry;
+            key.primaryIndex = static_cast<int>(lodGroupIndex);
+            key.secondaryIndex = static_cast<int>(entryIndex);
+            if (m_hiddenInstances.contains(key)) {
+                continue;
+            }
+
+            Mat4 world = getWorldForBinding(entry.hierarchyIndex, entry.pivotIndex, Mat4::Identity());
+            if (const auto overrideIt = m_transformOverrides.find(key); overrideIt != m_transformOverrides.end()) {
+                world = overrideIt->second;
+            }
             const Vec3 worldCenter = TransformPoint(world, gpuMesh.boundsCenter);
             const float distanceToCamera = Length(worldCenter - cameraPos);
 
-            if (!ShouldRenderLodEntry(entry, gpuMesh, distanceToCamera)) {
+            if (forcedEntryIndex < 0 && !ShouldRenderLodEntry(entry, gpuMesh, distanceToCamera)) {
                 continue;
             }
 
@@ -543,11 +590,13 @@ void D3D11RenderBackend::RenderFrame() {
                 material = &m_scene.materials[gpuMesh.materialIndex];
             }
 
-            DrawMesh(gpuMesh, world, material, frameData, stats);
+            const bool selected = m_selectedInstance.has_value() && *m_selectedInstance == key;
+            DrawMesh(gpuMesh, world, material, frameData, timeSeconds, selected, stats);
         }
     }
 
-    for (const auto& node : m_scene.looseNodes) {
+    for (std::size_t nodeIndex = 0; nodeIndex < m_scene.looseNodes.size(); ++nodeIndex) {
+        const auto& node = m_scene.looseNodes[nodeIndex];
         if (node.meshIndex < 0 || node.meshIndex >= static_cast<int>(m_gpuMeshes.size())) {
             continue;
         }
@@ -557,16 +606,31 @@ void D3D11RenderBackend::RenderFrame() {
             continue;
         }
 
-        const Mat4 world = getWorldForBinding(node.hierarchyIndex, node.pivotIndex, node.localTransform);
+        RenderInstanceKey key{};
+        key.kind = RenderInstanceKind::LooseNode;
+        key.primaryIndex = static_cast<int>(nodeIndex);
+        key.secondaryIndex = -1;
+        if (m_hiddenInstances.contains(key)) {
+            continue;
+        }
+
+        Mat4 world = getWorldForBinding(node.hierarchyIndex, node.pivotIndex, node.localTransform);
+        if (const auto overrideIt = m_transformOverrides.find(key); overrideIt != m_transformOverrides.end()) {
+            world = overrideIt->second;
+        }
         const RenderMaterial* material = nullptr;
         if (gpuMesh.materialIndex >= 0 && gpuMesh.materialIndex < static_cast<int>(m_scene.materials.size())) {
             material = &m_scene.materials[gpuMesh.materialIndex];
         }
 
-        DrawMesh(gpuMesh, world, material, frameData, stats);
+        const bool selected = m_selectedInstance.has_value() && *m_selectedInstance == key;
+        DrawMesh(gpuMesh, world, material, frameData, timeSeconds, selected, stats);
     }
 
     m_lastFrameStats = stats;
+    if (overlayCallback) {
+        overlayCallback();
+    }
     (void)m_swapChain->Present(1, 0);
 }
 
@@ -695,6 +759,9 @@ cbuffer ObjectCB : register(b1)
     row_major float4x4 gWorld;
     float4 gBaseColor;
     float4 gFlags;
+    float4 gUvAnim0;
+    float4 gUvAnim1;
+    float4 gUvAnim2;
 };
 
 struct VSIn
@@ -735,7 +802,24 @@ float4 PSMain(VSOut input) : SV_TARGET
     float3 L = normalize(-gDirectionalLightDir.xyz);
     float ndotl = saturate(dot(N, L));
 
-    float4 texColor = (gFlags.x > 0.5) ? gTexture.Sample(gSampler, input.uv) : float4(1.0, 1.0, 1.0, 1.0);
+    float2 mappedUv = input.uv;
+    if (gUvAnim0.x > 0.5 && gUvAnim0.x < 1.5)
+    {
+        mappedUv = (input.uv * gUvAnim2.xy) + gUvAnim1.xy + (gUvAnim1.zw * gUvAnim0.y);
+    }
+    else if (gUvAnim0.x > 1.5)
+    {
+        float2 centered = (input.uv - gUvAnim2.zw) * gUvAnim2.xy;
+        float angle = gUvAnim0.z * gUvAnim0.y;
+        float s = sin(angle);
+        float c = cos(angle);
+        float2 rotated = float2(
+            centered.x * c - centered.y * s,
+            centered.x * s + centered.y * c);
+        mappedUv = rotated + gUvAnim2.zw + gUvAnim1.xy;
+    }
+
+    float4 texColor = (gFlags.x > 0.5) ? gTexture.Sample(gSampler, mappedUv) : float4(1.0, 1.0, 1.0, 1.0);
     if (gFlags.x > 0.5 && texColor.a <= 0.001)
     {
         discard;
@@ -743,6 +827,21 @@ float4 PSMain(VSOut input) : SV_TARGET
     float4 baseColor = texColor * input.color * gBaseColor;
 
     float3 lit = baseColor.rgb * (gAmbient.rgb + gDirectionalLightColor.rgb * ndotl);
+
+    if (gFlags.z > 0.5)
+    {
+        const float2 uv = frac(input.uv);
+        const float2 uvCell = frac(input.uv * 8.0);
+        const float gridLine = (uvCell.x < 0.03 || uvCell.x > 0.97 || uvCell.y < 0.03 || uvCell.y > 0.97) ? 1.0 : 0.0;
+        const float3 uvColor = float3(uv.x, uv.y, 1.0 - uv.x);
+        lit = lerp(uvColor, float3(0.0, 0.0, 0.0), gridLine);
+    }
+
+    if (gFlags.y > 0.5)
+    {
+        const float3 highlightTint = float3(1.0, 0.85, 0.35);
+        lit = lerp(lit, lit * highlightTint + float3(0.06, 0.04, 0.0), 0.45);
+    }
 
     if (gFogParams.x > 0.5)
     {
@@ -1050,6 +1149,8 @@ void D3D11RenderBackend::DrawMesh(
     const Mat4& world,
     const RenderMaterial* material,
     const CBufferFrame&,
+    float timeSeconds,
+    bool selected,
     FrameStats& stats)
 {
     if (!m_context || !mesh.vertexBuffer || !mesh.indexBuffer) {
@@ -1083,6 +1184,28 @@ void D3D11RenderBackend::DrawMesh(
             srv = texture.srv.Get();
             objectData.flags.x = 1.0f;
         }
+    }
+    objectData.flags.y = selected ? 1.0f : 0.0f;
+    objectData.flags.z = m_settings.debugShowUv ? 1.0f : 0.0f;
+    if (material) {
+        objectData.uvAnim0 = {
+            static_cast<float>(material->uvAnimMode),
+            timeSeconds,
+            material->uvRotateRadPerSec,
+            0.0f
+        };
+        objectData.uvAnim1 = {
+            material->uvOffsetU,
+            material->uvOffsetV,
+            material->uvScrollU,
+            material->uvScrollV
+        };
+        objectData.uvAnim2 = {
+            material->uvScaleU,
+            material->uvScaleV,
+            material->uvCenterU,
+            material->uvCenterV
+        };
     }
 
     m_context->UpdateSubresource(m_objectCBuffer.Get(), 0, nullptr, &objectData, 0, 0);

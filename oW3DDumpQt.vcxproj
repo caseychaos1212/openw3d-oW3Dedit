@@ -98,7 +98,7 @@
   </PropertyGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
     <ClCompile>
-      <AdditionalIncludeDirectories>$(ProjectDir)\thirdparty;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(ProjectDir)\thirdparty;$(ProjectDir)\thirdparty\imgui;$(ProjectDir)\thirdparty\ImGuizmo;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <AdditionalOptions>%(AdditionalOptions) /external:I "C:/Qt/6.9.0/msvc2022_64/include/QtWidgets" /external:I "C:/Qt/6.9.0/msvc2022_64/include" /external:I "C:/Qt/6.9.0/msvc2022_64/include/QtCore" /external:I "C:/Qt/6.9.0/msvc2022_64/mkspecs/win32-msvc" /external:I "C:/Qt/6.9.0/msvc2022_64/include/QtGui" -Zc:__cplusplus -utf-8</AdditionalOptions>
       <AssemblerListingLocation>$(IntDir)</AssemblerListingLocation>
       <BasicRuntimeChecks>EnableFastChecks</BasicRuntimeChecks>
@@ -123,7 +123,7 @@
     </ClCompile>
     <ResourceCompile>
       <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_DEBUG;_WINDOWS;QT_WIDGETS_LIB;QT_CORE_LIB;_ENABLE_EXTENDED_ALIGNED_STORAGE;WIN64;_WIN64;UNICODE;_UNICODE;QT_GUI_LIB</PreprocessorDefinitions>
-      <AdditionalIncludeDirectories>$(ProjectDir)\thirdparty;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(ProjectDir)\thirdparty;$(ProjectDir)\thirdparty\imgui;$(ProjectDir)\thirdparty\ImGuizmo;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ResourceCompile>
     <Midl>
       <AdditionalIncludeDirectories>$(ProjectDir)\thirdparty;$(ProjectDir)\oW3DEdit_autogen\include_Debug;C:\Qt\6.9.0\msvc2022_64\include\QtWidgets;C:\Qt\6.9.0\msvc2022_64\include;C:\Qt\6.9.0\msvc2022_64\include\QtCore;C:\Qt\6.9.0\msvc2022_64\mkspecs\win32-msvc;C:\Qt\6.9.0\msvc2022_64\include\QtGui;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
@@ -152,7 +152,7 @@
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
     <ClCompile>
-      <AdditionalIncludeDirectories>$(ProjectDir)\thirdparty;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(ProjectDir)\thirdparty;$(ProjectDir)\thirdparty\imgui;$(ProjectDir)\thirdparty\ImGuizmo;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <AdditionalOptions>%(AdditionalOptions) /external:I "C:/Qt/6.9.0/msvc2022_64/include/QtWidgets" /external:I "C:/Qt/6.9.0/msvc2022_64/include" /external:I "C:/Qt/6.9.0/msvc2022_64/include/QtCore" /external:I "C:/Qt/6.9.0/msvc2022_64/mkspecs/win32-msvc" /external:I "C:/Qt/6.9.0/msvc2022_64/include/QtGui" -Zc:__cplusplus -utf-8</AdditionalOptions>
       <AssemblerListingLocation>$(IntDir)</AssemblerListingLocation>
       <BasicRuntimeChecks>Default</BasicRuntimeChecks>
@@ -178,7 +178,7 @@
     </ClCompile>
     <ResourceCompile>
       <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_WINDOWS;NDEBUG;QT_WIDGETS_LIB;QT_CORE_LIB;QT_NO_DEBUG;_ENABLE_EXTENDED_ALIGNED_STORAGE;WIN64;_WIN64;UNICODE;_UNICODE;QT_GUI_LIB</PreprocessorDefinitions>
-      <AdditionalIncludeDirectories>$(ProjectDir)\thirdparty;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(ProjectDir)\thirdparty;$(ProjectDir)\thirdparty\imgui;$(ProjectDir)\thirdparty\ImGuizmo;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ResourceCompile>
     <Midl>
       <AdditionalIncludeDirectories>$(ProjectDir)\thirdparty;$(ProjectDir)\oW3DEdit_autogen\include_Release;C:\Qt\6.9.0\msvc2022_64\include\QtWidgets;C:\Qt\6.9.0\msvc2022_64\include;C:\Qt\6.9.0\msvc2022_64\include\QtCore;C:\Qt\6.9.0\msvc2022_64\mkspecs\win32-msvc;C:\Qt\6.9.0\msvc2022_64\include\QtGui;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
@@ -207,7 +207,7 @@
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">
     <ClCompile>
-      <AdditionalIncludeDirectories>$(ProjectDir)\thirdparty;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(ProjectDir)\thirdparty;$(ProjectDir)\thirdparty\imgui;$(ProjectDir)\thirdparty\ImGuizmo;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <AdditionalOptions>%(AdditionalOptions) /external:I "C:/Qt/6.9.0/msvc2022_64/include/QtWidgets" /external:I "C:/Qt/6.9.0/msvc2022_64/include" /external:I "C:/Qt/6.9.0/msvc2022_64/include/QtCore" /external:I "C:/Qt/6.9.0/msvc2022_64/mkspecs/win32-msvc" /external:I "C:/Qt/6.9.0/msvc2022_64/include/QtGui" -Zc:__cplusplus -utf-8</AdditionalOptions>
       <AssemblerListingLocation>$(IntDir)</AssemblerListingLocation>
       <BasicRuntimeChecks>Default</BasicRuntimeChecks>
@@ -233,7 +233,7 @@
     </ClCompile>
     <ResourceCompile>
       <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_WINDOWS;NDEBUG;QT_WIDGETS_LIB;QT_CORE_LIB;QT_NO_DEBUG;_ENABLE_EXTENDED_ALIGNED_STORAGE;WIN64;_WIN64;UNICODE;_UNICODE;QT_GUI_LIB</PreprocessorDefinitions>
-      <AdditionalIncludeDirectories>$(ProjectDir)\thirdparty;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(ProjectDir)\thirdparty;$(ProjectDir)\thirdparty\imgui;$(ProjectDir)\thirdparty\ImGuizmo;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ResourceCompile>
     <Midl>
       <AdditionalIncludeDirectories>$(ProjectDir)\thirdparty;$(ProjectDir)\oW3DEdit_autogen\include_MinSizeRel;C:\Qt\6.9.0\msvc2022_64\include\QtWidgets;C:\Qt\6.9.0\msvc2022_64\include;C:\Qt\6.9.0\msvc2022_64\include\QtCore;C:\Qt\6.9.0\msvc2022_64\mkspecs\win32-msvc;C:\Qt\6.9.0\msvc2022_64\include\QtGui;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
@@ -259,7 +259,7 @@
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">
     <ClCompile>
-      <AdditionalIncludeDirectories>$(ProjectDir)\thirdparty;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(ProjectDir)\thirdparty;$(ProjectDir)\thirdparty\imgui;$(ProjectDir)\thirdparty\ImGuizmo;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <AdditionalOptions>%(AdditionalOptions) /external:I "C:/Qt/6.9.0/msvc2022_64/include/QtWidgets" /external:I "C:/Qt/6.9.0/msvc2022_64/include" /external:I "C:/Qt/6.9.0/msvc2022_64/include/QtCore" /external:I "C:/Qt/6.9.0/msvc2022_64/mkspecs/win32-msvc" /external:I "C:/Qt/6.9.0/msvc2022_64/include/QtGui" -Zc:__cplusplus -utf-8</AdditionalOptions>
       <AssemblerListingLocation>$(IntDir)</AssemblerListingLocation>
       <BasicRuntimeChecks>Default</BasicRuntimeChecks>
@@ -284,7 +284,7 @@
     </ClCompile>
     <ResourceCompile>
       <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_WINDOWS;NDEBUG;QT_WIDGETS_LIB;QT_CORE_LIB;QT_NO_DEBUG;_ENABLE_EXTENDED_ALIGNED_STORAGE;WIN64;_WIN64;UNICODE;_UNICODE;QT_GUI_LIB</PreprocessorDefinitions>
-      <AdditionalIncludeDirectories>$(ProjectDir)\thirdparty;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(ProjectDir)\thirdparty;$(ProjectDir)\thirdparty\imgui;$(ProjectDir)\thirdparty\ImGuizmo;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ResourceCompile>
     <Midl>
       <AdditionalIncludeDirectories>$(ProjectDir)\thirdparty;$(ProjectDir)\oW3DEdit_autogen\include_RelWithDebInfo;C:\Qt\6.9.0\msvc2022_64\include\QtWidgets;C:\Qt\6.9.0\msvc2022_64\include;C:\Qt\6.9.0\msvc2022_64\include\QtCore;C:\Qt\6.9.0\msvc2022_64\mkspecs\win32-msvc;C:\Qt\6.9.0\msvc2022_64\include\QtGui;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
@@ -312,8 +312,19 @@
     <ClInclude Include="thirdparty\nlohmann\json.hpp" />
     <QtMoc Include="MainWindow.h" />
     <QtMoc Include="EditorWidgets.h" />
+    <QtMoc Include="frontend\render\RenderViewportWidget.h" />
     <ClCompile Include="backend\ChunkJson.cpp" />
     <ClCompile Include="backend\ChunkSerializers.cpp" />
+    <ClCompile Include="backend\render\SceneBuilder.cpp" />
+    <ClCompile Include="frontend\render\D3D11RenderBackend.cpp" />
+    <ClCompile Include="frontend\render\VulkanRenderBackend.cpp" />
+    <ClCompile Include="frontend\render\RenderViewportWidget.cpp" />
+    <ClCompile Include="thirdparty\imgui\imgui.cpp" />
+    <ClCompile Include="thirdparty\imgui\imgui_draw.cpp" />
+    <ClCompile Include="thirdparty\imgui\imgui_tables.cpp" />
+    <ClCompile Include="thirdparty\imgui\imgui_widgets.cpp" />
+    <ClCompile Include="thirdparty\imgui\backends\imgui_impl_dx11.cpp" />
+    <ClCompile Include="thirdparty\ImGuizmo\ImGuizmo.cpp" />
     <ClCompile Include="Main.cpp" />
     <ClCompile Include="mainWindow.cpp" />
     <ClInclude Include="backend\ChunkInterpreter.h" />
@@ -349,6 +360,21 @@
     <ClInclude Include="backend\ChunkItem.h" />
     <ClInclude Include="backend\ChunkData.h" />
     <ClInclude Include="backend\ChunkMutators.h" />
+    <ClInclude Include="backend\render\RenderScene.h" />
+    <ClInclude Include="backend\render\RenderTypes.h" />
+    <ClInclude Include="backend\render\SceneBuilder.h" />
+    <ClInclude Include="frontend\render\D3D11RenderBackend.h" />
+    <ClInclude Include="frontend\render\IRenderBackend.h" />
+    <ClInclude Include="frontend\render\VulkanRenderBackend.h" />
+    <ClInclude Include="frontend\render\RenderViewportWidget.h" />
+    <ClInclude Include="thirdparty\imgui\imgui.h" />
+    <ClInclude Include="thirdparty\imgui\imconfig.h" />
+    <ClInclude Include="thirdparty\imgui\imgui_internal.h" />
+    <ClInclude Include="thirdparty\imgui\imstb_rectpack.h" />
+    <ClInclude Include="thirdparty\imgui\imstb_textedit.h" />
+    <ClInclude Include="thirdparty\imgui\imstb_truetype.h" />
+    <ClInclude Include="thirdparty\imgui\backends\imgui_impl_dx11.h" />
+    <ClInclude Include="thirdparty\ImGuizmo\ImGuizmo.h" />
     <ClCompile Include="backend\ChunkData.cpp" />
     <ResourceCompile Include="app_icon.rc" />
   </ItemGroup>

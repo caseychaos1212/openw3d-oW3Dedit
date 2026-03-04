@@ -1,7 +1,12 @@
 #pragma once
 
 #include <array>
+#include <chrono>
+#include <functional>
 #include <memory>
+#include <optional>
+#include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #ifndef NOMINMAX
@@ -25,8 +30,15 @@ public:
     void Resize(uint32_t width, uint32_t height) override;
     void SetCamera(const CameraState& camera) override;
     void SetRenderSettings(const RenderSettings& settings) override;
-    void RenderFrame() override;
+    void SetSelectedInstance(const std::optional<RenderInstanceKey>& selected) override;
+    void SetTransformOverrides(
+        const std::unordered_map<RenderInstanceKey, Mat4, RenderInstanceKeyHash>& overrides) override;
+    void SetHiddenInstances(
+        const std::unordered_set<RenderInstanceKey, RenderInstanceKeyHash>& hidden) override;
+    void RenderFrame(const std::function<void()>& overlayCallback = {}) override;
     FrameStats GetFrameStats() const override;
+    void* NativeDeviceHandle() const override { return m_device.Get(); }
+    void* NativeDeviceContextHandle() const override { return m_context.Get(); }
 
 private:
     struct GpuMesh {
@@ -58,7 +70,10 @@ private:
     struct CBufferObject {
         Mat4 world{};
         Vec4 baseColor{};
-        Vec4 flags{}; // x=has texture
+        Vec4 flags{}; // x=has texture, y=selected highlight, z=uv debug view
+        Vec4 uvAnim0{}; // x=mode (0 none, 1 scroll, 2 rotate), y=timeSeconds, z=rotateRadPerSec
+        Vec4 uvAnim1{}; // x=offsetU, y=offsetV, z=scrollU, w=scrollV
+        Vec4 uvAnim2{}; // x=scaleU, y=scaleV, z=centerU, w=centerV
     };
 
     bool CreateDeviceAndSwapchain(void* nativeWindow, uint32_t width, uint32_t height);
@@ -76,6 +91,8 @@ private:
         const Mat4& world,
         const RenderMaterial* material,
         const CBufferFrame& frameData,
+        float timeSeconds,
+        bool selected,
         FrameStats& stats);
 
     Mat4 BuildPivotWorldTransform(int hierarchyIndex, int pivotIndex) const;
@@ -111,6 +128,11 @@ private:
     CameraState m_camera{};
     RenderSettings m_settings{};
     FrameStats m_lastFrameStats{};
+    std::optional<RenderInstanceKey> m_selectedInstance;
+    std::unordered_map<RenderInstanceKey, Mat4, RenderInstanceKeyHash> m_transformOverrides;
+    std::unordered_set<RenderInstanceKey, RenderInstanceKeyHash> m_hiddenInstances;
+
+    std::chrono::steady_clock::time_point m_startTime = std::chrono::steady_clock::now();
 
     uint32_t m_viewWidth = 1;
     uint32_t m_viewHeight = 1;

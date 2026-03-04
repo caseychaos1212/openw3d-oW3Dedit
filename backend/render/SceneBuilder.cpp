@@ -5,6 +5,7 @@
 #include <cctype>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <filesystem>
 #include <functional>
 #include <limits>
@@ -30,9 +31,13 @@ constexpr uint32_t kChunkTriangles = 0x0020;
 constexpr uint32_t kChunkTextureWrapper = 0x0031;
 constexpr uint32_t kChunkTextureName = 0x0032;
 constexpr uint32_t kChunkMaterialPass = 0x0038;
+constexpr uint32_t kChunkVertexMaterialIds = 0x0039;
 constexpr uint32_t kChunkTextureStage = 0x0048;
 constexpr uint32_t kChunkTextureIds = 0x0049;
 constexpr uint32_t kChunkStageTexCoords = 0x004A;
+constexpr uint32_t kChunkVertexMaterial = 0x002B;
+constexpr uint32_t kChunkVertexMaterialInfo = 0x002D;
+constexpr uint32_t kChunkVertexMapperArgs0 = 0x002E;
 constexpr uint32_t kChunkPrelitUnlit = 0x0023;
 constexpr uint32_t kChunkPrelitVertex = 0x0024;
 constexpr uint32_t kChunkPrelitLightmapMultiPass = 0x0025;
@@ -48,6 +53,9 @@ constexpr uint32_t kChunkHLodHeader = 0x0701;
 constexpr uint32_t kChunkHLodLodArray = 0x0702;
 constexpr uint32_t kChunkHLodSubObjectArrayHeader = 0x0703;
 constexpr uint32_t kChunkHLodSubObject = 0x0704;
+constexpr uint8_t kStageMappingScreen = 0x03;
+constexpr uint8_t kStageMappingLinearOffset = 0x04;
+constexpr uint8_t kStageMappingRotate = 0x08;
 
 std::string ReadFixedString(const char* data, std::size_t maxLen) {
     if (!data || maxLen == 0) {
@@ -267,6 +275,209 @@ std::string BaseNameKey(const std::string& input) {
     return normalized.substr(slash + 1);
 }
 
+std::string TrimAscii(std::string value) {
+    std::size_t begin = 0;
+    while (begin < value.size()
+        && std::isspace(static_cast<unsigned char>(value[begin])) != 0) {
+        ++begin;
+    }
+
+    std::size_t end = value.size();
+    while (end > begin
+        && std::isspace(static_cast<unsigned char>(value[end - 1])) != 0) {
+        --end;
+    }
+
+    return value.substr(begin, end - begin);
+}
+
+bool TryParseFloat(const std::string& text, float& outValue) {
+    const std::string trimmed = TrimAscii(text);
+    if (trimmed.empty()) {
+        return false;
+    }
+
+    char* parseEnd = nullptr;
+    const float parsed = std::strtof(trimmed.c_str(), &parseEnd);
+    if (parseEnd == trimmed.c_str() || *parseEnd != '\0') {
+        return false;
+    }
+
+    outValue = parsed;
+    return true;
+}
+
+std::unordered_map<std::string, std::string> ParseMapperArgs(const std::string& mapperArgsText) {
+    std::unordered_map<std::string, std::string> argsByKey;
+    std::size_t lineStart = 0;
+    while (lineStart < mapperArgsText.size()) {
+        const std::size_t lineEnd = mapperArgsText.find('\n', lineStart);
+        std::string line = mapperArgsText.substr(
+            lineStart,
+            (lineEnd == std::string::npos) ? std::string::npos : (lineEnd - lineStart));
+        if (!line.empty() && line.back() == '\r') {
+            line.pop_back();
+        }
+
+        const std::size_t commentPos = line.find(';');
+        if (commentPos != std::string::npos) {
+            line = line.substr(0, commentPos);
+        }
+
+        const std::size_t equalsPos = line.find('=');
+        if (equalsPos != std::string::npos) {
+            std::string key = TrimAscii(line.substr(0, equalsPos));
+            std::string value = TrimAscii(line.substr(equalsPos + 1));
+            if (!key.empty()) {
+                key = NormalizeName(key);
+                argsByKey[key] = value;
+            }
+        }
+
+        if (lineEnd == std::string::npos) {
+            break;
+        }
+        lineStart = lineEnd + 1;
+    }
+
+    return argsByKey;
+}
+
+std::optional<float> GetMapperArgFloat(
+    const std::unordered_map<std::string, std::string>& argsByKey,
+    const char* key)
+{
+    if (!key) {
+        return std::nullopt;
+    }
+
+    const auto it = argsByKey.find(NormalizeName(key));
+    if (it == argsByKey.end()) {
+        return std::nullopt;
+    }
+
+    float value = 0.0f;
+    if (!TryParseFloat(it->second, value)) {
+        return std::nullopt;
+    }
+    return value;
+}
+
+std::string FormatFloatKey(float value) {
+    char buffer[32] = {};
+    std::snprintf(buffer, sizeof(buffer), "%.6g", value);
+    return std::string(buffer);
+}
+
+struct UvAnimationParams {
+    uint8_t mode = 0; // 0=none, 1=scroll, 2=rotate
+    float offsetU = 0.0f;
+    float offsetV = 0.0f;
+    float scrollU = 0.0f;
+    float scrollV = 0.0f;
+    float scaleU = 1.0f;
+    float scaleV = 1.0f;
+    float centerU = 0.0f;
+    float centerV = 0.0f;
+    float rotateRadPerSec = 0.0f;
+};
+
+UvAnimationParams ParseUvAnimationParams(const std::shared_ptr<ChunkItem>& materialRoot) {
+    UvAnimationParams params{};
+    if (!materialRoot) {
+        return params;
+    }
+
+    std::vector<std::shared_ptr<ChunkItem>> vertexMaterials;
+    CollectChunksByIdRecursive(materialRoot, kChunkVertexMaterial, vertexMaterials);
+    if (vertexMaterials.empty()) {
+        return params;
+    }
+
+    int primaryVertexMaterialId = -1;
+    std::vector<std::shared_ptr<ChunkItem>> materialPassChunks;
+    CollectChunksByIdRecursive(materialRoot, kChunkMaterialPass, materialPassChunks);
+    if (!materialPassChunks.empty()) {
+        if (const auto vertexMaterialIdsChunk = FindFirstChildById(materialPassChunks.front(), kChunkVertexMaterialIds)) {
+            const auto parsedIds = ParseChunkArray<uint32_t>(vertexMaterialIdsChunk);
+            if (const auto ids = std::get_if<std::vector<uint32_t>>(&parsedIds)) {
+                if (!ids->empty()) {
+                    primaryVertexMaterialId = static_cast<int>((*ids)[0]);
+                }
+            }
+        }
+    }
+
+    int selectedMaterialIndex = 0;
+    if (primaryVertexMaterialId >= 0
+        && primaryVertexMaterialId < static_cast<int>(vertexMaterials.size())) {
+        selectedMaterialIndex = primaryVertexMaterialId;
+    }
+
+    const auto& vertexMaterialChunk = vertexMaterials[static_cast<std::size_t>(selectedMaterialIndex)];
+    if (!vertexMaterialChunk) {
+        return params;
+    }
+
+    uint8_t stage0MappingCode = 0;
+    if (const auto infoChunk = FindFirstChildById(vertexMaterialChunk, kChunkVertexMaterialInfo)) {
+        const auto parsedInfo = ParseChunkStruct<W3dVertexMaterialStruct>(infoChunk);
+        if (const auto info = std::get_if<W3dVertexMaterialStruct>(&parsedInfo)) {
+            stage0MappingCode = ExtractStageMapping(info->Attributes, 0);
+        }
+    }
+
+    std::string mapperArgsText;
+    if (const auto mapperArgsChunk = FindFirstChildById(vertexMaterialChunk, kChunkVertexMapperArgs0)) {
+        mapperArgsText = ReadNullTerminatedChunkString(mapperArgsChunk);
+    }
+    const auto argsByKey = ParseMapperArgs(mapperArgsText);
+
+    if (const auto value = GetMapperArgFloat(argsByKey, "uoffset")) {
+        params.offsetU = *value;
+    }
+    if (const auto value = GetMapperArgFloat(argsByKey, "voffset")) {
+        params.offsetV = *value;
+    }
+    if (const auto value = GetMapperArgFloat(argsByKey, "uscale")) {
+        params.scaleU = *value;
+    }
+    if (const auto value = GetMapperArgFloat(argsByKey, "vscale")) {
+        params.scaleV = *value;
+    }
+    if (const auto value = GetMapperArgFloat(argsByKey, "ucenter")) {
+        params.centerU = *value;
+    }
+    if (const auto value = GetMapperArgFloat(argsByKey, "vcenter")) {
+        params.centerV = *value;
+    }
+
+    const auto uPerSec = GetMapperArgFloat(argsByKey, "upersec");
+    const auto vPerSec = GetMapperArgFloat(argsByKey, "vpersec");
+    const auto speedHz = GetMapperArgFloat(argsByKey, "speed");
+
+    if (stage0MappingCode == kStageMappingRotate) {
+        params.mode = 2;
+        params.rotateRadPerSec = speedHz.has_value() ? (*speedHz * 6.28318530717958647692f) : 0.0f;
+    }
+    else if (stage0MappingCode == kStageMappingScreen || stage0MappingCode == kStageMappingLinearOffset) {
+        params.mode = 1;
+        params.scrollU = uPerSec.value_or(0.0f);
+        params.scrollV = vPerSec.value_or(0.0f);
+    }
+    else if (speedHz.has_value()) {
+        params.mode = 2;
+        params.rotateRadPerSec = *speedHz * 6.28318530717958647692f;
+    }
+    else if (uPerSec.has_value() || vPerSec.has_value()) {
+        params.mode = 1;
+        params.scrollU = uPerSec.value_or(0.0f);
+        params.scrollV = vPerSec.value_or(0.0f);
+    }
+
+    return params;
+}
+
 std::string ToUpperAscii(std::string input) {
     for (char& c : input) {
         c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
@@ -319,7 +530,11 @@ float ScreenSizeToDistance(float maxScreenSize, std::size_t lodIndex) {
 
 struct HlodLodArray {
     float maxScreenSize = 0.0f;
-    std::vector<W3dHLodSubObjectStruct> subObjects;
+    struct SubObjectRef {
+        W3dHLodSubObjectStruct payload{};
+        const ChunkItem* sourceChunk = nullptr;
+    };
+    std::vector<SubObjectRef> subObjects;
 };
 
 struct HlodDefinition {
@@ -330,7 +545,11 @@ struct HlodDefinition {
 
 struct LodModelDefinition {
     std::string name;
-    std::vector<W3dLODStruct> entries;
+    struct EntryRef {
+        W3dLODStruct payload{};
+        const ChunkItem* sourceChunk = nullptr;
+    };
+    std::vector<EntryRef> entries;
 };
 
 struct BuildContext {
@@ -481,8 +700,37 @@ struct BuildContext {
         return index;
     }
 
-    int EnsureMaterial(int textureIndex, bool twoSided, const std::string& nameHint) {
-        const std::string key = std::to_string(textureIndex) + ":" + (twoSided ? "2" : "1");
+    int EnsureMaterial(
+        int textureIndex,
+        bool twoSided,
+        const UvAnimationParams& uvAnim,
+        const std::string& nameHint)
+    {
+        std::string key;
+        key.reserve(180);
+        key += std::to_string(textureIndex);
+        key += ':';
+        key += (twoSided ? '2' : '1');
+        key += ':';
+        key += std::to_string(uvAnim.mode);
+        key += ':';
+        key += FormatFloatKey(uvAnim.offsetU);
+        key += ':';
+        key += FormatFloatKey(uvAnim.offsetV);
+        key += ':';
+        key += FormatFloatKey(uvAnim.scrollU);
+        key += ':';
+        key += FormatFloatKey(uvAnim.scrollV);
+        key += ':';
+        key += FormatFloatKey(uvAnim.scaleU);
+        key += ':';
+        key += FormatFloatKey(uvAnim.scaleV);
+        key += ':';
+        key += FormatFloatKey(uvAnim.centerU);
+        key += ':';
+        key += FormatFloatKey(uvAnim.centerV);
+        key += ':';
+        key += FormatFloatKey(uvAnim.rotateRadPerSec);
         const auto existing = materialByKey.find(key);
         if (existing != materialByKey.end()) {
             return existing->second;
@@ -492,6 +740,16 @@ struct BuildContext {
         material.name = nameHint;
         material.textureIndex = textureIndex;
         material.twoSided = twoSided;
+        material.uvAnimMode = uvAnim.mode;
+        material.uvOffsetU = uvAnim.offsetU;
+        material.uvOffsetV = uvAnim.offsetV;
+        material.uvScrollU = uvAnim.scrollU;
+        material.uvScrollV = uvAnim.scrollV;
+        material.uvScaleU = uvAnim.scaleU;
+        material.uvScaleV = uvAnim.scaleV;
+        material.uvCenterU = uvAnim.centerU;
+        material.uvCenterV = uvAnim.centerV;
+        material.uvRotateRadPerSec = uvAnim.rotateRadPerSec;
 
         const int index = static_cast<int>(result.scene.materials.size());
         result.scene.materials.push_back(material);
@@ -703,6 +961,7 @@ std::optional<RenderMesh> BuildRenderMeshFromChunk(
         (headerValue.Attributes & static_cast<uint32_t>(MeshAttr::W3D_MESH_FLAG_TWO_SIDED)) != 0;
     const bool hidden =
         (headerValue.Attributes & static_cast<uint32_t>(MeshAttr::W3D_MESH_FLAG_HIDDEN)) != 0;
+    const UvAnimationParams uvAnim = ParseUvAnimationParams(materialRoot ? materialRoot : meshChunk);
 
     const Vec3 boundsMin = { headerValue.Min.X, headerValue.Min.Y, headerValue.Min.Z };
     const Vec3 boundsMax = { headerValue.Max.X, headerValue.Max.Y, headerValue.Max.Z };
@@ -733,9 +992,10 @@ std::optional<RenderMesh> BuildRenderMeshFromChunk(
         subMesh.boundsCenter = boundsCenter;
         subMesh.boundsRadius =
             (headerValue.SphRadius > 0.0f) ? headerValue.SphRadius : ComputeRadiusFromBounds(boundsMin, boundsMax);
+        subMesh.sourceMeshHeaderChunk = headerChunk.get();
 
         const std::string materialNameHint = subMesh.fullName + "_mat";
-        subMesh.materialIndex = ctx.EnsureMaterial(textureIndex, twoSided, materialNameHint);
+        subMesh.materialIndex = ctx.EnsureMaterial(textureIndex, twoSided, uvAnim, materialNameHint);
 
         if (!primaryMesh.has_value()) {
             primaryMesh = subMesh;
@@ -782,6 +1042,8 @@ void ParseHierarchies(const W3DChunk& roots, BuildContext& ctx) {
 
         RenderHierarchy hierarchy{};
         hierarchy.name = ReadFixedString(header->Name, W3D_NAME_LEN);
+        hierarchy.sourceHierarchyChunk = hierarchyChunk.get();
+        hierarchy.sourcePivotsChunk = pivotsChunk.get();
         hierarchy.pivots.reserve(pivots->size());
 
         for (std::size_t i = 0; i < pivots->size(); ++i) {
@@ -902,7 +1164,10 @@ std::vector<HlodDefinition> ParseHLodDefinitions(const W3DChunk& roots, BuildCon
                 if (!parsedSub) {
                     continue;
                 }
-                lodArray.subObjects.push_back(*parsedSub);
+                HlodLodArray::SubObjectRef subRef{};
+                subRef.payload = *parsedSub;
+                subRef.sourceChunk = subObjectChunk.get();
+                lodArray.subObjects.push_back(std::move(subRef));
             }
 
             if (!lodArray.subObjects.empty()) {
@@ -948,7 +1213,10 @@ std::vector<LodModelDefinition> ParseLodModelDefinitions(const W3DChunk& roots, 
             }
             const auto parsed = ParseStructWithWarning<W3dLODStruct>(lodEntryChunk, ctx.result.warnings);
             if (parsed) {
-                def.entries.push_back(*parsed);
+                LodModelDefinition::EntryRef entry{};
+                entry.payload = *parsed;
+                entry.sourceChunk = lodEntryChunk.get();
+                def.entries.push_back(std::move(entry));
             }
         }
 
@@ -1006,12 +1274,13 @@ void BuildLodGroupsFromHLodDefinitions(
 
             for (const auto& subObject : lod.subObjects) {
                 RenderLodEntry entry{};
-                entry.name = ReadFixedString(subObject.Name, 2 * W3D_NAME_LEN);
+                entry.name = ReadFixedString(subObject.payload.Name, 2 * W3D_NAME_LEN);
                 entry.hierarchyIndex = group.hierarchyIndex;
-                entry.pivotIndex = static_cast<int>(subObject.BoneIndex);
+                entry.pivotIndex = static_cast<int>(subObject.payload.BoneIndex);
                 entry.minDistance = rangeMin;
                 entry.maxDistance = rangeMax;
                 entry.maxScreenSize = lod.maxScreenSize;
+                entry.sourceBindingChunk = subObject.sourceChunk;
 
                 const auto meshIt = ctx.meshByName.find(NormalizeName(entry.name));
                 if (meshIt == ctx.meshByName.end()) {
@@ -1061,11 +1330,12 @@ void BuildLodGroupsFromLodModelDefinitions(
 
         for (const auto& source : def.entries) {
             RenderLodEntry entry{};
-            entry.name = ReadFixedString(source.RenderObjName, 2 * W3D_NAME_LEN);
+            entry.name = ReadFixedString(source.payload.RenderObjName, 2 * W3D_NAME_LEN);
             entry.hierarchyIndex = -1;
             entry.pivotIndex = -1;
-            entry.minDistance = source.LODMin;
-            entry.maxDistance = source.LODMax;
+            entry.minDistance = source.payload.LODMin;
+            entry.maxDistance = source.payload.LODMax;
+            entry.sourceBindingChunk = source.sourceChunk;
 
             const auto meshIt = ctx.meshByName.find(NormalizeName(entry.name));
             if (meshIt == ctx.meshByName.end()) {
@@ -1100,6 +1370,7 @@ void BuildLooseNodes(BuildContext& ctx) {
         node.hierarchyIndex = -1;
         node.pivotIndex = -1;
         node.localTransform = Mat4::Identity();
+        node.sourceBindingChunk = ctx.result.scene.meshes[i].sourceMeshHeaderChunk;
         ctx.result.scene.looseNodes.push_back(std::move(node));
     }
 }
@@ -1115,6 +1386,7 @@ void ParseMeshes(const W3DChunk& roots, BuildContext& ctx, bool supplemental) {
             continue;
         }
 
+        const std::size_t meshCountBefore = ctx.result.scene.meshes.size();
         const auto mesh = BuildRenderMeshFromChunk(ctx, meshChunk);
         if (!mesh) {
             continue;
@@ -1123,8 +1395,13 @@ void ParseMeshes(const W3DChunk& roots, BuildContext& ctx, bool supplemental) {
         const int meshIndex = static_cast<int>(ctx.result.scene.meshes.size());
         ctx.meshByName.emplace(NormalizeName(mesh->fullName), meshIndex);
         ctx.result.scene.meshes.push_back(*mesh);
+
+        const std::size_t meshCountAfter = ctx.result.scene.meshes.size();
         if (supplemental) {
-            ctx.supplementalMeshes.insert(meshIndex);
+            for (std::size_t i = meshCountBefore; i < meshCountAfter; ++i) {
+                ctx.result.scene.meshes[i].sourceFromSupplemental = true;
+                ctx.supplementalMeshes.insert(static_cast<int>(i));
+            }
         }
     }
 }

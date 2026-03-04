@@ -59,6 +59,7 @@
 #include <cstring>
 #include <cstddef>
 #include <cstdint>
+#include <cmath>
 #include <limits>
 #include <exception>
 #include <variant>
@@ -154,6 +155,50 @@ constexpr uint32_t MeshAttrValue(MeshAttr attr) {
 
 constexpr int kMeshNameMax = static_cast<int>(W3D_NAME_LEN) - 1;
 constexpr int kPivotNameMax = static_cast<int>(W3D_NAME_LEN) - 1;
+
+static W3dVectorStruct EulerFromQuaternion(
+    float x,
+    float y,
+    float z,
+    float w)
+{
+    const float xx = x * x;
+    const float yy = y * y;
+    const float zz = z * z;
+
+    const float sinr_cosp = 2.0f * (w * x + y * z);
+    const float cosr_cosp = 1.0f - 2.0f * (xx + yy);
+    const float roll = std::atan2(sinr_cosp, cosr_cosp);
+
+    const float sinp = 2.0f * (w * y - z * x);
+    const float pitch = (std::fabs(sinp) >= 1.0f)
+        ? std::copysign(1.57079632679f, sinp)
+        : std::asin(sinp);
+
+    const float siny_cosp = 2.0f * (w * z + x * y);
+    const float cosy_cosp = 1.0f - 2.0f * (yy + zz);
+    const float yaw = std::atan2(siny_cosp, cosy_cosp);
+
+    W3dVectorStruct euler{};
+    euler.X = roll;
+    euler.Y = pitch;
+    euler.Z = yaw;
+    return euler;
+}
+
+static std::vector<uint8_t> SerializePivotStruct(const W3dPivotStruct& pivot) {
+    std::vector<uint8_t> bytes(sizeof(W3dPivotStruct));
+    std::memcpy(bytes.data(), &pivot, sizeof(W3dPivotStruct));
+    return bytes;
+}
+
+static bool DeserializePivotStruct(const std::vector<uint8_t>& bytes, W3dPivotStruct& outPivot) {
+    if (bytes.size() != sizeof(W3dPivotStruct)) {
+        return false;
+    }
+    std::memcpy(&outPivot, bytes.data(), sizeof(W3dPivotStruct));
+    return true;
+}
 
 template <typename Enum>
 static void PopulateEnumCombo(QComboBox* combo) {
@@ -3563,6 +3608,17 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     renderFogToggle->setChecked(true);
     renderLodToggle = new QCheckBox(tr("LOD"), renderControls);
     renderLodToggle->setChecked(true);
+    renderUvDebugToggle = new QCheckBox(tr("UV Debug"), renderControls);
+    renderUvDebugToggle->setChecked(false);
+    renderLodLockToggle = new QCheckBox(tr("Lock LOD"), renderControls);
+    renderLodLockToggle->setChecked(false);
+    auto* lodLevelLabel = new QLabel(tr("LOD Level"), renderControls);
+    renderLodLevelSpin = new QSpinBox(renderControls);
+    renderLodLevelSpin->setRange(0, 255);
+    renderLodLevelSpin->setValue(0);
+    renderLodLevelSpin->setEnabled(false);
+    renderCameraGizmoToggle = new QCheckBox(tr("Camera Gizmo"), renderControls);
+    renderCameraGizmoToggle->setChecked(true);
     auto* lodBiasLabel = new QLabel(tr("LOD Bias"), renderControls);
     renderLodBiasSpin = new QDoubleSpinBox(renderControls);
     renderLodBiasSpin->setDecimals(2);
@@ -3571,6 +3627,11 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     renderLodBiasSpin->setValue(1.0);
     renderControlsLayout->addWidget(renderFogToggle);
     renderControlsLayout->addWidget(renderLodToggle);
+    renderControlsLayout->addWidget(renderUvDebugToggle);
+    renderControlsLayout->addWidget(renderLodLockToggle);
+    renderControlsLayout->addWidget(lodLevelLabel);
+    renderControlsLayout->addWidget(renderLodLevelSpin);
+    renderControlsLayout->addWidget(renderCameraGizmoToggle);
     renderControlsLayout->addWidget(lodBiasLabel);
     renderControlsLayout->addWidget(renderLodBiasSpin);
     renderControlsLayout->addStretch(1);
@@ -3578,6 +3639,9 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
 
     renderStatsLabel = new QLabel(tr("Draws: 0 | Tris: 0"), renderPane);
     renderLayout->addWidget(renderStatsLabel);
+
+    renderSelectionLabel = new QLabel(tr("Selection: none"), renderPane);
+    renderLayout->addWidget(renderSelectionLabel);
 
     auto* renderTabs = new QTabWidget(renderPane);
     renderWarningsEdit = new QPlainTextEdit(renderTabs);
@@ -3617,6 +3681,24 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     connect(renderLodToggle, &QCheckBox::toggled, this, [this](bool) {
         applyRenderSettingsToViewport();
         });
+    connect(renderUvDebugToggle, &QCheckBox::toggled, this, [this](bool) {
+        applyRenderSettingsToViewport();
+        });
+    connect(renderLodLockToggle, &QCheckBox::toggled, this, [this, lodLevelLabel](bool on) {
+        if (renderLodLevelSpin) {
+            renderLodLevelSpin->setEnabled(on);
+        }
+        if (lodLevelLabel) {
+            lodLevelLabel->setEnabled(on);
+        }
+        applyRenderSettingsToViewport();
+        });
+    connect(renderLodLevelSpin, qOverload<int>(&QSpinBox::valueChanged), this, [this](int) {
+        applyRenderSettingsToViewport();
+        });
+    connect(renderCameraGizmoToggle, &QCheckBox::toggled, this, [this](bool) {
+        applyRenderSettingsToViewport();
+        });
     connect(renderLodBiasSpin, qOverload<double>(&QDoubleSpinBox::valueChanged), this, [this](double) {
         applyRenderSettingsToViewport();
         });
@@ -3635,6 +3717,21 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
         }
         renderWarningsEdit->setPlainText(lines.join('\n'));
         });
+    connect(renderViewport, &OW3D::Render::RenderViewportWidget::sceneChunkActivated, this, &MainWindow::handleViewportChunkActivated);
+    connect(
+        renderViewport,
+        &OW3D::Render::RenderViewportWidget::selectionStatusChanged,
+        this,
+        [this](const QString& text) {
+            if (renderSelectionLabel) {
+                renderSelectionLabel->setText(text);
+            }
+        });
+    connect(
+        renderViewport,
+        &OW3D::Render::RenderViewportWidget::pivotTransformCommitRequested,
+        this,
+        &MainWindow::handleViewportPivotTransformCommit);
     connect(rawHexToggle, &QCheckBox::toggled, this, [this](bool on) {
         if (rawHexContainer) rawHexContainer->setVisible(on);
         updateRawHex(currentChunk);
@@ -3654,6 +3751,10 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     QAction* insertChunkBeforeAction = editMenu->addAction(tr("Insert Chunk Before..."));
     QAction* insertChunkAfterAction = editMenu->addAction(tr("Insert Chunk After..."));
     QAction* addChildChunkAction = editMenu->addAction(tr("Add Child Chunk..."));
+    QAction* undoRenderTransformAction = editMenu->addAction(tr("Undo Render Transform"));
+    undoRenderTransformAction->setShortcut(QKeySequence::Undo);
+    QAction* redoRenderTransformAction = editMenu->addAction(tr("Redo Render Transform"));
+    redoRenderTransformAction->setShortcut(QKeySequence::Redo);
     editMenu->addSeparator();
     QAction* moveChunkUpAction = editMenu->addAction(tr("Move Chunk Up"));
     QAction* moveChunkDownAction = editMenu->addAction(tr("Move Chunk Down"));
@@ -3665,6 +3766,8 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     connect(insertChunkBeforeAction, &QAction::triggered, this, &MainWindow::insertChunkBefore);
     connect(insertChunkAfterAction, &QAction::triggered, this, &MainWindow::insertChunkAfter);
     connect(addChildChunkAction, &QAction::triggered, this, &MainWindow::addChildChunk);
+    connect(undoRenderTransformAction, &QAction::triggered, this, &MainWindow::undoRenderTransform);
+    connect(redoRenderTransformAction, &QAction::triggered, this, &MainWindow::redoRenderTransform);
     connect(moveChunkUpAction, &QAction::triggered, this, &MainWindow::moveChunkUp);
     connect(moveChunkDownAction, &QAction::triggered, this, &MainWindow::moveChunkDown);
     connect(deleteChunkAction, &QAction::triggered, this, &MainWindow::deleteSelectedChunk);
@@ -3677,6 +3780,39 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     connect(collapseAllAction, &QAction::triggered, treeWidget, &QTreeWidget::collapseAll);
     QAction* hierarchyBrowserAction = viewMenu->addAction(tr("Hierarchy Browser..."));
     connect(hierarchyBrowserAction, &QAction::triggered, this, &MainWindow::showHierarchyBrowser);
+    viewMenu->addSeparator();
+    QAction* showChunkTreeAction = viewMenu->addAction(tr("Show Chunk Tree"));
+    showChunkTreeAction->setCheckable(true);
+    showChunkTreeAction->setChecked(true);
+    connect(showChunkTreeAction, &QAction::toggled, this, [this](bool on) {
+        if (treeWidget) {
+            treeWidget->setVisible(on);
+        }
+        });
+    QAction* showDetailsAction = viewMenu->addAction(tr("Show Details"));
+    showDetailsAction->setCheckable(true);
+    showDetailsAction->setChecked(true);
+    connect(showDetailsAction, &QAction::toggled, this, [detailContainer](bool on) {
+        if (detailContainer) {
+            detailContainer->setVisible(on);
+        }
+        });
+    QAction* showRenderPaneAction = viewMenu->addAction(tr("Show Render Pane"));
+    showRenderPaneAction->setCheckable(true);
+    showRenderPaneAction->setChecked(true);
+    connect(showRenderPaneAction, &QAction::toggled, this, [this](bool on) {
+        if (renderPane) {
+            renderPane->setVisible(on);
+        }
+        });
+    QAction* showWarningsSectionAction = viewMenu->addAction(tr("Show Render Warnings"));
+    showWarningsSectionAction->setCheckable(true);
+    showWarningsSectionAction->setChecked(true);
+    connect(showWarningsSectionAction, &QAction::toggled, this, [renderTabs](bool on) {
+        if (renderTabs) {
+            renderTabs->setVisible(on);
+        }
+        });
     auto batchMenu = menuBar()->addMenu(tr("Batch Tools"));
     auto exportChunksAct = new QAction(tr("Export Chunk List..."), this);
     batchMenu->addAction(exportChunksAct);
@@ -3712,6 +3848,10 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
 
 void MainWindow::openFile(const QString& path) {
     if (!confirmDiscardChanges()) return;
+
+    renderTransformUndoStack.clear();
+    renderTransformRedoStack.clear();
+    applyingRenderTransformUndoRedo = false;
 
     QString filePath = path;
     if (filePath.isEmpty()) {
@@ -4753,6 +4893,190 @@ void MainWindow::clearArchiveRenderContext() {
     currentArchiveLoadedSupplementalEntryIds.clear();
 }
 
+void MainWindow::handleViewportChunkActivated(void* chunkPtr) {
+    if (!chunkPtr || !treeWidget) {
+        return;
+    }
+    selectChunkInTree(chunkPtr);
+}
+
+void MainWindow::handleViewportPivotTransformCommit(
+    void* pivotsChunkPtr,
+    int pivotIndex,
+    float tx,
+    float ty,
+    float tz,
+    float qx,
+    float qy,
+    float qz,
+    float qw)
+{
+    if (!chunkData || !pivotsChunkPtr || pivotIndex < 0) {
+        return;
+    }
+
+    const auto pivotsChunk = FindChunkByPtr(chunkData->getChunks(), pivotsChunkPtr);
+    if (!pivotsChunk) {
+        QMessageBox::information(
+            this,
+            tr("Read-Only Selection"),
+            tr("This mesh belongs to supplemental/archive data and cannot be edited."));
+        return;
+    }
+
+    const auto parsedPivots = ParseChunkArray<W3dPivotStruct>(pivotsChunk);
+    if (auto* err = std::get_if<std::string>(&parsedPivots)) {
+        QMessageBox::warning(
+            this,
+            tr("Transform Commit Failed"),
+            tr("Failed to parse pivots chunk: %1").arg(QString::fromStdString(*err)));
+        return;
+    }
+    const auto& pivots = std::get<std::vector<W3dPivotStruct>>(parsedPivots);
+    if (pivotIndex >= static_cast<int>(pivots.size())) {
+        QMessageBox::warning(
+            this,
+            tr("Transform Commit Failed"),
+            tr("Pivot index %1 is out of range for this hierarchy.").arg(pivotIndex));
+        return;
+    }
+    const W3dPivotStruct beforePivot = pivots[static_cast<std::size_t>(pivotIndex)];
+
+    const float qLen = std::sqrt(qx * qx + qy * qy + qz * qz + qw * qw);
+    if (qLen > 1.0e-6f) {
+        const float invLen = 1.0f / qLen;
+        qx *= invLen;
+        qy *= invLen;
+        qz *= invLen;
+        qw *= invLen;
+    }
+    else {
+        qx = 0.0f;
+        qy = 0.0f;
+        qz = 0.0f;
+        qw = 1.0f;
+    }
+
+    const W3dVectorStruct euler = EulerFromQuaternion(qx, qy, qz, qw);
+    W3dPivotStruct afterPivot = beforePivot;
+    afterPivot.Translation.X = tx;
+    afterPivot.Translation.Y = ty;
+    afterPivot.Translation.Z = tz;
+    afterPivot.Rotation.Q[0] = qx;
+    afterPivot.Rotation.Q[1] = qy;
+    afterPivot.Rotation.Q[2] = qz;
+    afterPivot.Rotation.Q[3] = qw;
+    afterPivot.EulerAngles = euler;
+
+    std::string mutateError;
+    const bool mutated = W3DEdit::MutateStructAtIndex<W3dPivotStruct>(
+        pivotsChunk,
+        static_cast<std::size_t>(pivotIndex),
+        [&](W3dPivotStruct& pivot) {
+            pivot = afterPivot;
+        },
+        &mutateError);
+
+    if (!mutated) {
+        QMessageBox::warning(
+            this,
+            tr("Transform Commit Failed"),
+            QString::fromStdString(mutateError.empty()
+                ? std::string("Failed to update pivot transform.")
+                : mutateError));
+        return;
+    }
+
+    if (!applyingRenderTransformUndoRedo) {
+        RenderTransformUndoEntry entry{};
+        entry.pivotsChunkPtr = pivotsChunkPtr;
+        entry.pivotIndex = pivotIndex;
+        entry.beforePivot = SerializePivotStruct(beforePivot);
+        entry.afterPivot = SerializePivotStruct(afterPivot);
+        renderTransformUndoStack.push_back(std::move(entry));
+        renderTransformRedoStack.clear();
+    }
+
+    onChunkEdited();
+}
+
+void MainWindow::undoRenderTransform() {
+    if (!chunkData || renderTransformUndoStack.empty()) {
+        return;
+    }
+
+    RenderTransformUndoEntry entry = renderTransformUndoStack.back();
+    renderTransformUndoStack.pop_back();
+
+    const auto pivotsChunk = FindChunkByPtr(chunkData->getChunks(), entry.pivotsChunkPtr);
+    if (!pivotsChunk) {
+        renderTransformRedoStack.clear();
+        return;
+    }
+
+    W3dPivotStruct previous{};
+    if (!DeserializePivotStruct(entry.beforePivot, previous)) {
+        renderTransformRedoStack.clear();
+        return;
+    }
+
+    std::string mutateError;
+    const bool mutated = W3DEdit::MutateStructAtIndex<W3dPivotStruct>(
+        pivotsChunk,
+        static_cast<std::size_t>(entry.pivotIndex),
+        [&](W3dPivotStruct& pivot) {
+            pivot = previous;
+        },
+        &mutateError);
+    if (!mutated) {
+        renderTransformRedoStack.clear();
+        return;
+    }
+
+    applyingRenderTransformUndoRedo = true;
+    onChunkEdited();
+    applyingRenderTransformUndoRedo = false;
+
+    renderTransformRedoStack.push_back(std::move(entry));
+}
+
+void MainWindow::redoRenderTransform() {
+    if (!chunkData || renderTransformRedoStack.empty()) {
+        return;
+    }
+
+    RenderTransformUndoEntry entry = renderTransformRedoStack.back();
+    renderTransformRedoStack.pop_back();
+
+    const auto pivotsChunk = FindChunkByPtr(chunkData->getChunks(), entry.pivotsChunkPtr);
+    if (!pivotsChunk) {
+        return;
+    }
+
+    W3dPivotStruct next{};
+    if (!DeserializePivotStruct(entry.afterPivot, next)) {
+        return;
+    }
+
+    std::string mutateError;
+    const bool mutated = W3DEdit::MutateStructAtIndex<W3dPivotStruct>(
+        pivotsChunk,
+        static_cast<std::size_t>(entry.pivotIndex),
+        [&](W3dPivotStruct& pivot) {
+            pivot = next;
+        },
+        &mutateError);
+    if (!mutated) {
+        return;
+    }
+
+    applyingRenderTransformUndoRedo = true;
+    onChunkEdited();
+    applyingRenderTransformUndoRedo = false;
+
+    renderTransformUndoStack.push_back(std::move(entry));
+}
+
 void MainWindow::applyRenderSettingsToViewport() {
     if (!renderViewport) {
         return;
@@ -4763,6 +5087,10 @@ void MainWindow::applyRenderSettingsToViewport() {
     settings.enableFog = renderFogToggle ? renderFogToggle->isChecked() : true;
     settings.enableLod = renderLodToggle ? renderLodToggle->isChecked() : true;
     settings.lodBias = renderLodBiasSpin ? static_cast<float>(renderLodBiasSpin->value()) : 1.0f;
+    settings.debugShowUv = renderUvDebugToggle ? renderUvDebugToggle->isChecked() : false;
+    settings.lockLodLevel = renderLodLockToggle ? renderLodLockToggle->isChecked() : false;
+    settings.lockedLodLevel = renderLodLevelSpin ? renderLodLevelSpin->value() : 0;
+    settings.showCameraGizmo = renderCameraGizmoToggle ? renderCameraGizmoToggle->isChecked() : true;
     renderViewport->SetRenderSettings(settings);
 }
 

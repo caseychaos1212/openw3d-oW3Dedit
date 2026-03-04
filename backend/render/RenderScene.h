@@ -1,11 +1,14 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <limits>
 #include <string>
 #include <vector>
 
 #include "RenderTypes.h"
+
+class ChunkItem;
 
 namespace OW3D::Render {
 
@@ -48,6 +51,16 @@ struct RenderMaterial {
     bool alphaTest = false;
     bool translucent = false;
     bool twoSided = false;
+    uint8_t uvAnimMode = 0; // 0=none, 1=scroll, 2=rotate
+    float uvOffsetU = 0.0f;
+    float uvOffsetV = 0.0f;
+    float uvScrollU = 0.0f;
+    float uvScrollV = 0.0f;
+    float uvScaleU = 1.0f;
+    float uvScaleV = 1.0f;
+    float uvCenterU = 0.0f;
+    float uvCenterV = 0.0f;
+    float uvRotateRadPerSec = 0.0f;
 };
 
 struct RenderVertex {
@@ -68,6 +81,8 @@ struct RenderMesh {
     float boundsRadius = 0.0f;
     bool twoSided = false;
     bool hidden = false;
+    const ::ChunkItem* sourceMeshHeaderChunk = nullptr;
+    bool sourceFromSupplemental = false;
 };
 
 struct RenderPivot {
@@ -79,6 +94,8 @@ struct RenderPivot {
 struct RenderHierarchy {
     std::string name;
     std::vector<RenderPivot> pivots;
+    const ::ChunkItem* sourceHierarchyChunk = nullptr;
+    const ::ChunkItem* sourcePivotsChunk = nullptr;
 };
 
 struct RenderLodEntry {
@@ -89,6 +106,7 @@ struct RenderLodEntry {
     float minDistance = 0.0f;
     float maxDistance = std::numeric_limits<float>::max();
     float maxScreenSize = 0.0f;
+    const ::ChunkItem* sourceBindingChunk = nullptr;
 };
 
 struct RenderLodGroup {
@@ -103,6 +121,7 @@ struct RenderNode {
     int hierarchyIndex = -1;
     int pivotIndex = -1;
     Mat4 localTransform = Mat4::Identity();
+    const ::ChunkItem* sourceBindingChunk = nullptr;
 };
 
 struct RenderFog {

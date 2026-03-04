@@ -21,6 +21,7 @@ class QCheckBox;
 class QPlainTextEdit;
 class QGroupBox;
 class QDoubleSpinBox;
+class QSpinBox;
 class QLabel;
 class MeshEditorWidget;
 class StringEditorWidget;
@@ -114,6 +115,19 @@ private:
     void rebuildRenderScene();
     void applyRenderSettingsToViewport();
     void clearArchiveRenderContext();
+    void handleViewportChunkActivated(void* chunkPtr);
+    void handleViewportPivotTransformCommit(
+        void* pivotsChunkPtr,
+        int pivotIndex,
+        float tx,
+        float ty,
+        float tz,
+        float qx,
+        float qy,
+        float qz,
+        float qw);
+    void undoRenderTransform();
+    void redoRenderTransform();
 
     QTreeWidget* treeWidget = nullptr;
     QTableWidget* tableWidget = nullptr;
@@ -145,7 +159,12 @@ private:
     QCheckBox* renderFogToggle = nullptr;
     QCheckBox* renderLodToggle = nullptr;
     QDoubleSpinBox* renderLodBiasSpin = nullptr;
+    QCheckBox* renderUvDebugToggle = nullptr;
+    QCheckBox* renderLodLockToggle = nullptr;
+    QCheckBox* renderCameraGizmoToggle = nullptr;
+    QSpinBox* renderLodLevelSpin = nullptr;
     QLabel* renderStatsLabel = nullptr;
+    QLabel* renderSelectionLabel = nullptr;
     QPlainTextEdit* renderWarningsEdit = nullptr;
     std::shared_ptr<ChunkItem> currentChunk;
     QString currentFilePath;
@@ -160,6 +179,16 @@ private:
     std::vector<std::shared_ptr<ChunkItem>> currentArchiveSupplementalRoots;
     std::unordered_set<uint32_t> currentArchiveLoadedSupplementalEntryIds;
 
+    struct RenderTransformUndoEntry {
+        void* pivotsChunkPtr = nullptr;
+        int pivotIndex = -1;
+        std::vector<uint8_t> beforePivot;
+        std::vector<uint8_t> afterPivot;
+    };
+    std::vector<RenderTransformUndoEntry> renderTransformUndoStack;
+    std::vector<RenderTransformUndoEntry> renderTransformRedoStack;
+    bool applyingRenderTransformUndoRedo = false;
+	
     void updateEditorForChunk(const std::shared_ptr<ChunkItem>& chunk);
     void updateRawHex(const std::shared_ptr<ChunkItem>& chunk);
     void setDirty(bool value);

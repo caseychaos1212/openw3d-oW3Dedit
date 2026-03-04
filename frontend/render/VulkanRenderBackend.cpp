@@ -26,7 +26,20 @@ void VulkanRenderBackend::SetRenderSettings(const RenderSettings& settings) {
     m_settings = settings;
 }
 
-void VulkanRenderBackend::RenderFrame() {
+void VulkanRenderBackend::SetSelectedInstance(const std::optional<RenderInstanceKey>&) {
+}
+
+void VulkanRenderBackend::SetTransformOverrides(
+    const std::unordered_map<RenderInstanceKey, Mat4, RenderInstanceKeyHash>&)
+{
+}
+
+void VulkanRenderBackend::SetHiddenInstances(
+    const std::unordered_set<RenderInstanceKey, RenderInstanceKeyHash>&)
+{
+}
+
+void VulkanRenderBackend::RenderFrame(const std::function<void()>&) {
 }
 
 FrameStats VulkanRenderBackend::GetFrameStats() const {
