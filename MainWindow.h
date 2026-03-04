@@ -2,6 +2,11 @@
 
 #include <QMainWindow>
 #include <memory>
+#include <cstdint>
+#include <string>
+#include <unordered_map>
+#include <unordered_set>
+#include <vector>
 #include "backend/ChunkData.h"
 #include <QString>
 #include <QByteArray>
@@ -15,6 +20,8 @@ class QCloseEvent;
 class QCheckBox;
 class QPlainTextEdit;
 class QGroupBox;
+class QDoubleSpinBox;
+class QLabel;
 class MeshEditorWidget;
 class StringEditorWidget;
 class TransformNodeEditorWidget;
@@ -24,10 +31,29 @@ class ShaderEditorWidget;
 class SurfaceTypeEditorWidget;
 class TriangleSurfaceTypeEditorWidget;
 
+namespace OW3D::Render {
+class RenderViewportWidget;
+}
 
 
 
 class ChunkData; // forward declare
+
+struct ArchiveRenderEntryInfo {
+    QString name;
+    uint32_t id = 0;
+    uint32_t offset = 0;
+    uint32_t size = 0;
+    bool likelyW3d = false;
+};
+
+struct ArchiveTextureSourceInfo {
+    uint32_t id = 0;
+    QString archivePath;
+    uint32_t offset = 0;
+    uint32_t size = 0;
+    QString name;
+};
 
 class MainWindow : public QMainWindow {
     Q_OBJECT
@@ -85,6 +111,9 @@ private:
     ValidatorRunMode loadValidatorRunModeSetting() const;
     void saveValidatorRunModeSetting(ValidatorRunMode mode) const;
     bool promptValidatorRunMode(ValidatorRunMode& outMode);
+    void rebuildRenderScene();
+    void applyRenderSettingsToViewport();
+    void clearArchiveRenderContext();
 
     QTreeWidget* treeWidget = nullptr;
     QTableWidget* tableWidget = nullptr;
@@ -111,10 +140,25 @@ private:
     SurfaceTypeEditorWidget* surfaceTypeEditor = nullptr;
     TriangleSurfaceTypeEditorWidget* triangleSurfaceTypeEditor = nullptr;
     QWidget* editorPlaceholder = nullptr;
+    QWidget* renderPane = nullptr;
+    OW3D::Render::RenderViewportWidget* renderViewport = nullptr;
+    QCheckBox* renderFogToggle = nullptr;
+    QCheckBox* renderLodToggle = nullptr;
+    QDoubleSpinBox* renderLodBiasSpin = nullptr;
+    QLabel* renderStatsLabel = nullptr;
+    QPlainTextEdit* renderWarningsEdit = nullptr;
     std::shared_ptr<ChunkItem> currentChunk;
     QString currentFilePath;
     bool dirty = false;
     QByteArray detailSplitterStateCache;
+    QString currentArchiveRenderPath;
+    uint32_t currentArchiveRenderEntryId = 0;
+    std::vector<ArchiveRenderEntryInfo> currentArchiveRenderEntries;
+    std::vector<std::string> currentArchiveTextureEntries;
+    std::vector<uint32_t> currentArchiveTextureEntryIds;
+    std::unordered_map<uint32_t, ArchiveTextureSourceInfo> currentArchiveTextureSourcesById;
+    std::vector<std::shared_ptr<ChunkItem>> currentArchiveSupplementalRoots;
+    std::unordered_set<uint32_t> currentArchiveLoadedSupplementalEntryIds;
 
     void updateEditorForChunk(const std::shared_ptr<ChunkItem>& chunk);
     void updateRawHex(const std::shared_ptr<ChunkItem>& chunk);

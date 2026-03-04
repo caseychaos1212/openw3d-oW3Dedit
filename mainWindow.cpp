@@ -49,7 +49,9 @@
 #include "backend/W3DStructs.h"
 #include "backend/ChunkMutators.h"
 #include "backend/ParseUtils.h"
+#include "backend/render/SceneBuilder.h"
 #include "EditorWidgets.h"
+#include "frontend/render/RenderViewportWidget.h"
 #include <map>
 #include <nlohmann/json.hpp>
 #include <array>
@@ -63,10 +65,14 @@
 #include <type_traits>
 #include <optional>
 #include <unordered_map>
+#include <unordered_set>
 #include <algorithm>
 #include <functional>
 #include <cctype>
+#include <filesystem>
 #include <QSignalBlocker>
+#include <QTabWidget>
+#include <QSet>
 
 using ordered_json = nlohmann::ordered_json;
 
@@ -193,6 +199,20 @@ struct MixArchiveInfo {
     uint32_t flags = 0;
     bool hasFlags = false;
 };
+
+struct LoadedArchiveRenderContext {
+    QString archivePath;
+    uint32_t selectedEntryId = 0;
+    std::vector<ArchiveRenderEntryInfo> entries;
+    std::vector<std::string> textureEntryNames;
+    std::vector<uint32_t> textureEntryIds;
+    std::vector<ArchiveTextureSourceInfo> textureSources;
+};
+
+static bool LoadChunkDataFromBytes(
+    const QByteArray& bytes,
+    ChunkData& outChunkData,
+    QString& outError);
 
 static bool ReadUInt16LE(const QByteArray& bytes, qsizetype offset, uint16_t& out) {
     if (offset < 0 || (offset + 2) > bytes.size()) {
@@ -457,6 +477,293 @@ static bool IsMixArchivePath(const QString& path) {
         || normalized.endsWith(QStringLiteral(".dbs"), Qt::CaseInsensitive);
 }
 
+static bool IsTextureFileName(const QString& path) {
+    const QString lowerPath = QDir::fromNativeSeparators(path).trimmed().toLower();
+    return lowerPath.endsWith(QStringLiteral(".dds"))
+        || lowerPath.endsWith(QStringLiteral(".tga"))
+        || lowerPath.endsWith(QStringLiteral(".png"))
+        || lowerPath.endsWith(QStringLiteral(".jpg"))
+        || lowerPath.endsWith(QStringLiteral(".jpeg"))
+        || lowerPath.endsWith(QStringLiteral(".bmp"));
+}
+
+static bool ReadArchiveEntryBytes(
+    const QString& archivePath,
+    uint32_t offset,
+    uint32_t size,
+    QByteArray& outBytes,
+    QString* outError)
+{
+    outBytes.clear();
+    QFile file(archivePath);
+    if (!file.open(QIODevice::ReadOnly)) {
+        if (outError) {
+            *outError = QObject::tr("Failed to open archive file: %1").arg(file.errorString());
+        }
+        return false;
+    }
+
+    const qint64 archiveSize = file.size();
+    const qint64 qOffset = static_cast<qint64>(offset);
+    const qint64 qSize = static_cast<qint64>(size);
+    if (qOffset < 0 || qSize < 0 || qOffset > archiveSize || qSize > (archiveSize - qOffset)) {
+        if (outError) {
+            *outError = QObject::tr("Archive entry has invalid offset/size.");
+        }
+        return false;
+    }
+
+    if (!file.seek(qOffset)) {
+        if (outError) {
+            *outError = QObject::tr("Failed to seek archive entry.");
+        }
+        return false;
+    }
+
+    outBytes = file.read(qSize);
+    if (outBytes.size() != qSize) {
+        if (outError) {
+            *outError = QObject::tr("Failed to read archive entry bytes.");
+        }
+        return false;
+    }
+    return true;
+}
+
+static std::string NormalizeTexturePathKey(std::string input) {
+    for (char& c : input) {
+        if (c == '\\') {
+            c = '/';
+        }
+        else {
+            c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        }
+    }
+    return input;
+}
+
+static std::string TextureBaseNameKey(const std::string& input) {
+    const std::string normalized = NormalizeTexturePathKey(input);
+    const std::size_t slash = normalized.find_last_of('/');
+    if (slash == std::string::npos) {
+        return normalized;
+    }
+    return normalized.substr(slash + 1);
+}
+
+static std::string ToUpperAscii(std::string input) {
+    for (char& c : input) {
+        c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+    }
+    return input;
+}
+
+static uint32_t ComputeCRC32Stringi(const std::string& value) {
+    static uint32_t table[256];
+    static bool initialized = false;
+    if (!initialized) {
+        for (uint32_t i = 0; i < 256; ++i) {
+            uint32_t crc = i;
+            for (int j = 0; j < 8; ++j) {
+                if (crc & 1U) {
+                    crc = (crc >> 1) ^ 0xEDB88320U;
+                }
+                else {
+                    crc >>= 1;
+                }
+            }
+            table[i] = crc;
+        }
+        initialized = true;
+    }
+
+    uint32_t crc = 0xFFFFFFFFU;
+    const std::string upper = ToUpperAscii(value);
+    for (const unsigned char c : upper) {
+        crc = (crc >> 8) ^ table[(crc ^ c) & 0xFFU];
+    }
+    return crc ^ 0xFFFFFFFFU;
+}
+
+static void AddTextureHashCandidate(
+    const std::string& candidate,
+    std::vector<uint32_t>& outCandidates,
+    std::unordered_set<uint32_t>& seen)
+{
+    if (candidate.empty()) {
+        return;
+    }
+
+    auto addHash = [&](const std::string& text) {
+        if (text.empty()) {
+            return;
+        }
+        const uint32_t hash = ComputeCRC32Stringi(text);
+        if (seen.insert(hash).second) {
+            outCandidates.push_back(hash);
+        }
+    };
+
+    addHash(candidate);
+
+    std::string slashVariant = candidate;
+    std::replace(slashVariant.begin(), slashVariant.end(), '\\', '/');
+    if (slashVariant != candidate) {
+        addHash(slashVariant);
+    }
+
+    std::replace(slashVariant.begin(), slashVariant.end(), '/', '\\');
+    if (slashVariant != candidate) {
+        addHash(slashVariant);
+    }
+}
+
+static std::vector<uint32_t> BuildTextureHashCandidates(const std::string& textureName) {
+    static const std::array<const char*, 6> kTextureExtensions = {
+        ".dds", ".tga", ".png", ".jpg", ".jpeg", ".bmp"
+    };
+
+    std::vector<uint32_t> out;
+    std::unordered_set<uint32_t> seen;
+
+    const std::string pathKey = NormalizeTexturePathKey(textureName);
+    const std::string baseKey = TextureBaseNameKey(pathKey);
+    AddTextureHashCandidate(pathKey, out, seen);
+    AddTextureHashCandidate(baseKey, out, seen);
+
+    const std::filesystem::path normalizedPath(pathKey);
+    const std::filesystem::path basePath(baseKey);
+    const std::string stem = basePath.stem().string();
+    const std::string pathStem = normalizedPath.stem().string();
+    for (const char* ext : kTextureExtensions) {
+        if (!stem.empty()) {
+            AddTextureHashCandidate(stem + ext, out, seen);
+        }
+        if (!pathStem.empty() && normalizedPath.has_parent_path()) {
+            const std::filesystem::path siblingPath =
+                normalizedPath.parent_path() / (pathStem + ext);
+            AddTextureHashCandidate(
+                NormalizeTexturePathKey(siblingPath.generic_string()),
+                out,
+                seen);
+        }
+    }
+
+    return out;
+}
+
+static bool LooksLikeTgaPayload(const QByteArray& bytes) {
+    if (bytes.size() < 18) {
+        return false;
+    }
+
+    const uint8_t colorMapType = static_cast<uint8_t>(bytes.at(1));
+    const uint8_t imageType = static_cast<uint8_t>(bytes.at(2));
+    const uint8_t pixelDepth = static_cast<uint8_t>(bytes.at(16));
+
+    if (colorMapType > 1) {
+        return false;
+    }
+    if (imageType != 1 && imageType != 2 && imageType != 3
+        && imageType != 9 && imageType != 10 && imageType != 11) {
+        return false;
+    }
+    if (pixelDepth != 8 && pixelDepth != 16 && pixelDepth != 24 && pixelDepth != 32) {
+        return false;
+    }
+    return true;
+}
+
+static QString InferTextureExtension(const QByteArray& bytes, const QString& sourceName) {
+    const QString sourceExt = QFileInfo(sourceName).suffix().toLower();
+    if (sourceExt == QStringLiteral("dds")
+        || sourceExt == QStringLiteral("tga")
+        || sourceExt == QStringLiteral("png")
+        || sourceExt == QStringLiteral("jpg")
+        || sourceExt == QStringLiteral("jpeg")
+        || sourceExt == QStringLiteral("bmp")) {
+        return QStringLiteral(".") + sourceExt;
+    }
+
+    if (bytes.size() >= 4 && std::memcmp(bytes.constData(), "DDS ", 4) == 0) {
+        return QStringLiteral(".dds");
+    }
+    if (bytes.size() >= 8
+        && static_cast<uint8_t>(bytes[0]) == 0x89
+        && std::memcmp(bytes.constData() + 1, "PNG", 3) == 0) {
+        return QStringLiteral(".png");
+    }
+    if (bytes.size() >= 2
+        && static_cast<uint8_t>(bytes[0]) == 0xFF
+        && static_cast<uint8_t>(bytes[1]) == 0xD8) {
+        return QStringLiteral(".jpg");
+    }
+    if (bytes.size() >= 2
+        && static_cast<uint8_t>(bytes[0]) == 'B'
+        && static_cast<uint8_t>(bytes[1]) == 'M') {
+        return QStringLiteral(".bmp");
+    }
+    if (LooksLikeTgaPayload(bytes)) {
+        return QStringLiteral(".tga");
+    }
+
+    return {};
+}
+
+static bool MaterializeArchiveTextureToCache(
+    const ArchiveTextureSourceInfo& source,
+    const QString& cacheDir,
+    QString& outPath)
+{
+    outPath.clear();
+    if (source.size == 0) {
+        return false;
+    }
+
+    QByteArray bytes;
+    QString readError;
+    if (!ReadArchiveEntryBytes(source.archivePath, source.offset, source.size, bytes, &readError)) {
+        return false;
+    }
+
+    const QString extension = InferTextureExtension(bytes, source.name);
+    if (extension.isEmpty()) {
+        return false;
+    }
+
+    const QString archiveHash = QString::number(qHash(QDir::cleanPath(source.archivePath)), 16);
+    const QString fileName = QStringLiteral("%1_%2_%3%4")
+        .arg(source.id, 8, 16, QLatin1Char('0'))
+        .arg(source.size)
+        .arg(archiveHash)
+        .arg(extension)
+        .toLower();
+    const QString filePath = QDir(cacheDir).absoluteFilePath(fileName);
+
+    QFile existing(filePath);
+    if (existing.exists() && existing.size() == static_cast<qint64>(bytes.size())) {
+        outPath = filePath;
+        return true;
+    }
+
+    if (!QDir().mkpath(cacheDir)) {
+        return false;
+    }
+
+    QFile outFile(filePath);
+    if (!outFile.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+        return false;
+    }
+    if (outFile.write(bytes) != bytes.size()) {
+        outFile.close();
+        return false;
+    }
+    outFile.close();
+
+    outPath = filePath;
+    return true;
+}
+
 static bool LooksLikeW3DStream(
     const QByteArray& bytes,
     qsizetype absoluteOffset,
@@ -525,7 +832,12 @@ static bool LoadW3DFromMixArchive(
     QWidget* parent,
     const QString& mixPath,
     ChunkData& chunkData,
-    QString* outError) {
+    QString* outError,
+    LoadedArchiveRenderContext* outRenderContext) {
+    if (outRenderContext) {
+        *outRenderContext = {};
+    }
+
     const bool allowClassicFallback = IsMixArchivePath(mixPath);
 
     QFile file(mixPath);
@@ -583,6 +895,14 @@ static bool LoadW3DFromMixArchive(
     for (int i = 0; i < static_cast<int>(candidates.size()); ++i) {
         if (candidates[static_cast<std::size_t>(i)].likelyW3d) {
             candidateIndexes.push_back(i);
+        }
+    }
+
+    std::vector<bool> entryLikelyW3d(archive.entries.size(), false);
+    for (const Candidate& candidate : candidates) {
+        if (candidate.entryIndex >= 0
+            && candidate.entryIndex < static_cast<int>(entryLikelyW3d.size())) {
+            entryLikelyW3d[static_cast<std::size_t>(candidate.entryIndex)] = candidate.likelyW3d;
         }
     }
 
@@ -935,6 +1255,103 @@ static bool LoadW3DFromMixArchive(
             *outError = QStringLiteral("Failed to parse selected MIX entry as W3D data.");
         }
         return false;
+    }
+
+    if (outRenderContext) {
+        outRenderContext->archivePath = QFileInfo(mixPath).absoluteFilePath();
+        outRenderContext->selectedEntryId = entry.id;
+        outRenderContext->entries.reserve(archive.entries.size());
+
+        for (std::size_t i = 0; i < archive.entries.size(); ++i) {
+            const MixEntryInfo& src = archive.entries[i];
+            ArchiveRenderEntryInfo dst{};
+            dst.name = QDir::fromNativeSeparators(src.name).trimmed();
+            dst.id = src.id;
+            dst.offset = src.offset;
+            dst.size = src.size;
+            dst.likelyW3d = entryLikelyW3d[i];
+            outRenderContext->entries.push_back(dst);
+        }
+
+        std::unordered_set<std::string> textureNameSet;
+        std::unordered_set<uint32_t> textureIdSet;
+        std::unordered_map<uint32_t, ArchiveTextureSourceInfo> textureSourceMap;
+
+        const QString selectedArchiveAbsPath = QDir::cleanPath(QFileInfo(mixPath).absoluteFilePath());
+        auto collectTextureReferences = [&](const MixArchiveInfo& archiveInfo, const QString& sourceArchivePath) {
+            for (const MixEntryInfo& entryInfo : archiveInfo.entries) {
+                textureIdSet.insert(entryInfo.id);
+                if (!textureSourceMap.contains(entryInfo.id)) {
+                    ArchiveTextureSourceInfo source{};
+                    source.id = entryInfo.id;
+                    source.archivePath = sourceArchivePath;
+                    source.offset = entryInfo.offset;
+                    source.size = entryInfo.size;
+                    source.name = QDir::fromNativeSeparators(entryInfo.name).trimmed();
+                    textureSourceMap.emplace(source.id, std::move(source));
+                }
+
+                const QString normalizedName = QDir::fromNativeSeparators(entryInfo.name).trimmed();
+                if (IsTextureFileName(normalizedName)) {
+                    textureNameSet.insert(normalizedName.toStdString());
+                }
+            }
+        };
+
+        collectTextureReferences(archive, selectedArchiveAbsPath);
+
+        const QString selectedArchiveDir = QFileInfo(selectedArchiveAbsPath).absolutePath();
+        QDir archiveDir(selectedArchiveDir);
+        const QStringList siblingArchives = archiveDir.entryList(
+            QStringList{ "*.mix", "*.MIX", "*.dat", "*.DAT", "*.dbs", "*.DBS" },
+            QDir::Files | QDir::NoSymLinks);
+        for (const QString& siblingName : siblingArchives) {
+            const QString siblingAbsPath = QDir::cleanPath(archiveDir.absoluteFilePath(siblingName));
+            if (siblingAbsPath.compare(selectedArchiveAbsPath, Qt::CaseInsensitive) == 0) {
+                continue;
+            }
+
+            QFile siblingFile(siblingAbsPath);
+            if (!siblingFile.open(QIODevice::ReadOnly)) {
+                continue;
+            }
+            const QByteArray siblingBytes = siblingFile.readAll();
+            siblingFile.close();
+
+            MixArchiveInfo siblingArchive;
+            if (!ParseMixArchive(
+                siblingBytes,
+                IsMixArchivePath(siblingAbsPath),
+                siblingArchive,
+                nullptr))
+            {
+                continue;
+            }
+            collectTextureReferences(siblingArchive, siblingAbsPath);
+        }
+
+        outRenderContext->textureEntryNames.assign(textureNameSet.begin(), textureNameSet.end());
+        std::sort(
+            outRenderContext->textureEntryNames.begin(),
+            outRenderContext->textureEntryNames.end());
+        outRenderContext->textureEntryIds.assign(textureIdSet.begin(), textureIdSet.end());
+        std::sort(
+            outRenderContext->textureEntryIds.begin(),
+            outRenderContext->textureEntryIds.end());
+        outRenderContext->textureEntryIds.erase(
+            std::unique(outRenderContext->textureEntryIds.begin(), outRenderContext->textureEntryIds.end()),
+            outRenderContext->textureEntryIds.end());
+        outRenderContext->textureSources.clear();
+        outRenderContext->textureSources.reserve(textureSourceMap.size());
+        for (const auto& pair : textureSourceMap) {
+            outRenderContext->textureSources.push_back(pair.second);
+        }
+        std::sort(
+            outRenderContext->textureSources.begin(),
+            outRenderContext->textureSources.end(),
+            [](const ArchiveTextureSourceInfo& lhs, const ArchiveTextureSourceInfo& rhs) {
+                return lhs.id < rhs.id;
+            });
     }
 
     return true;
@@ -3130,12 +3547,54 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     detailSplitterStateCache = detailSplitter->saveState();
     editorScrollArea->setVisible(false);
 
+    renderPane = new QWidget(splitter);
+    auto* renderLayout = new QVBoxLayout(renderPane);
+    renderLayout->setContentsMargins(6, 6, 6, 6);
+    renderLayout->setSpacing(6);
+
+    renderViewport = new OW3D::Render::RenderViewportWidget(renderPane);
+    renderLayout->addWidget(renderViewport, 1);
+
+    auto* renderControls = new QWidget(renderPane);
+    auto* renderControlsLayout = new QHBoxLayout(renderControls);
+    renderControlsLayout->setContentsMargins(0, 0, 0, 0);
+    renderControlsLayout->setSpacing(8);
+    renderFogToggle = new QCheckBox(tr("Fog"), renderControls);
+    renderFogToggle->setChecked(true);
+    renderLodToggle = new QCheckBox(tr("LOD"), renderControls);
+    renderLodToggle->setChecked(true);
+    auto* lodBiasLabel = new QLabel(tr("LOD Bias"), renderControls);
+    renderLodBiasSpin = new QDoubleSpinBox(renderControls);
+    renderLodBiasSpin->setDecimals(2);
+    renderLodBiasSpin->setRange(0.1, 8.0);
+    renderLodBiasSpin->setSingleStep(0.1);
+    renderLodBiasSpin->setValue(1.0);
+    renderControlsLayout->addWidget(renderFogToggle);
+    renderControlsLayout->addWidget(renderLodToggle);
+    renderControlsLayout->addWidget(lodBiasLabel);
+    renderControlsLayout->addWidget(renderLodBiasSpin);
+    renderControlsLayout->addStretch(1);
+    renderLayout->addWidget(renderControls);
+
+    renderStatsLabel = new QLabel(tr("Draws: 0 | Tris: 0"), renderPane);
+    renderLayout->addWidget(renderStatsLabel);
+
+    auto* renderTabs = new QTabWidget(renderPane);
+    renderWarningsEdit = new QPlainTextEdit(renderTabs);
+    renderWarningsEdit->setReadOnly(true);
+    renderWarningsEdit->setPlaceholderText(tr("No scene warnings."));
+    renderTabs->addTab(renderWarningsEdit, tr("Scene Warnings"));
+    renderTabs->setMinimumHeight(110);
+    renderLayout->addWidget(renderTabs);
+
     splitter->addWidget(treeWidget);
     splitter->addWidget(detailContainer);
+    splitter->addWidget(renderPane);
     splitter->setStretchFactor(0, 3);
     splitter->setStretchFactor(1, 1);
+    splitter->setStretchFactor(2, 2);
     splitter->setChildrenCollapsible(false);
-    splitter->setSizes({ 1120, 400 }); // approx 75% tree / 25% editor starting layout
+    splitter->setSizes({ 900, 340, 560 });
 
     setCentralWidget(splitter);
 
@@ -3152,10 +3611,35 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     connect(shaderEditor, &ShaderEditorWidget::chunkEdited, this, &MainWindow::onChunkEdited);
     connect(surfaceTypeEditor, &SurfaceTypeEditorWidget::chunkEdited, this, &MainWindow::onChunkEdited);
     connect(triangleSurfaceTypeEditor, &TriangleSurfaceTypeEditorWidget::chunkEdited, this, &MainWindow::onChunkEdited);
+    connect(renderFogToggle, &QCheckBox::toggled, this, [this](bool) {
+        applyRenderSettingsToViewport();
+        });
+    connect(renderLodToggle, &QCheckBox::toggled, this, [this](bool) {
+        applyRenderSettingsToViewport();
+        });
+    connect(renderLodBiasSpin, qOverload<double>(&QDoubleSpinBox::valueChanged), this, [this](double) {
+        applyRenderSettingsToViewport();
+        });
+    connect(renderViewport, &OW3D::Render::RenderViewportWidget::frameStatsChanged, this, [this](const QString& text) {
+        if (renderStatsLabel) {
+            renderStatsLabel->setText(text);
+        }
+        });
+    connect(renderViewport, &OW3D::Render::RenderViewportWidget::sceneWarningsChanged, this, [this](const QStringList& lines) {
+        if (!renderWarningsEdit) {
+            return;
+        }
+        if (lines.isEmpty()) {
+            renderWarningsEdit->setPlainText(tr("No scene warnings."));
+            return;
+        }
+        renderWarningsEdit->setPlainText(lines.join('\n'));
+        });
     connect(rawHexToggle, &QCheckBox::toggled, this, [this](bool on) {
         if (rawHexContainer) rawHexContainer->setVisible(on);
         updateRawHex(currentChunk);
         });
+    applyRenderSettingsToViewport();
 
     updateWindowTitle();
     recentFilesPath = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation) + "/recent_files.txt";
@@ -3242,8 +3726,9 @@ void MainWindow::openFile(const QString& path) {
 
     QString loadError;
     const bool isArchiveFile = IsMixArchivePath(filePath);
+    LoadedArchiveRenderContext archiveRenderContext{};
     if (isArchiveFile) {
-        if (!LoadW3DFromMixArchive(this, filePath, *chunkData, &loadError)) {
+        if (!LoadW3DFromMixArchive(this, filePath, *chunkData, &loadError, &archiveRenderContext)) {
             if (!loadError.isEmpty()) {
                 QMessageBox::warning(this, "Error", loadError);
             }
@@ -3255,15 +3740,35 @@ void MainWindow::openFile(const QString& path) {
         return;
     }
 
-    ClearChunkTree();
+    if (isArchiveFile) {
+        currentArchiveRenderPath = archiveRenderContext.archivePath;
+        currentArchiveRenderEntryId = archiveRenderContext.selectedEntryId;
+        currentArchiveRenderEntries = std::move(archiveRenderContext.entries);
+        currentArchiveTextureEntries = std::move(archiveRenderContext.textureEntryNames);
+        currentArchiveTextureEntryIds = std::move(archiveRenderContext.textureEntryIds);
+        currentArchiveTextureSourcesById.clear();
+        for (const ArchiveTextureSourceInfo& source : archiveRenderContext.textureSources) {
+            currentArchiveTextureSourcesById[source.id] = source;
+        }
+        currentArchiveSupplementalRoots.clear();
+        currentArchiveLoadedSupplementalEntryIds.clear();
+    }
+    else {
+        clearArchiveRenderContext();
+    }
     currentFilePath = filePath;
+    ClearChunkTree();
     setDirty(false);
     updateWindowTitle();
     clearDetails();
     populateTree();
+    rebuildRenderScene();
+    if (renderViewport) {
+        renderViewport->FocusScene();
+    }
     AddRecentFile(filePath);
     lastDirectory = QFileInfo(filePath).absolutePath();
-     
+
 }
 
 
@@ -3820,6 +4325,7 @@ void MainWindow::saveFileAs() {
 void MainWindow::onChunkEdited() {
     setDirty(true);
     handleTreeSelection();
+    rebuildRenderScene();
 }
 
 void MainWindow::onMeshRenamed(const QString& oldMeshName,
@@ -4236,6 +4742,215 @@ void MainWindow::updateRawHex(const std::shared_ptr<ChunkItem>& chunk) {
     }
 }
 
+void MainWindow::clearArchiveRenderContext() {
+    currentArchiveRenderPath.clear();
+    currentArchiveRenderEntryId = 0;
+    currentArchiveRenderEntries.clear();
+    currentArchiveTextureEntries.clear();
+    currentArchiveTextureEntryIds.clear();
+    currentArchiveTextureSourcesById.clear();
+    currentArchiveSupplementalRoots.clear();
+    currentArchiveLoadedSupplementalEntryIds.clear();
+}
+
+void MainWindow::applyRenderSettingsToViewport() {
+    if (!renderViewport) {
+        return;
+    }
+
+    OW3D::Render::RenderSettings settings{};
+    settings.profile = OW3D::Render::ParityProfile::W3DViewD3D11Baseline;
+    settings.enableFog = renderFogToggle ? renderFogToggle->isChecked() : true;
+    settings.enableLod = renderLodToggle ? renderLodToggle->isChecked() : true;
+    settings.lodBias = renderLodBiasSpin ? static_cast<float>(renderLodBiasSpin->value()) : 1.0f;
+    renderViewport->SetRenderSettings(settings);
+}
+
+void MainWindow::rebuildRenderScene() {
+    if (!renderViewport) {
+        return;
+    }
+
+    OW3D::Render::SceneBuildOptions options{};
+    options.profile = OW3D::Render::ParityProfile::W3DViewD3D11Baseline;
+    options.externalTextureNames = currentArchiveTextureEntries;
+    options.externalTextureHashes = currentArchiveTextureEntryIds;
+    if (!currentFilePath.isEmpty()) {
+        options.textureSearchDirectory = QFileInfo(currentFilePath).absolutePath().toStdString();
+    }
+    else if (!lastDirectory.isEmpty()) {
+        options.textureSearchDirectory = lastDirectory.toStdString();
+    }
+
+    const OW3D::Render::W3DChunk emptyRoot{};
+    const auto& roots = chunkData ? chunkData->getChunks() : emptyRoot;
+    const OW3D::Render::W3DChunk* supplementalRoots =
+        currentArchiveSupplementalRoots.empty() ? nullptr : &currentArchiveSupplementalRoots;
+    OW3D::Render::SceneBuildResult result =
+        OW3D::Render::BuildRenderScene(roots, options, supplementalRoots);
+
+    if (!currentArchiveRenderPath.isEmpty() && !currentArchiveRenderEntries.empty()) {
+        static const std::string kMissingSubObjectPrefix = "Referenced subobject mesh not found: ";
+        static const std::string kMissingLodMeshPrefix = "Referenced LOD mesh not found: ";
+
+        QSet<QString> missingMeshTokens;
+        for (const auto& warning : result.warnings) {
+            if (warning.code != OW3D::Render::SceneBuildWarningCode::InvalidIndex) {
+                continue;
+            }
+
+            std::string missingName;
+            if (warning.message.rfind(kMissingSubObjectPrefix, 0) == 0) {
+                missingName = warning.message.substr(kMissingSubObjectPrefix.size());
+            }
+            else if (warning.message.rfind(kMissingLodMeshPrefix, 0) == 0) {
+                missingName = warning.message.substr(kMissingLodMeshPrefix.size());
+            }
+            if (missingName.empty()) {
+                continue;
+            }
+
+            const QString token = QString::fromStdString(missingName)
+                .section(QLatin1Char('.'), 0, 0)
+                .trimmed()
+                .toLower();
+            if (!token.isEmpty()) {
+                missingMeshTokens.insert(token);
+            }
+        }
+
+        bool loadedSupplementalEntries = false;
+        int loadedCount = 0;
+        for (const ArchiveRenderEntryInfo& entry : currentArchiveRenderEntries) {
+            if (missingMeshTokens.isEmpty() || loadedCount >= 64) {
+                break;
+            }
+            if (!entry.likelyW3d) {
+                continue;
+            }
+            if (entry.id == currentArchiveRenderEntryId) {
+                continue;
+            }
+            if (currentArchiveLoadedSupplementalEntryIds.contains(entry.id)) {
+                continue;
+            }
+
+            const QString normalizedEntryName = QDir::fromNativeSeparators(entry.name).trimmed();
+            if (normalizedEntryName.isEmpty()) {
+                continue;
+            }
+
+            const QString entryPathLower = normalizedEntryName.toLower();
+            const QString entryStemLower = QFileInfo(normalizedEntryName).completeBaseName().toLower();
+            bool matchesMissingMesh = false;
+            for (const QString& token : missingMeshTokens) {
+                if (entryStemLower == token
+                    || entryStemLower.contains(token)
+                    || entryPathLower.contains(token))
+                {
+                    matchesMissingMesh = true;
+                    break;
+                }
+            }
+            if (!matchesMissingMesh) {
+                continue;
+            }
+
+            QByteArray entryBytes;
+            QString readError;
+            if (!ReadArchiveEntryBytes(
+                currentArchiveRenderPath,
+                entry.offset,
+                entry.size,
+                entryBytes,
+                &readError))
+            {
+                continue;
+            }
+
+            ChunkData supplementalData;
+            QString parseError;
+            if (!LoadChunkDataFromBytes(entryBytes, supplementalData, parseError)) {
+                continue;
+            }
+
+            const auto& parsedRoots = supplementalData.getChunks();
+            currentArchiveSupplementalRoots.insert(
+                currentArchiveSupplementalRoots.end(),
+                parsedRoots.begin(),
+                parsedRoots.end());
+            currentArchiveLoadedSupplementalEntryIds.insert(entry.id);
+            loadedSupplementalEntries = true;
+            ++loadedCount;
+        }
+
+        if (loadedSupplementalEntries) {
+            result = OW3D::Render::BuildRenderScene(
+                roots,
+                options,
+                &currentArchiveSupplementalRoots);
+        }
+    }
+
+    if (!currentArchiveTextureSourcesById.empty()) {
+        QString cacheRoot = QStandardPaths::writableLocation(QStandardPaths::CacheLocation);
+        if (cacheRoot.isEmpty()) {
+            cacheRoot = QDir::tempPath();
+        }
+        cacheRoot = QDir(cacheRoot).absoluteFilePath(QStringLiteral("archive_textures"));
+
+        std::unordered_map<uint32_t, std::string> cachedPathById;
+        for (auto& texture : result.scene.textures) {
+            const bool usesArchivePlaceholder =
+                texture.resolvedPath.rfind("archive:", 0) == 0;
+            if (!usesArchivePlaceholder) {
+                continue;
+            }
+
+            const std::vector<uint32_t> hashCandidates =
+                BuildTextureHashCandidates(texture.name);
+            bool extracted = false;
+            for (const uint32_t candidateHash : hashCandidates) {
+                const auto sourceIt = currentArchiveTextureSourcesById.find(candidateHash);
+                if (sourceIt == currentArchiveTextureSourcesById.end()) {
+                    continue;
+                }
+
+                const auto cachedIt = cachedPathById.find(candidateHash);
+                if (cachedIt != cachedPathById.end()) {
+                    texture.resolvedPath = cachedIt->second;
+                    texture.resolved = true;
+                    extracted = true;
+                    break;
+                }
+
+                QString extractedPath;
+                if (!MaterializeArchiveTextureToCache(sourceIt->second, cacheRoot, extractedPath)) {
+                    continue;
+                }
+
+                texture.resolvedPath = extractedPath.toStdString();
+                texture.resolved = true;
+                cachedPathById.emplace(candidateHash, texture.resolvedPath);
+                extracted = true;
+                break;
+            }
+
+            if (!extracted) {
+                texture.resolved = false;
+                result.warnings.push_back({
+                    OW3D::Render::SceneBuildWarningCode::MissingTexture,
+                    "archive",
+                    "Texture hash was found in archive index but payload could not be extracted: " + texture.name
+                    });
+            }
+        }
+    }
+
+    renderViewport->SetSceneResult(result);
+    applyRenderSettingsToViewport();
+}
+
 void MainWindow::setDirty(bool value) {
     if (dirty == value) return;
     dirty = value;
@@ -4498,6 +5213,7 @@ void MainWindow::addTopLevelChunk() {
     setDirty(true);
     populateTree();
     selectChunkInTree(newChunk.get());
+    rebuildRenderScene();
 }
 
 void MainWindow::insertChunkBefore() {
@@ -4537,6 +5253,7 @@ void MainWindow::insertChunkBefore() {
     setDirty(true);
     populateTree();
     selectChunkInTree(newChunk.get());
+    rebuildRenderScene();
 }
 
 void MainWindow::insertChunkAfter() {
@@ -4577,6 +5294,7 @@ void MainWindow::insertChunkAfter() {
     setDirty(true);
     populateTree();
     selectChunkInTree(newChunk.get());
+    rebuildRenderScene();
 }
 
 void MainWindow::addChildChunk() {
@@ -4630,6 +5348,7 @@ void MainWindow::addChildChunk() {
     setDirty(true);
     populateTree();
     selectChunkInTree(newChunk.get());
+    rebuildRenderScene();
 }
 
 void MainWindow::deleteSelectedChunk() {
@@ -4690,6 +5409,7 @@ void MainWindow::deleteSelectedChunk() {
     else {
         clearDetails();
     }
+    rebuildRenderScene();
 }
 
 void MainWindow::moveChunkUp() {
@@ -4720,6 +5440,7 @@ void MainWindow::moveChunkUp() {
     setDirty(true);
     populateTree();
     selectChunkInTree(selectedPtr);
+    rebuildRenderScene();
 }
 
 void MainWindow::moveChunkDown() {
@@ -4750,6 +5471,7 @@ void MainWindow::moveChunkDown() {
     setDirty(true);
     populateTree();
     selectChunkInTree(selectedPtr);
+    rebuildRenderScene();
 }
 
 void MainWindow::moveHierarchyBoneToEnd() {
@@ -4881,6 +5603,7 @@ void MainWindow::moveHierarchyBoneToEnd() {
 void MainWindow::ClearChunkTree() {
     treeWidget->clear();
     clearDetails();
+    rebuildRenderScene();
 }
 
 void MainWindow::OpenRecentFile() {
@@ -6249,12 +6972,17 @@ void MainWindow::importJson() {
         QMessageBox::warning(this, tr("Error"), tr("Invalid JSON content: %1").arg(QString::fromUtf8(e.what())));
         return;
     }
-    ClearChunkTree();
+    clearArchiveRenderContext();
     currentFilePath.clear();
+    ClearChunkTree();
     updateWindowTitle();
     setDirty(true);
     lastDirectory = QFileInfo(path).absolutePath();
     populateTree();
+    rebuildRenderScene();
+    if (renderViewport) {
+        renderViewport->FocusScene();
+    }
     if (!importWarnings.empty()) {
         QStringList preview;
         const std::size_t previewCount = std::min<std::size_t>(importWarnings.size(), 10);
