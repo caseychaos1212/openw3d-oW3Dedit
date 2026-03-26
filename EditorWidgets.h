@@ -234,3 +234,32 @@ private:
     QLabel* statsLabel = nullptr;
     QPushButton* applyButton = nullptr;
 };
+
+class TextureInfoEditorWidget : public QWidget {
+    Q_OBJECT
+public:
+    explicit TextureInfoEditorWidget(QWidget* parent = nullptr);
+    void setChunk(const std::shared_ptr<ChunkItem>& chunk);
+
+signals:
+    void chunkEdited();
+
+private slots:
+    void applyChanges();
+
+private:
+    struct FlagControl {
+        uint16_t mask = 0;
+        QCheckBox* box = nullptr;
+    };
+
+    std::weak_ptr<ChunkItem> chunk;
+    std::vector<FlagControl> flagControls;
+    QComboBox* mipCombo = nullptr;
+    QComboBox* hintCombo = nullptr;
+    QComboBox* typeCombo = nullptr;
+    QComboBox* animCombo = nullptr;
+    QSpinBox* frameCountSpin = nullptr;
+    QDoubleSpinBox* frameRateSpin = nullptr;
+    QPushButton* applyButton = nullptr;
+};

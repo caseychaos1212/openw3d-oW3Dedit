@@ -146,6 +146,65 @@ constexpr uint32_t MeshAttrValue(MeshAttr attr) {
     return static_cast<uint32_t>(attr);
 }
 
+constexpr uint16_t TextureAttrValue(TextureAttr attr) {
+    return static_cast<uint16_t>(attr);
+}
+
+static int ClampToInt(uint32_t value) {
+    if (value > static_cast<uint32_t>(std::numeric_limits<int>::max())) {
+        return std::numeric_limits<int>::max();
+    }
+    return static_cast<int>(value);
+}
+
+static QString RenameIfMatches(const QString& current,
+    const QString& oldBase,
+    const QString& newBase,
+    const QString& oldFile,
+    const QString& newFile) {
+    if (current.isEmpty()) return current;
+    if (!oldFile.isEmpty() && current == oldFile) {
+        return newFile;
+    }
+    if (!oldBase.isEmpty() && current == oldBase) {
+        return newBase;
+    }
+    return current;
+}
+
+static QString RenameFullName(const QString& current,
+    const QString& oldBase,
+    const QString& newBase,
+    const QString& oldFile,
+    const QString& newFile) {
+    if (current.isEmpty()) return current;
+    if (!oldFile.isEmpty() && current == oldFile) {
+        return newFile;
+    }
+    if (!oldBase.isEmpty() && current == oldBase) {
+        return newBase;
+    }
+    const int dot = current.indexOf(QLatin1Char('.'));
+    if (dot < 0) {
+        return current;
+    }
+    QString containerPart = current.left(dot);
+    QString objectPart = current.mid(dot + 1);
+    bool changed = false;
+    if (!oldBase.isEmpty() && containerPart == oldBase) {
+        containerPart = newBase;
+        changed = true;
+    }
+    if (!oldBase.isEmpty() && objectPart == oldBase) {
+        objectPart = newBase;
+        changed = true;
+    }
+    if (!changed) {
+        return current;
+    }
+    return containerPart + QLatin1Char('.') + objectPart;
+}
+
 constexpr int kMeshNameMax = static_cast<int>(W3D_NAME_LEN) - 1;
 constexpr int kPivotNameMax = static_cast<int>(W3D_NAME_LEN) - 1;
 
@@ -2764,6 +2823,175 @@ void TriangleSurfaceTypeEditorWidget::applyChanges() {
     emit chunkEdited();
 }
 
+TextureInfoEditorWidget::TextureInfoEditorWidget(QWidget* parent)
+    : QWidget(parent) {
+    setEnabled(false);
+
+    auto* layout = new QVBoxLayout(this);
+    layout->setContentsMargins(0, 0, 0, 0);
+    layout->setSpacing(6);
+
+    auto* flagsGroup = new QGroupBox(tr("Texture Flags"), this);
+    auto* flagsLayout = new QGridLayout(flagsGroup);
+    const std::array<std::pair<TextureAttr, const char*>, 6> kFlags = { {
+        { TextureAttr::PUBLISH, "Publish" },
+        { TextureAttr::RESIZE_OBSOLETE, "Resize (Obsolete)" },
+        { TextureAttr::NO_LOD, "No LOD" },
+        { TextureAttr::CLAMP_U, "Clamp U" },
+        { TextureAttr::CLAMP_V, "Clamp V" },
+        { TextureAttr::ALPHA_BITMAP, "Alpha Bitmap" },
+    } };
+    int row = 0;
+    for (const auto& [flag, label] : kFlags) {
+        auto* check = new QCheckBox(QString::fromLatin1(label), flagsGroup);
+        flagsLayout->addWidget(check, row / 2, row % 2);
+        flagControls.push_back({ TextureAttrValue(flag), check });
+        ++row;
+    }
+    layout->addWidget(flagsGroup);
+
+    auto* form = new QFormLayout();
+    mipCombo = new QComboBox(this);
+    mipCombo->addItem(tr("All"), static_cast<int>(TextureAttrValue(TextureAttr::MIP_ALL)));
+    mipCombo->addItem(tr("2"), static_cast<int>(TextureAttrValue(TextureAttr::MIP_2)));
+    mipCombo->addItem(tr("3"), static_cast<int>(TextureAttrValue(TextureAttr::MIP_3)));
+    mipCombo->addItem(tr("4"), static_cast<int>(TextureAttrValue(TextureAttr::MIP_4)));
+    form->addRow(tr("Mip Levels"), mipCombo);
+
+    hintCombo = new QComboBox(this);
+    hintCombo->addItem(tr("Base"), static_cast<int>(TextureAttrValue(TextureAttr::HINT_BASE)));
+    hintCombo->addItem(tr("Emissive"), static_cast<int>(TextureAttrValue(TextureAttr::HINT_EMISSIVE)));
+    hintCombo->addItem(tr("Environment"), static_cast<int>(TextureAttrValue(TextureAttr::HINT_ENVIRONMENT)));
+    hintCombo->addItem(tr("Shiny Mask"), static_cast<int>(TextureAttrValue(TextureAttr::HINT_SHINY_MASK)));
+    form->addRow(tr("Hint"), hintCombo);
+
+    typeCombo = new QComboBox(this);
+    typeCombo->addItem(tr("Color Map"), static_cast<int>(TextureAttrValue(TextureAttr::TYPE_COLORMAP)));
+    typeCombo->addItem(tr("Bump Map"), static_cast<int>(TextureAttrValue(TextureAttr::TYPE_BUMPMAP)));
+    form->addRow(tr("Type"), typeCombo);
+
+    animCombo = new QComboBox(this);
+    animCombo->addItem(tr("Loop"), static_cast<int>(TextureAttrValue(TextureAttr::ANIM_LOOP)));
+    animCombo->addItem(tr("Ping Pong"), static_cast<int>(TextureAttrValue(TextureAttr::ANIM_PINGPONG)));
+    animCombo->addItem(tr("Once"), static_cast<int>(TextureAttrValue(TextureAttr::ANIM_ONCE)));
+    animCombo->addItem(tr("Manual"), static_cast<int>(TextureAttrValue(TextureAttr::ANIM_MANUAL)));
+    form->addRow(tr("Anim Type"), animCombo);
+
+    frameCountSpin = new QSpinBox(this);
+    frameCountSpin->setRange(0, std::numeric_limits<int>::max());
+    form->addRow(tr("Frame Count"), frameCountSpin);
+
+    frameRateSpin = new QDoubleSpinBox(this);
+    frameRateSpin->setRange(0.0, 1000000.0);
+    frameRateSpin->setDecimals(3);
+    frameRateSpin->setSingleStep(0.1);
+    form->addRow(tr("Frame Rate"), frameRateSpin);
+
+    layout->addLayout(form);
+
+    applyButton = new QPushButton(tr("Apply Texture Info Changes"), this);
+    connect(applyButton, &QPushButton::clicked,
+        this, &TextureInfoEditorWidget::applyChanges);
+
+    layout->addStretch();
+    layout->addWidget(applyButton, 0, Qt::AlignRight);
+}
+
+void TextureInfoEditorWidget::setChunk(const std::shared_ptr<ChunkItem>& chunkPtr) {
+    chunk = chunkPtr;
+    for (auto& ctrl : flagControls) {
+        if (ctrl.box) ctrl.box->setChecked(false);
+    }
+    if (mipCombo) mipCombo->setCurrentIndex(0);
+    if (hintCombo) hintCombo->setCurrentIndex(0);
+    if (typeCombo) typeCombo->setCurrentIndex(0);
+    if (animCombo) animCombo->setCurrentIndex(0);
+    if (frameCountSpin) frameCountSpin->setValue(0);
+    if (frameRateSpin) frameRateSpin->setValue(0.0);
+
+    if (!chunkPtr) {
+        setEnabled(false);
+        return;
+    }
+
+    auto parsed = ParseChunkStruct<W3dTextureInfoStruct>(chunkPtr);
+    if (auto err = std::get_if<std::string>(&parsed)) {
+        Q_UNUSED(err);
+        setEnabled(false);
+        return;
+    }
+
+    const auto& data = std::get<W3dTextureInfoStruct>(parsed);
+    const uint16_t attr = data.Attributes;
+    for (auto& ctrl : flagControls) {
+        ctrl.box->setChecked((attr & ctrl.mask) != 0);
+    }
+    const uint16_t mip = static_cast<uint16_t>(attr & TextureAttrValue(TextureAttr::MIP_MASK));
+    const uint16_t hint = static_cast<uint16_t>(attr & TextureAttrValue(TextureAttr::HINT_MASK));
+    const uint16_t type = static_cast<uint16_t>(attr & TextureAttrValue(TextureAttr::TYPE_MASK));
+    SetComboValue(mipCombo, static_cast<int>(mip));
+    SetComboValue(hintCombo, static_cast<int>(hint));
+    SetComboValue(typeCombo, static_cast<int>(type));
+    SetComboValue(animCombo, static_cast<int>(data.AnimType));
+    frameCountSpin->setValue(ClampToInt(data.FrameCount));
+    frameRateSpin->setValue(data.FrameRate);
+
+    setEnabled(true);
+}
+
+void TextureInfoEditorWidget::applyChanges() {
+    auto chunkPtr = chunk.lock();
+    if (!chunkPtr) return;
+
+    std::string error;
+    const bool ok = W3DEdit::MutateStructChunk<W3dTextureInfoStruct>(
+        chunkPtr,
+        [&](W3dTextureInfoStruct& data) {
+            uint16_t clearMask = 0;
+            for (const auto& ctrl : flagControls) {
+                clearMask = static_cast<uint16_t>(clearMask | ctrl.mask);
+            }
+            clearMask = static_cast<uint16_t>(clearMask | TextureAttrValue(TextureAttr::MIP_MASK));
+            clearMask = static_cast<uint16_t>(clearMask | TextureAttrValue(TextureAttr::HINT_MASK));
+            clearMask = static_cast<uint16_t>(clearMask | TextureAttrValue(TextureAttr::TYPE_MASK));
+
+            uint16_t attr = static_cast<uint16_t>(data.Attributes & ~clearMask);
+            for (const auto& ctrl : flagControls) {
+                if (ctrl.box->isChecked()) {
+                    attr = static_cast<uint16_t>(attr | ctrl.mask);
+                }
+            }
+            const QVariant mipData = mipCombo->currentData();
+            const QVariant hintData = hintCombo->currentData();
+            const QVariant typeData = typeCombo->currentData();
+            if (mipData.isValid()) {
+                attr = static_cast<uint16_t>(attr | static_cast<uint16_t>(mipData.toInt()));
+            }
+            if (hintData.isValid()) {
+                attr = static_cast<uint16_t>(attr | static_cast<uint16_t>(hintData.toInt()));
+            }
+            if (typeData.isValid()) {
+                attr = static_cast<uint16_t>(attr | static_cast<uint16_t>(typeData.toInt()));
+            }
+            data.Attributes = attr;
+            const QVariant animData = animCombo->currentData();
+            if (animData.isValid()) {
+                data.AnimType = static_cast<uint16_t>(animData.toInt());
+            }
+            data.FrameCount = static_cast<uint32_t>(frameCountSpin->value());
+            data.FrameRate = static_cast<float>(frameRateSpin->value());
+        },
+        &error);
+
+    if (!ok) {
+        QMessageBox::warning(this, tr("Error"),
+            QString::fromStdString(error.empty() ? "Failed to update texture info." : error));
+        return;
+    }
+
+    emit chunkEdited();
+}
+
 MaterialEditorWidget::MaterialEditorWidget(QWidget* parent)
     : QWidget(parent) {
     setEnabled(false);
@@ -3101,6 +3329,9 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     textureNameEditor = new StringEditorWidget(tr("Texture Name"), editorStack);
     editorStack->addWidget(textureNameEditor);
 
+    textureInfoEditor = new TextureInfoEditorWidget(editorStack);
+    editorStack->addWidget(textureInfoEditor);
+
     materialNameEditor = new StringEditorWidget(tr("Material Name"), editorStack);
     editorStack->addWidget(materialNameEditor);
 
@@ -3144,6 +3375,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     connect(meshEditor, &MeshEditorWidget::chunkEdited, this, &MainWindow::onChunkEdited);
     connect(meshEditor, &MeshEditorWidget::meshRenamed, this, &MainWindow::onMeshRenamed);
     connect(textureNameEditor, &StringEditorWidget::chunkEdited, this, &MainWindow::onChunkEdited);
+    connect(textureInfoEditor, &TextureInfoEditorWidget::chunkEdited, this, &MainWindow::onChunkEdited);
     connect(materialNameEditor, &StringEditorWidget::chunkEdited, this, &MainWindow::onChunkEdited);
     connect(transformNodeEditor, &TransformNodeEditorWidget::chunkEdited, this, &MainWindow::onChunkEdited);
     connect(stage0ArgsEditor, &MapperArgsEditorWidget::chunkEdited, this, &MainWindow::onChunkEdited);
@@ -3773,6 +4005,10 @@ void MainWindow::saveFile() {
         return;
     }
 
+    if (!createBackupFile(currentFilePath)) {
+        return;
+    }
+
     SyncHLodCountsForSave(chunkData.get());
     SyncPureAnimationHeaderNameForSave(chunkData.get(), currentFilePath);
     if (!chunkData->saveToFile(currentFilePath.toStdString())) {
@@ -3804,6 +4040,18 @@ void MainWindow::saveFileAs() {
 
     if (filePath.isEmpty()) return;
 
+    const QString oldFileName = QFileInfo(currentFilePath).fileName();
+    const QString oldBaseName = QFileInfo(currentFilePath).completeBaseName();
+    const QString newFileName = QFileInfo(filePath).fileName();
+    const QString newBaseName = QFileInfo(filePath).completeBaseName();
+    if (!oldBaseName.isEmpty() && oldBaseName != newBaseName) {
+        renameFileReferences(oldBaseName, newBaseName, oldFileName, newFileName);
+    }
+
+    if (!createBackupFile(filePath)) {
+        return;
+    }
+
     SyncHLodCountsForSave(chunkData.get());
     SyncPureAnimationHeaderNameForSave(chunkData.get(), filePath);
     if (!chunkData->saveToFile(filePath.toStdString())) {
@@ -3815,6 +4063,491 @@ void MainWindow::saveFileAs() {
     AddRecentFile(filePath);
     lastDirectory = QFileInfo(filePath).absolutePath();
     setDirty(false);
+}
+
+bool MainWindow::createBackupFile(const QString& filePath) {
+    if (filePath.isEmpty()) return true;
+    QFileInfo info(filePath);
+    if (!info.exists()) return true;
+
+    const QString backupPath = filePath + QStringLiteral(".bak");
+    if (QFile::exists(backupPath)) {
+        if (!QFile::remove(backupPath)) {
+            QMessageBox::warning(this, tr("Error"),
+                tr("Failed to replace backup file:\n%1").arg(backupPath));
+            return false;
+        }
+    }
+
+    if (!QFile::copy(filePath, backupPath)) {
+        QMessageBox::warning(this, tr("Error"),
+            tr("Failed to create backup file:\n%1").arg(backupPath));
+        return false;
+    }
+
+    return true;
+}
+
+void MainWindow::renameFileReferences(const QString& oldBaseName,
+    const QString& newBaseName,
+    const QString& oldFileName,
+    const QString& newFileName) {
+    if (!chunkData) return;
+    if (oldBaseName.isEmpty() || oldBaseName == newBaseName) {
+        return;
+    }
+
+    bool changed = false;
+    std::function<void(const std::shared_ptr<ChunkItem>&)> dfs =
+        [&](const std::shared_ptr<ChunkItem>& node) {
+        if (!node) return;
+
+        switch (node->id) {
+        case 0x001F: { // W3D_CHUNK_MESH_HEADER3
+            auto parsed = ParseChunkStruct<W3dMeshHeader3Struct>(node);
+            if (auto header = std::get_if<W3dMeshHeader3Struct>(&parsed)) {
+                const QString meshName = ReadFixedString(header->MeshName, W3D_NAME_LEN);
+                const QString containerName = ReadFixedString(header->ContainerName, W3D_NAME_LEN);
+                const QString updatedMesh = RenameIfMatches(meshName, oldBaseName, newBaseName,
+                    oldFileName, newFileName);
+                const QString updatedContainer = RenameIfMatches(containerName, oldBaseName, newBaseName,
+                    oldFileName, newFileName);
+                if (updatedMesh != meshName || updatedContainer != containerName) {
+                    (void)W3DEdit::MutateStructChunk<W3dMeshHeader3Struct>(
+                        node,
+                        [&](W3dMeshHeader3Struct& target) {
+                            if (updatedMesh != meshName) {
+                                W3DEdit::WriteFixedString(target.MeshName, W3D_NAME_LEN,
+                                    updatedMesh.toStdString());
+                            }
+                            if (updatedContainer != containerName) {
+                                W3DEdit::WriteFixedString(target.ContainerName, W3D_NAME_LEN,
+                                    updatedContainer.toStdString());
+                            }
+                        });
+                    changed = true;
+                }
+            }
+            break;
+        }
+        case 0x0101: { // W3D_CHUNK_HIERARCHY_HEADER
+            auto parsed = ParseChunkStruct<W3dHierarchyStruct>(node);
+            if (auto header = std::get_if<W3dHierarchyStruct>(&parsed)) {
+                const QString name = ReadFixedString(header->Name, W3D_NAME_LEN);
+                const QString updated = RenameIfMatches(name, oldBaseName, newBaseName,
+                    oldFileName, newFileName);
+                if (updated != name) {
+                    (void)W3DEdit::MutateStructChunk<W3dHierarchyStruct>(
+                        node,
+                        [&](W3dHierarchyStruct& target) {
+                            W3DEdit::WriteFixedString(target.Name, W3D_NAME_LEN, updated.toStdString());
+                        });
+                    changed = true;
+                }
+            }
+            break;
+        }
+        case 0x0201: { // W3D_CHUNK_ANIMATION_HEADER
+            auto parsed = ParseChunkStruct<W3dAnimHeaderStruct>(node);
+            if (auto header = std::get_if<W3dAnimHeaderStruct>(&parsed)) {
+                const QString name = ReadFixedString(header->Name, W3D_NAME_LEN);
+                const QString hierName = ReadFixedString(header->HierarchyName, W3D_NAME_LEN);
+                const QString updatedName = RenameIfMatches(name, oldBaseName, newBaseName,
+                    oldFileName, newFileName);
+                const QString updatedHier = RenameIfMatches(hierName, oldBaseName, newBaseName,
+                    oldFileName, newFileName);
+                if (updatedName != name || updatedHier != hierName) {
+                    (void)W3DEdit::MutateStructChunk<W3dAnimHeaderStruct>(
+                        node,
+                        [&](W3dAnimHeaderStruct& target) {
+                            if (updatedName != name) {
+                                W3DEdit::WriteFixedString(target.Name, W3D_NAME_LEN, updatedName.toStdString());
+                            }
+                            if (updatedHier != hierName) {
+                                W3DEdit::WriteFixedString(target.HierarchyName, W3D_NAME_LEN, updatedHier.toStdString());
+                            }
+                        });
+                    changed = true;
+                }
+            }
+            break;
+        }
+        case 0x0281: { // W3D_CHUNK_COMPRESSED_ANIMATION_HEADER
+            auto parsed = ParseChunkStruct<W3dCompressedAnimHeaderStruct>(node);
+            if (auto header = std::get_if<W3dCompressedAnimHeaderStruct>(&parsed)) {
+                const QString name = ReadFixedString(header->Name, W3D_NAME_LEN);
+                const QString hierName = ReadFixedString(header->HierarchyName, W3D_NAME_LEN);
+                const QString updatedName = RenameIfMatches(name, oldBaseName, newBaseName,
+                    oldFileName, newFileName);
+                const QString updatedHier = RenameIfMatches(hierName, oldBaseName, newBaseName,
+                    oldFileName, newFileName);
+                if (updatedName != name || updatedHier != hierName) {
+                    (void)W3DEdit::MutateStructChunk<W3dCompressedAnimHeaderStruct>(
+                        node,
+                        [&](W3dCompressedAnimHeaderStruct& target) {
+                            if (updatedName != name) {
+                                W3DEdit::WriteFixedString(target.Name, W3D_NAME_LEN, updatedName.toStdString());
+                            }
+                            if (updatedHier != hierName) {
+                                W3DEdit::WriteFixedString(target.HierarchyName, W3D_NAME_LEN, updatedHier.toStdString());
+                            }
+                        });
+                    changed = true;
+                }
+            }
+            break;
+        }
+        case 0x02C1: { // W3D_CHUNK_MORPHANIM_HEADER
+            auto parsed = ParseChunkStruct<W3dMorphAnimHeaderStruct>(node);
+            if (auto header = std::get_if<W3dMorphAnimHeaderStruct>(&parsed)) {
+                const QString name = ReadFixedString(header->Name, W3D_NAME_LEN);
+                const QString hierName = ReadFixedString(header->HierarchyName, W3D_NAME_LEN);
+                const QString updatedName = RenameIfMatches(name, oldBaseName, newBaseName,
+                    oldFileName, newFileName);
+                const QString updatedHier = RenameIfMatches(hierName, oldBaseName, newBaseName,
+                    oldFileName, newFileName);
+                if (updatedName != name || updatedHier != hierName) {
+                    (void)W3DEdit::MutateStructChunk<W3dMorphAnimHeaderStruct>(
+                        node,
+                        [&](W3dMorphAnimHeaderStruct& target) {
+                            if (updatedName != name) {
+                                W3DEdit::WriteFixedString(target.Name, W3D_NAME_LEN, updatedName.toStdString());
+                            }
+                            if (updatedHier != hierName) {
+                                W3DEdit::WriteFixedString(target.HierarchyName, W3D_NAME_LEN, updatedHier.toStdString());
+                            }
+                        });
+                    changed = true;
+                }
+            }
+            break;
+        }
+        case 0x0301: { // W3D_CHUNK_HMODEL_HEADER
+            auto parsed = ParseChunkStruct<W3dHModelHeaderStruct>(node);
+            if (auto header = std::get_if<W3dHModelHeaderStruct>(&parsed)) {
+                const QString name = ReadFixedString(header->Name, W3D_NAME_LEN);
+                const QString hierName = ReadFixedString(header->HierarchyName, W3D_NAME_LEN);
+                const QString updatedName = RenameIfMatches(name, oldBaseName, newBaseName,
+                    oldFileName, newFileName);
+                const QString updatedHier = RenameIfMatches(hierName, oldBaseName, newBaseName,
+                    oldFileName, newFileName);
+                if (updatedName != name || updatedHier != hierName) {
+                    (void)W3DEdit::MutateStructChunk<W3dHModelHeaderStruct>(
+                        node,
+                        [&](W3dHModelHeaderStruct& target) {
+                            if (updatedName != name) {
+                                W3DEdit::WriteFixedString(target.Name, W3D_NAME_LEN, updatedName.toStdString());
+                            }
+                            if (updatedHier != hierName) {
+                                W3DEdit::WriteFixedString(target.HierarchyName, W3D_NAME_LEN, updatedHier.toStdString());
+                            }
+                        });
+                    changed = true;
+                }
+            }
+            break;
+        }
+        case 0x0302: // W3D_CHUNK_HMODEL_NODE
+        case 0x0303: // W3D_CHUNK_HMODEL_COLLISION_NODE
+        case 0x0304: // W3D_CHUNK_HMODEL_SKIN_NODE
+        case 0x0306: { // W3D_CHUNK_HMODEL_SHADOW_NODE
+            auto parsed = ParseChunkStruct<W3dHModelNodeStruct>(node);
+            if (auto nodeStruct = std::get_if<W3dHModelNodeStruct>(&parsed)) {
+                const QString name = ReadFixedString(nodeStruct->RenderObjName, W3D_NAME_LEN);
+                const QString updated = RenameIfMatches(name, oldBaseName, newBaseName,
+                    oldFileName, newFileName);
+                if (updated != name) {
+                    (void)W3DEdit::MutateStructChunk<W3dHModelNodeStruct>(
+                        node,
+                        [&](W3dHModelNodeStruct& target) {
+                            W3DEdit::WriteFixedString(target.RenderObjName, W3D_NAME_LEN, updated.toStdString());
+                        });
+                    changed = true;
+                }
+            }
+            break;
+        }
+        case 0x0401: { // W3D_CHUNK_LODMODEL_HEADER
+            auto parsed = ParseChunkStruct<W3dLODModelHeaderStruct>(node);
+            if (auto header = std::get_if<W3dLODModelHeaderStruct>(&parsed)) {
+                const QString name = ReadFixedString(header->Name, W3D_NAME_LEN);
+                const QString updated = RenameIfMatches(name, oldBaseName, newBaseName,
+                    oldFileName, newFileName);
+                if (updated != name) {
+                    (void)W3DEdit::MutateStructChunk<W3dLODModelHeaderStruct>(
+                        node,
+                        [&](W3dLODModelHeaderStruct& target) {
+                            W3DEdit::WriteFixedString(target.Name, W3D_NAME_LEN, updated.toStdString());
+                        });
+                    changed = true;
+                }
+            }
+            break;
+        }
+        case 0x0402: { // W3D_CHUNK_LOD
+            auto parsed = ParseChunkStruct<W3dLODStruct>(node);
+            if (auto lod = std::get_if<W3dLODStruct>(&parsed)) {
+                const QString name = ReadFixedString(lod->RenderObjName, 2 * W3D_NAME_LEN);
+                const QString updated = RenameFullName(name, oldBaseName, newBaseName,
+                    oldFileName, newFileName);
+                if (updated != name) {
+                    (void)W3DEdit::MutateStructChunk<W3dLODStruct>(
+                        node,
+                        [&](W3dLODStruct& target) {
+                            W3DEdit::WriteFixedString(target.RenderObjName, 2 * W3D_NAME_LEN,
+                                updated.toStdString());
+                        });
+                    changed = true;
+                }
+            }
+            break;
+        }
+        case 0x0421: { // W3D_CHUNK_COLLECTION_HEADER
+            auto parsed = ParseChunkStruct<W3dCollectionHeaderStruct>(node);
+            if (auto header = std::get_if<W3dCollectionHeaderStruct>(&parsed)) {
+                const QString name = ReadFixedString(header->Name, W3D_NAME_LEN);
+                const QString updated = RenameIfMatches(name, oldBaseName, newBaseName,
+                    oldFileName, newFileName);
+                if (updated != name) {
+                    (void)W3DEdit::MutateStructChunk<W3dCollectionHeaderStruct>(
+                        node,
+                        [&](W3dCollectionHeaderStruct& target) {
+                            W3DEdit::WriteFixedString(target.Name, W3D_NAME_LEN, updated.toStdString());
+                        });
+                    changed = true;
+                }
+            }
+            break;
+        }
+        case 0x0422: { // W3D_CHUNK_COLLECTION_OBJ_NAME
+            if (!node->data.empty()) {
+                const char* raw = reinterpret_cast<const char*>(node->data.data());
+                const auto len = TruncatedLength(raw, node->data.size());
+                const QString name = QString::fromLatin1(raw, static_cast<int>(len));
+                const QString updated = RenameFullName(name, oldBaseName, newBaseName,
+                    oldFileName, newFileName);
+                if (updated != name) {
+                    (void)W3DEdit::UpdateNullTermStringChunk(node, updated.toStdString());
+                    changed = true;
+                }
+            }
+            break;
+        }
+        case 0x0501: { // W3D_CHUNK_EMITTER_HEADER
+            auto parsed = ParseChunkStruct<W3dEmitterHeaderStruct>(node);
+            if (auto header = std::get_if<W3dEmitterHeaderStruct>(&parsed)) {
+                const QString name = ReadFixedString(header->Name, W3D_NAME_LEN);
+                const QString updated = RenameIfMatches(name, oldBaseName, newBaseName,
+                    oldFileName, newFileName);
+                if (updated != name) {
+                    (void)W3DEdit::MutateStructChunk<W3dEmitterHeaderStruct>(
+                        node,
+                        [&](W3dEmitterHeaderStruct& target) {
+                            W3DEdit::WriteFixedString(target.Name, W3D_NAME_LEN, updated.toStdString());
+                        });
+                    changed = true;
+                }
+            }
+            break;
+        }
+        case 0x0601: { // W3D_CHUNK_AGGREGATE_HEADER
+            auto parsed = ParseChunkStruct<W3dAggregateHeaderStruct>(node);
+            if (auto header = std::get_if<W3dAggregateHeaderStruct>(&parsed)) {
+                const QString name = ReadFixedString(header->Name, W3D_NAME_LEN);
+                const QString updated = RenameIfMatches(name, oldBaseName, newBaseName,
+                    oldFileName, newFileName);
+                if (updated != name) {
+                    (void)W3DEdit::MutateStructChunk<W3dAggregateHeaderStruct>(
+                        node,
+                        [&](W3dAggregateHeaderStruct& target) {
+                            W3DEdit::WriteFixedString(target.Name, W3D_NAME_LEN, updated.toStdString());
+                        });
+                    changed = true;
+                }
+            }
+            break;
+        }
+        case 0x0602: { // W3D_CHUNK_AGGREGATE_INFO
+            auto parsed = ParseChunkStruct<W3dAggregateInfoStruct>(node);
+            if (auto info = std::get_if<W3dAggregateInfoStruct>(&parsed)) {
+                const QString name = ReadFixedString(info->BaseModelName, 2 * W3D_NAME_LEN);
+                const QString updated = RenameFullName(name, oldBaseName, newBaseName,
+                    oldFileName, newFileName);
+                if (updated != name) {
+                    (void)W3DEdit::MutateStructChunk<W3dAggregateInfoStruct>(
+                        node,
+                        [&](W3dAggregateInfoStruct& target) {
+                            W3DEdit::WriteFixedString(target.BaseModelName, 2 * W3D_NAME_LEN,
+                                updated.toStdString());
+                        });
+                    changed = true;
+                }
+            }
+            break;
+        }
+        case 0x0701: { // W3D_CHUNK_HLOD_HEADER
+            auto parsed = ParseChunkStruct<W3dHLodHeaderStruct>(node);
+            if (auto header = std::get_if<W3dHLodHeaderStruct>(&parsed)) {
+                const QString name = ReadFixedString(header->Name, W3D_NAME_LEN);
+                const QString hierName = ReadFixedString(header->HierarchyName, W3D_NAME_LEN);
+                const QString updatedName = RenameIfMatches(name, oldBaseName, newBaseName,
+                    oldFileName, newFileName);
+                const QString updatedHier = RenameIfMatches(hierName, oldBaseName, newBaseName,
+                    oldFileName, newFileName);
+                if (updatedName != name || updatedHier != hierName) {
+                    (void)W3DEdit::MutateStructChunk<W3dHLodHeaderStruct>(
+                        node,
+                        [&](W3dHLodHeaderStruct& target) {
+                            if (updatedName != name) {
+                                W3DEdit::WriteFixedString(target.Name, W3D_NAME_LEN, updatedName.toStdString());
+                            }
+                            if (updatedHier != hierName) {
+                                W3DEdit::WriteFixedString(target.HierarchyName, W3D_NAME_LEN,
+                                    updatedHier.toStdString());
+                            }
+                        });
+                    changed = true;
+                }
+            }
+            break;
+        }
+        case 0x0704: { // W3D_CHUNK_HLOD_SUB_OBJECT
+            auto parsed = ParseChunkStruct<W3dHLodSubObjectStruct>(node);
+            if (auto sub = std::get_if<W3dHLodSubObjectStruct>(&parsed)) {
+                const QString name = ReadFixedString(sub->Name, 2 * W3D_NAME_LEN);
+                const QString updated = RenameFullName(name, oldBaseName, newBaseName,
+                    oldFileName, newFileName);
+                if (updated != name) {
+                    (void)W3DEdit::MutateStructChunk<W3dHLodSubObjectStruct>(
+                        node,
+                        [&](W3dHLodSubObjectStruct& target) {
+                            W3DEdit::WriteFixedString(target.Name, 2 * W3D_NAME_LEN,
+                                updated.toStdString());
+                        });
+                    changed = true;
+                }
+            }
+            break;
+        }
+        case 0x0740: { // W3D_CHUNK_BOX
+            auto parsed = ParseChunkStruct<W3dBoxStruct>(node);
+            if (auto box = std::get_if<W3dBoxStruct>(&parsed)) {
+                const QString name = ReadFixedString(box->Name, 2 * W3D_NAME_LEN);
+                const QString updated = RenameFullName(name, oldBaseName, newBaseName,
+                    oldFileName, newFileName);
+                if (updated != name) {
+                    (void)W3DEdit::MutateStructChunk<W3dBoxStruct>(
+                        node,
+                        [&](W3dBoxStruct& target) {
+                            W3DEdit::WriteFixedString(target.Name, 2 * W3D_NAME_LEN,
+                                updated.toStdString());
+                        });
+                    changed = true;
+                }
+            }
+            break;
+        }
+        case 0x0741: { // W3D_CHUNK_SPHERE
+            auto parsed = ParseChunkStruct<W3dSphereStruct>(node);
+            if (auto sphere = std::get_if<W3dSphereStruct>(&parsed)) {
+                const QString name = ReadFixedString(sphere->Name, 2 * W3D_NAME_LEN);
+                const QString updated = RenameFullName(name, oldBaseName, newBaseName,
+                    oldFileName, newFileName);
+                if (updated != name) {
+                    (void)W3DEdit::MutateStructChunk<W3dSphereStruct>(
+                        node,
+                        [&](W3dSphereStruct& target) {
+                            W3DEdit::WriteFixedString(target.Name, 2 * W3D_NAME_LEN,
+                                updated.toStdString());
+                        });
+                    changed = true;
+                }
+            }
+            break;
+        }
+        case 0x0742: { // W3D_CHUNK_RING
+            auto parsed = ParseChunkStruct<W3dRingStruct>(node);
+            if (auto ring = std::get_if<W3dRingStruct>(&parsed)) {
+                const QString name = ReadFixedString(ring->Name, 2 * W3D_NAME_LEN);
+                const QString updated = RenameFullName(name, oldBaseName, newBaseName,
+                    oldFileName, newFileName);
+                if (updated != name) {
+                    (void)W3DEdit::MutateStructChunk<W3dRingStruct>(
+                        node,
+                        [&](W3dRingStruct& target) {
+                            W3DEdit::WriteFixedString(target.Name, 2 * W3D_NAME_LEN,
+                                updated.toStdString());
+                        });
+                    changed = true;
+                }
+            }
+            break;
+        }
+        case 0x0750: { // W3D_CHUNK_NULL_OBJECT
+            auto parsed = ParseChunkStruct<W3dNullObjectStruct>(node);
+            if (auto nul = std::get_if<W3dNullObjectStruct>(&parsed)) {
+                const QString name = ReadFixedString(nul->Name, 2 * W3D_NAME_LEN);
+                const QString updated = RenameFullName(name, oldBaseName, newBaseName,
+                    oldFileName, newFileName);
+                if (updated != name) {
+                    (void)W3DEdit::MutateStructChunk<W3dNullObjectStruct>(
+                        node,
+                        [&](W3dNullObjectStruct& target) {
+                            W3DEdit::WriteFixedString(target.Name, 2 * W3D_NAME_LEN,
+                                updated.toStdString());
+                        });
+                    changed = true;
+                }
+            }
+            break;
+        }
+        case 0x0A01: { // W3D_CHUNK_SOUNDROBJ_HEADER
+            auto parsed = ParseChunkStruct<W3dSoundRObjHeaderStruct>(node);
+            if (auto header = std::get_if<W3dSoundRObjHeaderStruct>(&parsed)) {
+                const QString name = ReadFixedString(header->Name, W3D_NAME_LEN);
+                const QString updated = RenameIfMatches(name, oldBaseName, newBaseName,
+                    oldFileName, newFileName);
+                if (updated != name) {
+                    (void)W3DEdit::MutateStructChunk<W3dSoundRObjHeaderStruct>(
+                        node,
+                        [&](W3dSoundRObjHeaderStruct& target) {
+                            W3DEdit::WriteFixedString(target.Name, W3D_NAME_LEN, updated.toStdString());
+                        });
+                    changed = true;
+                }
+            }
+            break;
+        }
+        case 0x0B01: { // W3D_CHUNK_SHDMESH_NAME
+            if (!node->data.empty()) {
+                const char* raw = reinterpret_cast<const char*>(node->data.data());
+                const auto len = TruncatedLength(raw, node->data.size());
+                const QString name = QString::fromLatin1(raw, static_cast<int>(len));
+                const QString updated = RenameIfMatches(name, oldBaseName, newBaseName,
+                    oldFileName, newFileName);
+                if (updated != name) {
+                    (void)W3DEdit::UpdateNullTermStringChunk(node, updated.toStdString());
+                    changed = true;
+                }
+            }
+            break;
+        }
+        default:
+            break;
+        }
+
+        for (const auto& child : node->children) {
+            dfs(child);
+        }
+    };
+
+    for (const auto& root : chunkData->getChunks()) {
+        dfs(root);
+    }
+
+    if (changed) {
+        setDirty(true);
+    }
 }
 
 void MainWindow::onChunkEdited() {
@@ -4123,6 +4856,7 @@ void MainWindow::updateEditorForChunk(const std::shared_ptr<ChunkItem>& chunk) {
 
     meshEditor->setChunk(nullptr);
     textureNameEditor->setChunk(nullptr);
+    textureInfoEditor->setChunk(nullptr);
     materialNameEditor->setChunk(nullptr);
     transformNodeEditor->setChunk(nullptr);
     stage0ArgsEditor->setChunk(nullptr);
@@ -4171,6 +4905,11 @@ void MainWindow::updateEditorForChunk(const std::shared_ptr<ChunkItem>& chunk) {
     case 0x0032: // W3D_CHUNK_TEXTURE_NAME
         textureNameEditor->setChunk(chunk);
         editorStack->setCurrentWidget(textureNameEditor);
+        showEditor();
+        break;
+    case 0x0033: // W3D_CHUNK_TEXTURE_INFO
+        textureInfoEditor->setChunk(chunk);
+        editorStack->setCurrentWidget(textureInfoEditor);
         showEditor();
         break;
     case 0x002C: // W3D_CHUNK_VERTEX_MATERIAL_NAME

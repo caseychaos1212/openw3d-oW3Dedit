@@ -23,6 +23,7 @@ class MaterialEditorWidget;
 class ShaderEditorWidget;
 class SurfaceTypeEditorWidget;
 class TriangleSurfaceTypeEditorWidget;
+class TextureInfoEditorWidget;
 
 
 
@@ -110,6 +111,7 @@ private:
     ShaderEditorWidget* shaderEditor = nullptr;
     SurfaceTypeEditorWidget* surfaceTypeEditor = nullptr;
     TriangleSurfaceTypeEditorWidget* triangleSurfaceTypeEditor = nullptr;
+    TextureInfoEditorWidget* textureInfoEditor = nullptr;
     QWidget* editorPlaceholder = nullptr;
     std::shared_ptr<ChunkItem> currentChunk;
     QString currentFilePath;
@@ -122,4 +124,9 @@ private:
     void updateWindowTitle();
     bool confirmDiscardChanges();
     void clearDetails();
+    bool createBackupFile(const QString& filePath);
+    void renameFileReferences(const QString& oldBaseName,
+        const QString& newBaseName,
+        const QString& oldFileName,
+        const QString& newFileName);
 };
