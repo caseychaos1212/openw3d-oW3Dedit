@@ -110,10 +110,10 @@ inline std::string GetChunkName(uint32_t id, uint32_t parentId = 0) {
         { 0x0049, "W3D_CHUNK_TEXTURE_IDS" }, // single or per-tri array of uint32 texture indices (check chunk size)
         { 0x004A, "W3D_CHUNK_STAGE_TEXCOORDS" }, // per-vertex texture coordinates (array of W3dTexCoordStruct's)
         { 0x004B, "W3D_CHUNK_PER_FACE_TEXCOORD_IDS" }, // indices to W3D_CHUNK_STAGE_TEXCOORDS, (array of Vector3i)
-        { 0x0050, "W3D_CHUNK_SHADER_MATERIALS" },     // BFMEII: W3D_CHUNK_FX_SHADERS appears first
-        { 0x0051, "W3D_CHUNK_SHADER_MATERIAL" },      // BFMEII
-        { 0x0052, "W3D_CHUNK_SHADER_MATERIAL_HEADER" },// BFMEII
-        { 0x0053, "W3D_CHUNK_SHADER_MATERIAL_PROPERTY" },// BFMEII
+        { 0x0050, "W3D_CHUNK_SHADER_MATERIALS (W3D_CHUNK_FX_SHADERS)" },     // BFMEII / max2w3d alias
+        { 0x0051, "W3D_CHUNK_SHADER_MATERIAL (W3D_CHUNK_FX_SHADER)" },       // BFMEII / max2w3d alias
+        { 0x0052, "W3D_CHUNK_SHADER_MATERIAL_HEADER (W3D_CHUNK_FX_SHADER_INFO)" }, // BFMEII / max2w3d alias
+        { 0x0053, "W3D_CHUNK_SHADER_MATERIAL_PROPERTY (W3D_CHUNK_FX_SHADER_CONSTANT)" }, // BFMEII / max2w3d alias
         { 0x0058, "W3D_CHUNK_DEFORM" }, // mesh deform or 'damage' information.
         { 0x0059, "W3D_CHUNK_DEFORM_SET" }, // set of deform information
         { 0x005A, "W3D_CHUNK_DEFORM_KEYFRAME" }, // a keyframe of deform information in the set
@@ -189,7 +189,7 @@ inline std::string GetChunkName(uint32_t id, uint32_t parentId = 0) {
 		{ 0x0603, "W3D_CHUNK_TEXTURE_REPLACER_INFO" }, // information about which meshes need textures replaced
 		{ 0x0604, "W3D_CHUNK_AGGREGATE_CLASS_INFO" }, // information about the original class that created this aggregate
         { 0x0700, "W3D_CHUNK_HLOD" }, // description of an HLod object (see HLodClass)
-        { 0x0701, "W3D_CHUNk_HLOD_HEADER"}, // general information such as name and version
+        { 0x0701, "W3D_CHUNK_HLOD_HEADER"}, // general information such as name and version
         { 0x0702, "W3D_CHUNK_HLOD_LOD_ARRAY" }, // wrapper around the array of objects for each level of detail
         { 0x0703, "W3D_CHUNK_HLOD_SUB_OBJECT_ARRAY_HEADER" }, // info on the objects in this level of detail array
         { 0x0704, "W3D_CHUNK_HLOD_SUB_OBJECT" }, // an object in this level of detail array
@@ -231,7 +231,8 @@ inline std::string GetChunkName(uint32_t id, uint32_t parentId = 0) {
         { 0x0B4D, "W3D_CHUNK_SHDSUBMESH_VERTEX_INFLUENCES" }, // Generals: skinning support
         { 0x0C00, "W3D_CHUNK_SECONDARY_VERTICES" },   // BFMEII: aka VERTICES_COPY
         { 0x0C01, "W3D_CHUNK_SECONDARY_VERTEX_NORMALS" }, // BFMEII: aka VERTEX_NORMALS_COPY
-        { 0x0C02, "W3D_CHUNK_LIGHTMAP_UV" },          // BFMEII
+        { 0x0C02, "W3D_CHUNK_LIGHTMAP_UV" },          // TT/OpenW3D experimental lightmap UV stream; payload unknown
+        { 0x0C03, "W3D_CHUNK_VERTEX_INFLUENCES_EXTENDED" }, // max2w3d supersmooth skin influences
         { 0x16490430, "W3D_CHUNK_SHDDEF_CLASS_VARS" },   // base vars: Name, SurfaceType
         { 0x16490450, "W3D_CHUNK_SHDDEF_PARAM_VARS" },   // per-shader params: TextureName, Colors, Bumpiness
     };

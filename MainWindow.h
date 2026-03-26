@@ -25,18 +25,19 @@ class QSpinBox;
 class QLabel;
 class MeshEditorWidget;
 class StringEditorWidget;
+class HierarchyHeaderEditorWidget;
+class AnimationHierarchyEditorWidget;
 class TransformNodeEditorWidget;
 class MapperArgsEditorWidget;
 class MaterialEditorWidget;
 class ShaderEditorWidget;
 class SurfaceTypeEditorWidget;
 class TriangleSurfaceTypeEditorWidget;
+class TextureInfoEditorWidget;
 
 namespace OW3D::Render {
 class RenderViewportWidget;
 }
-
-
 
 class ChunkData; // forward declare
 
@@ -145,6 +146,8 @@ private:
     QStackedWidget* editorStack = nullptr;
     MeshEditorWidget* meshEditor = nullptr;
     StringEditorWidget* textureNameEditor = nullptr;
+    HierarchyHeaderEditorWidget* hierarchyHeaderEditor = nullptr;
+    AnimationHierarchyEditorWidget* animationHierarchyEditor = nullptr;
     StringEditorWidget* materialNameEditor = nullptr;
     TransformNodeEditorWidget* transformNodeEditor = nullptr;
     MapperArgsEditorWidget* stage0ArgsEditor = nullptr;
@@ -153,6 +156,7 @@ private:
     ShaderEditorWidget* shaderEditor = nullptr;
     SurfaceTypeEditorWidget* surfaceTypeEditor = nullptr;
     TriangleSurfaceTypeEditorWidget* triangleSurfaceTypeEditor = nullptr;
+    TextureInfoEditorWidget* textureInfoEditor = nullptr;
     QWidget* editorPlaceholder = nullptr;
     QWidget* renderPane = nullptr;
     OW3D::Render::RenderViewportWidget* renderViewport = nullptr;
@@ -188,11 +192,15 @@ private:
     std::vector<RenderTransformUndoEntry> renderTransformUndoStack;
     std::vector<RenderTransformUndoEntry> renderTransformRedoStack;
     bool applyingRenderTransformUndoRedo = false;
-	
     void updateEditorForChunk(const std::shared_ptr<ChunkItem>& chunk);
     void updateRawHex(const std::shared_ptr<ChunkItem>& chunk);
     void setDirty(bool value);
     void updateWindowTitle();
     bool confirmDiscardChanges();
     void clearDetails();
+    bool createBackupFile(const QString& filePath);
+    void renameFileReferences(const QString& oldBaseName,
+        const QString& newBaseName,
+        const QString& oldFileName,
+        const QString& newFileName);
 };

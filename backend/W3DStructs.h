@@ -62,6 +62,20 @@ struct W3dVertInfStruct
 	uint16_t Weight[2];
 };
 
+struct W3dVertInf3WStruct
+{
+	uint16_t BoneIdx[4];
+	uint16_t Weight[3];
+};
+
+inline uint16_t DeriveVertInf3WWeight3(const W3dVertInf3WStruct& influence) {
+	const uint32_t sum =
+		static_cast<uint32_t>(influence.Weight[0]) +
+		static_cast<uint32_t>(influence.Weight[1]) +
+		static_cast<uint32_t>(influence.Weight[2]);
+	return (sum < 65535u) ? static_cast<uint16_t>(65535u - sum) : 0u;
+}
+
 
 /////////////////////////////////////////////////////////////////////////////////////////////
 // Flags for the Mesh Attributes member

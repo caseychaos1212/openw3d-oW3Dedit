@@ -33,9 +33,13 @@ enum class ChunkID : uint32_t {
 			W3D_CHUNK_DIG	=0x0000003C,	//per - vertex diffuse illumination values(array of W3dRGBStruct's)
 			W3D_CHUNK_SCG	=0x0000003E,	//per - vertex specular color values(array of W3dRGBStruct's)
 			W3D_CHUNK_TEXTURE_STAGE	=0x00000048,	//wrapper around a texture stage.
-				W3D_CHUNK_TEXTURE_IDS	=0x00000049,	//single or per - tri array of uint32 texture indices(check chunk size)
-				W3D_CHUNK_STAGE_TEXCOORDS	=0x0000004A,//per - vertex texture coordinates(array of W3dTexCoordStruct's)
-				W3D_CHUNK_PER_FACE_TEXCOORD_IDS	=0x0000004B,	//indices to W3D_CHUNK_STAGE_TEXCOORDS, (array of Vector3i)
+			W3D_CHUNK_TEXTURE_IDS	=0x00000049,	//single or per - tri array of uint32 texture indices(check chunk size)
+			W3D_CHUNK_STAGE_TEXCOORDS	=0x0000004A,//per - vertex texture coordinates(array of W3dTexCoordStruct's)
+			W3D_CHUNK_PER_FACE_TEXCOORD_IDS	=0x0000004B,	//indices to W3D_CHUNK_STAGE_TEXCOORDS, (array of Vector3i)
+		W3D_CHUNK_SHADER_MATERIALS = 0x00000050,	//BFMEII / aka W3D_CHUNK_FX_SHADERS
+			W3D_CHUNK_SHADER_MATERIAL = 0x00000051,	//BFMEII / aka W3D_CHUNK_FX_SHADER
+				W3D_CHUNK_SHADER_MATERIAL_HEADER = 0x00000052,	//BFMEII / aka W3D_CHUNK_FX_SHADER_INFO
+				W3D_CHUNK_SHADER_MATERIAL_PROPERTY = 0x00000053,	//BFMEII / aka W3D_CHUNK_FX_SHADER_CONSTANT
 		W3D_CHUNK_DEFORM	=0x00000058,	//mesh deform or 'damage' information.
 			W3D_CHUNK_DEFORM_SET	=0x00000059,	//set of deform information
 			W3D_CHUNK_DEFORM_KEYFRAME	=0x0000005A,	//a keyframe of deform information in the set
@@ -125,6 +129,7 @@ enum class ChunkID : uint32_t {
 			W3D_CHUNK_HLOD_SUB_OBJECT	=0x00000704,	//an object in this level of detail array
 		W3D_CHUNK_HLOD_AGGREGATE_ARRAY	=0x00000705,	//array of aggregates, contains W3D_CHUNK_SUB_OBJECT_ARRAY_HEADER and W3D_CHUNK_SUB_OBJECT_ARRAY
 		W3D_CHUNK_HLOD_PROXY_ARRAY	=0x00000706,	//array of proxies, used for application - defined purposes, provides a name and a bone.
+		W3D_CHUNK_HLOD_LIGHT_ARRAY = 0x00000707,	//TT / max2w3d light array
 	
 	W3D_CHUNK_BOX	=0x00000740,	//defines an collision box render object(W3dBoxStruct)
 	
@@ -145,4 +150,9 @@ enum class ChunkID : uint32_t {
 	W3D_CHUNK_SOUNDROBJ	=0x00000A00,	//description of a sound render object
 		W3D_CHUNK_SOUNDROBJ_HEADER	=0x00000A01,	//general information such as name and version
 		W3D_CHUNK_SOUNDROBJ_DEFINITION	=0x00000A02,	//chunk containing the definition of the sound that is to play
+
+	W3D_CHUNK_SECONDARY_VERTICES = 0x00000C00,	//BFMEII secondary position stream
+	W3D_CHUNK_SECONDARY_VERTEX_NORMALS = 0x00000C01,	//BFMEII secondary normal stream
+	W3D_CHUNK_LIGHTMAP_UV = 0x00000C02,	//TT/OpenW3D experimental lightmap UV stream; payload unknown
+	W3D_CHUNK_VERTEX_INFLUENCES_EXTENDED = 0x00000C03,	//max2w3d supersmooth skin influences
 		};
