@@ -450,6 +450,53 @@ namespace {
             item.length = uint32_t(item.data.size());
         }
     };
+
+    struct VertexInfluencesExtendedSerializer : ChunkSerializer {
+        ordered_json toJson(const ChunkItem& item) const override {
+            ordered_json obj;
+            QJsonArray arr;
+            if (item.data.size() % sizeof(W3dVertInf3WStruct) == 0) {
+                const auto* begin = reinterpret_cast<const W3dVertInf3WStruct*>(item.data.data());
+                const int count = static_cast<int>(item.data.size() / sizeof(W3dVertInf3WStruct));
+                for (int i = 0; i < count; ++i) {
+                    const auto& v = begin[i];
+                    ordered_json o;
+                    QJsonArray b;
+                    QJsonArray w;
+                    for (int j = 0; j < 4; ++j) {
+                        b.append(int(v.BoneIdx[j]));
+                    }
+                    for (int j = 0; j < 3; ++j) {
+                        w.append(int(v.Weight[j]));
+                    }
+                    w.append(int(DeriveVertInf3WWeight3(v)));
+                    o["BONEIDX"] = b;
+                    o["WEIGHT"] = w;
+                    arr.append(o);
+                }
+            }
+            obj["VERTEX_INFLUENCES_EXTENDED"] = arr;
+            return obj;
+        }
+
+        void fromJson(const ordered_json& dataObj, ChunkItem& item) const override {
+            QJsonArray arr = dataObj.value("VERTEX_INFLUENCES_EXTENDED").toArray();
+            item.data = jsonArrayToStructs<W3dVertInf3WStruct>(arr, [](const QJsonValue& val) {
+                W3dVertInf3WStruct v{};
+                QJsonObject o = val.toObject();
+                QJsonArray b = o.value("BONEIDX").toArray();
+                for (int i = 0; i < 4 && i < b.size(); ++i) {
+                    v.BoneIdx[i] = uint16_t(b[i].toInt());
+                }
+                QJsonArray w = o.value("WEIGHT").toArray();
+                for (int i = 0; i < 3 && i < w.size(); ++i) {
+                    v.Weight[i] = uint16_t(w[i].toInt());
+                }
+                return v;
+                });
+            item.length = uint32_t(item.data.size());
+        }
+    };
     // Serializer for chunk 0x0010 (W3D_CHUNK_DAMAGE_HEADER)
     struct DamageHeaderSerializer : ChunkSerializer {
         ordered_json toJson(const ChunkItem& item) const override {
@@ -1676,6 +1723,50 @@ namespace {
 
         void fromJson(const ordered_json& dataObj, ChunkItem& item) const override {
             QJsonArray arr = dataObj.value("BINORMALS").toArray();
+            item.data = jsonArrayToStructs<W3dVectorStruct>(arr, [](const QJsonValue& val) {
+                W3dVectorStruct v{};
+                QJsonArray a = val.toArray();
+                if (a.size() >= 3) { v.X = a[0].toDouble(); v.Y = a[1].toDouble(); v.Z = a[2].toDouble(); }
+                return v;
+                });
+            item.length = uint32_t(item.data.size());
+        }
+    };
+
+    struct SecondaryVerticesSerializer : ChunkSerializer {
+        ordered_json toJson(const ChunkItem& item) const override {
+            ordered_json obj;
+            obj["SECONDARY_VERTICES"] = structsToJsonArray<W3dVectorStruct>(
+                item.data,
+                [](const W3dVectorStruct& v) { return QJsonArray{ v.X, v.Y, v.Z }; }
+            );
+            return obj;
+        }
+
+        void fromJson(const ordered_json& dataObj, ChunkItem& item) const override {
+            QJsonArray arr = dataObj.value("SECONDARY_VERTICES").toArray();
+            item.data = jsonArrayToStructs<W3dVectorStruct>(arr, [](const QJsonValue& val) {
+                W3dVectorStruct v{};
+                QJsonArray a = val.toArray();
+                if (a.size() >= 3) { v.X = a[0].toDouble(); v.Y = a[1].toDouble(); v.Z = a[2].toDouble(); }
+                return v;
+                });
+            item.length = uint32_t(item.data.size());
+        }
+    };
+
+    struct SecondaryVertexNormalsSerializer : ChunkSerializer {
+        ordered_json toJson(const ChunkItem& item) const override {
+            ordered_json obj;
+            obj["SECONDARY_VERTEX_NORMALS"] = structsToJsonArray<W3dVectorStruct>(
+                item.data,
+                [](const W3dVectorStruct& v) { return QJsonArray{ v.X, v.Y, v.Z }; }
+            );
+            return obj;
+        }
+
+        void fromJson(const ordered_json& dataObj, ChunkItem& item) const override {
+            QJsonArray arr = dataObj.value("SECONDARY_VERTEX_NORMALS").toArray();
             item.data = jsonArrayToStructs<W3dVectorStruct>(arr, [](const QJsonValue& val) {
                 W3dVectorStruct v{};
                 QJsonArray a = val.toArray();
@@ -4308,6 +4399,7 @@ namespace {
     static const MeshUserTextSerializer meshUserTextSerializerInstance;
     static const VertexColorsSerializer vertexColorsSerializerInstance;
     static const VertexInfluencesSerializer vertexInfluencesSerializerInstance;
+    static const VertexInfluencesExtendedSerializer vertexInfluencesExtendedSerializerInstance;
     static const DamageHeaderSerializer damageHeaderSerializerInstance;
     static const DamageVerticesSerializer damageVerticesSerializerInstance;
     static const DamageColorsSerializer damageColorsSerializerInstance;
@@ -4345,6 +4437,8 @@ namespace {
     static const DeformDataSerializer deformDataSerializerInstance;
     static const TangentsSerializer tangentsSerializerInstance;
     static const BinormalsSerializer binormalsSerializerInstance;
+    static const SecondaryVerticesSerializer secondaryVerticesSerializerInstance;
+    static const SecondaryVertexNormalsSerializer secondaryVertexNormalsSerializerInstance;
     static const Ps2ShadersSerializer ps2ShadersSerializerInstance;
     static const AABTreeHeaderSerializer aabTreeHeaderSerializerInstance;
     static const AABTreePolyIndicesSerializer aabTreePolyIndicesSerializerInstance;
@@ -4425,6 +4519,7 @@ const std::unordered_map<uint32_t, const ChunkSerializer*>& chunkSerializerRegis
         {0x000C, &meshUserTextSerializerInstance},
         {0x000D, &vertexColorsSerializerInstance},
         {0x000E, &vertexInfluencesSerializerInstance},
+        {0x0C03, &vertexInfluencesExtendedSerializerInstance},
         {0x0010, &damageHeaderSerializerInstance},
         {0x0011, &damageVerticesSerializerInstance},
         {0x0012, &damageColorsSerializerInstance},
@@ -4462,6 +4557,8 @@ const std::unordered_map<uint32_t, const ChunkSerializer*>& chunkSerializerRegis
         {0x005B, &deformDataSerializerInstance},
         {0x0060, &tangentsSerializerInstance},
         {0x0061, &binormalsSerializerInstance},
+        {0x0C00, &secondaryVerticesSerializerInstance},
+        {0x0C01, &secondaryVertexNormalsSerializerInstance},
         {0x0080, &ps2ShadersSerializerInstance},
         {0x0091, &aabTreeHeaderSerializerInstance},
         {0x0092, &aabTreePolyIndicesSerializerInstance},

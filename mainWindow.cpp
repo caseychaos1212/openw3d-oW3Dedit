@@ -4185,7 +4185,8 @@ void MainWindow::handleTreeSelection() {
 		case 0x0C00: fields = InterpretSecondaryVertices(target); break;
 		case 0x0C01: fields = InterpretSecondaryVertexNormals(target); break;
 		case 0x0C02: fields = InterpretLightMapUV(target); break;
-          
+		case 0x0C03: fields = InterpretVertexInfluencesExtended(target); break;
+
         default:
             break;
         }

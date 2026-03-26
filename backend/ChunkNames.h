@@ -110,10 +110,10 @@ inline std::string GetChunkName(uint32_t id, uint32_t parentId = 0) {
         { 0x0049, "W3D_CHUNK_TEXTURE_IDS" }, // single or per-tri array of uint32 texture indices (check chunk size)
         { 0x004A, "W3D_CHUNK_STAGE_TEXCOORDS" }, // per-vertex texture coordinates (array of W3dTexCoordStruct's)
         { 0x004B, "W3D_CHUNK_PER_FACE_TEXCOORD_IDS" }, // indices to W3D_CHUNK_STAGE_TEXCOORDS, (array of Vector3i)
-        { 0x0050, "W3D_CHUNK_SHADER_MATERIALS" },     // BFMEII: W3D_CHUNK_FX_SHADERS appears first
-        { 0x0051, "W3D_CHUNK_SHADER_MATERIAL" },      // BFMEII
-        { 0x0052, "W3D_CHUNK_SHADER_MATERIAL_HEADER" },// BFMEII
-        { 0x0053, "W3D_CHUNK_SHADER_MATERIAL_PROPERTY" },// BFMEII
+        { 0x0050, "W3D_CHUNK_SHADER_MATERIALS (W3D_CHUNK_FX_SHADERS)" },     // BFMEII / max2w3d alias
+        { 0x0051, "W3D_CHUNK_SHADER_MATERIAL (W3D_CHUNK_FX_SHADER)" },       // BFMEII / max2w3d alias
+        { 0x0052, "W3D_CHUNK_SHADER_MATERIAL_HEADER (W3D_CHUNK_FX_SHADER_INFO)" }, // BFMEII / max2w3d alias
+        { 0x0053, "W3D_CHUNK_SHADER_MATERIAL_PROPERTY (W3D_CHUNK_FX_SHADER_CONSTANT)" }, // BFMEII / max2w3d alias
         { 0x0058, "W3D_CHUNK_DEFORM" }, // mesh deform or 'damage' information.
         { 0x0059, "W3D_CHUNK_DEFORM_SET" }, // set of deform information
         { 0x005A, "W3D_CHUNK_DEFORM_KEYFRAME" }, // a keyframe of deform information in the set
@@ -231,7 +231,8 @@ inline std::string GetChunkName(uint32_t id, uint32_t parentId = 0) {
         { 0x0B4D, "W3D_CHUNK_SHDSUBMESH_VERTEX_INFLUENCES" }, // Generals: skinning support
         { 0x0C00, "W3D_CHUNK_SECONDARY_VERTICES" },   // BFMEII: aka VERTICES_COPY
         { 0x0C01, "W3D_CHUNK_SECONDARY_VERTEX_NORMALS" }, // BFMEII: aka VERTEX_NORMALS_COPY
-        { 0x0C02, "W3D_CHUNK_LIGHTMAP_UV" },          // BFMEII
+        { 0x0C02, "W3D_CHUNK_LIGHTMAP_UV" },          // TT/OpenW3D experimental lightmap UV stream; payload unknown
+        { 0x0C03, "W3D_CHUNK_VERTEX_INFLUENCES_EXTENDED" }, // max2w3d supersmooth skin influences
         { 0x16490430, "W3D_CHUNK_SHDDEF_CLASS_VARS" },   // base vars: Name, SurfaceType
         { 0x16490450, "W3D_CHUNK_SHDDEF_PARAM_VARS" },   // per-shader params: TextureName, Colors, Bumpiness
     };

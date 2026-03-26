@@ -333,6 +333,34 @@ inline std::vector<ChunkField> InterpretVertexInfluences(const std::shared_ptr<C
     return fields;
 }
 
+inline std::vector<ChunkField> InterpretVertexInfluencesExtended(const std::shared_ptr<ChunkItem>& chunk) {
+    std::vector<ChunkField> fields;
+    if (!chunk) return fields;
+
+    auto parsed = ParseChunkArray<W3dVertInf3WStruct>(chunk);
+    if (auto err = std::get_if<std::string>(&parsed)) {
+        fields.emplace_back("error", "string", "Malformed VERTEX_INFLUENCES_EXTENDED chunk: " + *err);
+        return fields;
+    }
+
+    const auto& data = std::get<std::vector<W3dVertInf3WStruct>>(parsed);
+
+    ChunkFieldBuilder B(fields);
+    for (size_t i = 0; i < data.size(); ++i) {
+        const auto& inf = data[i];
+        const std::string pfx = "VertexInfluence[" + std::to_string(i) + "]";
+        for (int j = 0; j < 4; ++j) {
+            B.UInt16(pfx + ".BoneIdx[" + std::to_string(j) + "]", inf.BoneIdx[j]);
+        }
+        for (int j = 0; j < 3; ++j) {
+            B.UInt16(pfx + ".Weight[" + std::to_string(j) + "]", inf.Weight[j]);
+        }
+        B.UInt16(pfx + ".Weight[3]", DeriveVertInf3WWeight3(inf));
+    }
+
+    return fields;
+}
+
 
 inline std::vector<ChunkField> InterpretTriangles(const std::shared_ptr<ChunkItem>& chunk) {
     std::vector<ChunkField> fields;
@@ -1268,9 +1296,10 @@ inline std::vector<ChunkField> InterpretAABTreeNodes(const std::shared_ptr<Chunk
 }
 
 
-//TODO: Either this is never used or I'm unable to parse it.
 inline std::vector<ChunkField> InterpretLightMapUV(const std::shared_ptr<ChunkItem>&) {
-    return Undefined("InterpretLightMapUV");
+    return {
+        { "info", "string", "Unsupported: W3D_CHUNK_LIGHTMAP_UV is an experimental TT/OpenW3D chunk with unknown payload and is preserved as raw data in this build." }
+    };
 }
 
 
