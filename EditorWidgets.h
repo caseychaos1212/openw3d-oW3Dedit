@@ -72,6 +72,42 @@ private:
     QPushButton* applyButton = nullptr;
 };
 
+class HierarchyHeaderEditorWidget : public QWidget {
+    Q_OBJECT
+public:
+    explicit HierarchyHeaderEditorWidget(QWidget* parent = nullptr);
+    void setChunk(const std::shared_ptr<ChunkItem>& chunk);
+
+signals:
+    void chunkEdited();
+
+private slots:
+    void applyChanges();
+
+private:
+    std::weak_ptr<ChunkItem> chunk;
+    QLineEdit* nameEdit = nullptr;
+    QPushButton* applyButton = nullptr;
+};
+
+class AnimationHierarchyEditorWidget : public QWidget {
+    Q_OBJECT
+public:
+    explicit AnimationHierarchyEditorWidget(QWidget* parent = nullptr);
+    void setChunk(const std::shared_ptr<ChunkItem>& chunk);
+
+signals:
+    void chunkEdited();
+
+private slots:
+    void applyChanges();
+
+private:
+    std::weak_ptr<ChunkItem> chunk;
+    QLineEdit* hierarchyNameEdit = nullptr;
+    QPushButton* applyButton = nullptr;
+};
+
 class TransformNodeEditorWidget : public QWidget {
     Q_OBJECT
 public:

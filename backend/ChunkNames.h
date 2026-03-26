@@ -189,7 +189,7 @@ inline std::string GetChunkName(uint32_t id, uint32_t parentId = 0) {
 		{ 0x0603, "W3D_CHUNK_TEXTURE_REPLACER_INFO" }, // information about which meshes need textures replaced
 		{ 0x0604, "W3D_CHUNK_AGGREGATE_CLASS_INFO" }, // information about the original class that created this aggregate
         { 0x0700, "W3D_CHUNK_HLOD" }, // description of an HLod object (see HLodClass)
-        { 0x0701, "W3D_CHUNk_HLOD_HEADER"}, // general information such as name and version
+        { 0x0701, "W3D_CHUNK_HLOD_HEADER"}, // general information such as name and version
         { 0x0702, "W3D_CHUNK_HLOD_LOD_ARRAY" }, // wrapper around the array of objects for each level of detail
         { 0x0703, "W3D_CHUNK_HLOD_SUB_OBJECT_ARRAY_HEADER" }, // info on the objects in this level of detail array
         { 0x0704, "W3D_CHUNK_HLOD_SUB_OBJECT" }, // an object in this level of detail array

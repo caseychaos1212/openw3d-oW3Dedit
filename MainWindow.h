@@ -17,6 +17,8 @@ class QPlainTextEdit;
 class QGroupBox;
 class MeshEditorWidget;
 class StringEditorWidget;
+class HierarchyHeaderEditorWidget;
+class AnimationHierarchyEditorWidget;
 class TransformNodeEditorWidget;
 class MapperArgsEditorWidget;
 class MaterialEditorWidget;
@@ -103,6 +105,8 @@ private:
     QStackedWidget* editorStack = nullptr;
     MeshEditorWidget* meshEditor = nullptr;
     StringEditorWidget* textureNameEditor = nullptr;
+    HierarchyHeaderEditorWidget* hierarchyHeaderEditor = nullptr;
+    AnimationHierarchyEditorWidget* animationHierarchyEditor = nullptr;
     StringEditorWidget* materialNameEditor = nullptr;
     TransformNodeEditorWidget* transformNodeEditor = nullptr;
     MapperArgsEditorWidget* stage0ArgsEditor = nullptr;

@@ -1894,20 +1894,27 @@ namespace {
     struct PivotFixupsSerializer : ChunkSerializer {
         ordered_json toJson(const ChunkItem& item) const override {
             ordered_json obj;
-            obj["PIVOT_FIXUPS"] = structsToJsonArray<W3dPivotFixupStruct>(
-                item.data,
-                [](const W3dPivotFixupStruct& f) {
+            QJsonArray arr;
+            if (item.data.size() % sizeof(W3dPivotFixupStruct) == 0) {
+                const auto* begin = reinterpret_cast<const W3dPivotFixupStruct*>(item.data.data());
+                const int count = static_cast<int>(item.data.size() / sizeof(W3dPivotFixupStruct));
+                for (int i = 0; i < count; ++i) {
+                    const auto& f = begin[i];
                     ordered_json o;
+                    o["PIVOT_INDEX"] = i;
                     QJsonArray tm;
-                    for (int i = 0; i < 4; ++i) {
+                    for (int rowIndex = 0; rowIndex < 4; ++rowIndex) {
                         QJsonArray row;
-                        for (int j = 0; j < 3; ++j) row.append(f.TM[i][j]);
+                        for (int colIndex = 0; colIndex < 3; ++colIndex) {
+                            row.append(f.TM[rowIndex][colIndex]);
+                        }
                         tm.append(row);
                     }
                     o["TM"] = tm;
-                    return o;
+                    arr.append(o);
                 }
-            );
+            }
+            obj["PIVOT_FIXUPS"] = arr;
             return obj;
         }
 
