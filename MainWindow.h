@@ -1,13 +1,18 @@
 #pragma once
 
 #include <QMainWindow>
+#include <QElapsedTimer>
+#include <QSet>
 #include <memory>
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
 #include "backend/ChunkData.h"
+#include "backend/render/RenderScene.h"
+#include "frontend/render/IRenderBackend.h"
 #include <QString>
 #include <QByteArray>
 
@@ -17,11 +22,15 @@ class QStackedWidget;
 class QSplitter;
 class QScrollArea;
 class QCloseEvent;
+class QTimer;
 class QCheckBox;
 class QPlainTextEdit;
 class QGroupBox;
 class QDoubleSpinBox;
+class QPushButton;
+class QSlider;
 class QSpinBox;
+class QTabWidget;
 class QLabel;
 class MeshEditorWidget;
 class StringEditorWidget;
@@ -55,6 +64,30 @@ struct ArchiveTextureSourceInfo {
     uint32_t offset = 0;
     uint32_t size = 0;
     QString name;
+};
+
+enum class RenderSessionAssetRole {
+    Skeleton,
+    AnimationLibrary
+};
+
+struct RenderSessionAsset {
+    RenderSessionAssetRole role = RenderSessionAssetRole::Skeleton;
+    QString filePath;
+    QString displayLabel;
+    std::vector<std::shared_ptr<ChunkItem>> roots;
+    QSet<QString> hierarchyNames;
+    int animationCount = 0;
+};
+
+struct RenderAnimationClipIdentity {
+    QString fullName;
+    QString hierarchyName;
+    QString sourceFileLabel;
+    bool sourceFromAnimationLibrary = false;
+    bool compressed = false;
+
+    bool operator==(const RenderAnimationClipIdentity& other) const = default;
 };
 
 class MainWindow : public QMainWindow {
@@ -92,6 +125,17 @@ private slots:
     void moveChunkUp();
     void moveChunkDown();
     void moveHierarchyBoneToEnd();
+    void addRenderSkeletons();
+    void addRenderAnimations();
+    void removeSelectedRenderSessionAsset();
+    void clearRenderAnimationLibraries();
+    void handleRenderAnimationSelectionChanged();
+    void toggleRenderAnimationPlayback();
+    void stopRenderAnimationPlayback();
+    void handleRenderAnimationLoopChanged(bool checked);
+    void handleRenderAnimationSpeedChanged(double value);
+    void handleRenderAnimationFrameSliderChanged(int value);
+    void handleRenderAnimationPlaybackTimerTick();
     void selectChunkInTree(void* chunkPtr);
 
 protected:
@@ -116,6 +160,21 @@ private:
     void rebuildRenderScene();
     void applyRenderSettingsToViewport();
     void clearArchiveRenderContext();
+    void clearExternalRenderContext();
+    void resetRenderAnimationPlayback();
+    void syncRenderAnimationPlaybackToViewport();
+    void syncRenderAnimationUi();
+    void refreshRenderAssetList();
+    void refreshRenderAnimationList();
+    void refreshRenderPlaybackControls();
+    void refreshRenderPlaybackSelection();
+    void setRenderActiveAnimationIndex(int animationIndex, bool startPlaying, bool resetTime);
+    int findRenderAnimationIndexByIdentity(const RenderAnimationClipIdentity& identity) const;
+    bool tryLoadRenderSessionAsset(
+        const QString& filePath,
+        RenderSessionAssetRole role,
+        RenderSessionAsset& outAsset,
+        QString* outError = nullptr) const;
     void handleViewportChunkActivated(void* chunkPtr);
     void handleViewportPivotTransformCommit(
         void* pivotsChunkPtr,
@@ -169,7 +228,23 @@ private:
     QSpinBox* renderLodLevelSpin = nullptr;
     QLabel* renderStatsLabel = nullptr;
     QLabel* renderSelectionLabel = nullptr;
+    QTabWidget* renderTabs = nullptr;
     QPlainTextEdit* renderWarningsEdit = nullptr;
+    QTreeWidget* renderAssetsTree = nullptr;
+    QTreeWidget* renderAnimationsTree = nullptr;
+    QPushButton* renderAddSkeletonButton = nullptr;
+    QPushButton* renderAddAnimationsButton = nullptr;
+    QPushButton* renderRemoveAssetButton = nullptr;
+    QPushButton* renderClearAnimationsButton = nullptr;
+    QPushButton* renderPlayPauseButton = nullptr;
+    QPushButton* renderStopButton = nullptr;
+    QCheckBox* renderAnimationLoopToggle = nullptr;
+    QDoubleSpinBox* renderAnimationSpeedSpin = nullptr;
+    QSlider* renderAnimationFrameSlider = nullptr;
+    QLabel* renderAnimationClipLabel = nullptr;
+    QLabel* renderAnimationMetadataLabel = nullptr;
+    QTimer* renderAnimationPlaybackTimer = nullptr;
+    QElapsedTimer renderAnimationPlaybackElapsed;
     std::shared_ptr<ChunkItem> currentChunk;
     QString currentFilePath;
     bool dirty = false;
@@ -182,6 +257,14 @@ private:
     std::unordered_map<uint32_t, ArchiveTextureSourceInfo> currentArchiveTextureSourcesById;
     std::vector<std::shared_ptr<ChunkItem>> currentArchiveSupplementalRoots;
     std::unordered_set<uint32_t> currentArchiveLoadedSupplementalEntryIds;
+    std::vector<RenderSessionAsset> currentExternalRenderAssets;
+    QSet<QString> currentExternalRenderAssetPaths;
+    bool currentRenderTriedSkeletonAutoload = false;
+    QString currentRenderSuppressedMissingHierarchyKey;
+    OW3D::Render::SceneBuildResult currentRenderSceneResult;
+    OW3D::Render::AnimationPlaybackState currentRenderAnimationPlayback;
+    std::optional<RenderAnimationClipIdentity> currentRenderActiveClipIdentity;
+    bool suppressRenderAnimationFrameSliderChange = false;
 
     struct RenderTransformUndoEntry {
         void* pivotsChunkPtr = nullptr;

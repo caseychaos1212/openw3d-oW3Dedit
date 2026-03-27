@@ -27,7 +27,9 @@ public:
 
     void SetSceneResult(const SceneBuildResult& sceneResult);
     void SetRenderSettings(const RenderSettings& settings);
+    void SetAnimationPlayback(const AnimationPlaybackState& playback);
     void FocusScene();
+    void OpenManualPivotRotationDialog();
 
     const CameraState& camera() const { return m_camera; }
 
@@ -108,8 +110,14 @@ private:
     void PerformPick(const QPoint& pos);
     bool HandleGizmos(const Mat4& view, const Mat4& projection);
     void DrawSceneBrowserOverlay();
+    void DrawTransformInspectorOverlay();
     void CommitPivotOverrideIfNeeded();
     void ClearPivotOverrides();
+    bool TryGetSelectedEditablePivot(const VisibleInstance*& outSelected, Mat4& outLocal, QString* outError = nullptr) const;
+    void SyncCameraInspectorStateFromCamera();
+    void ApplyCameraInspectorEdits();
+    void SyncTransformInspectorState(const VisibleInstance* selected, const Mat4& local);
+    void ApplyTransformInspectorEdits();
     void SyncSelectedInstanceToVisibleList();
     void SetSelectedVisibleInstance(int index, bool emitChunkSignal);
     void EmitSelectionStatus(const QString& text);
@@ -134,6 +142,7 @@ private:
 
     CameraState m_camera{};
     RenderSettings m_settings{};
+    AnimationPlaybackState m_animationPlayback{};
 
     QElapsedTimer m_statsTimer;
     QElapsedTimer m_deltaTimer;
@@ -150,6 +159,7 @@ private:
 
     GizmoMode m_gizmoMode = GizmoMode::Translate;
     bool m_showSceneBrowser = true;
+    bool m_showTransformInspector = true;
     bool m_gizmoOver = false;
     bool m_gizmoUsing = false;
     bool m_gizmoWasUsing = false;
@@ -161,6 +171,14 @@ private:
     std::unordered_map<PivotKey, Mat4, PivotKeyHash> m_pivotLocalOverrides;
     std::unordered_map<RenderInstanceKey, Mat4, RenderInstanceKeyHash> m_backendWorldOverrides;
     std::unordered_set<RenderInstanceKey, RenderInstanceKeyHash> m_hiddenInstances;
+    Vec3 m_cameraInspectorTarget{};
+    float m_cameraInspectorYawDegrees = 0.0f;
+    float m_cameraInspectorPitchDegrees = 0.0f;
+    float m_cameraInspectorDistance = 0.0f;
+    bool m_transformInspectorHasSelection = false;
+    PivotKey m_transformInspectorPivot{};
+    Vec3 m_transformInspectorTranslation{};
+    Vec3 m_transformInspectorRotationDegrees{};
 };
 
 } // namespace OW3D::Render

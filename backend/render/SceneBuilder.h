@@ -11,8 +11,9 @@ namespace OW3D::Render {
 using W3DChunk = std::vector<std::shared_ptr<ChunkItem>>;
 
 SceneBuildResult BuildRenderScene(
-    const W3DChunk& root,
+    const W3DChunk& primaryRoots,
     const SceneBuildOptions& options,
-    const W3DChunk* supplementalRoot = nullptr);
+    const W3DChunk* skeletonSupplementalRoots = nullptr,
+    const W3DChunk* animationLibraryRoots = nullptr);
 
 } // namespace OW3D::Render

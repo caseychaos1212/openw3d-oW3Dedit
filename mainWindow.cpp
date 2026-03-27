@@ -21,6 +21,7 @@
 #include <QCheckBox>
 #include <QGroupBox>
 #include <QComboBox>
+#include <QSlider>
 #include <QSpinBox>
 #include <QDoubleSpinBox>
 #include <QLabel>
@@ -45,6 +46,7 @@
 #include <QElapsedTimer>
 #include <QCoreApplication>
 #include <QTemporaryFile>
+#include <QTimer>
 #include <QCloseEvent>
 #include "backend/W3DMesh.h"
 #include "backend/W3DStructs.h"
@@ -88,6 +90,177 @@ static std::size_t TruncatedLength(const char* data, std::size_t maxLen) {
 
 static QString ReadFixedString(const char* data, std::size_t maxLen) {
     return QString::fromLatin1(data, static_cast<int>(TruncatedLength(data, maxLen)));
+}
+
+static std::shared_ptr<ChunkItem> FindFirstChildById(
+    const std::shared_ptr<ChunkItem>& parent,
+    uint32_t childId)
+{
+    if (!parent) {
+        return nullptr;
+    }
+    for (const auto& child : parent->children) {
+        if (child && child->id == childId) {
+            return child;
+        }
+    }
+    return nullptr;
+}
+
+static void CollectChunksByIdRecursive(
+    const std::shared_ptr<ChunkItem>& node,
+    uint32_t id,
+    std::vector<std::shared_ptr<ChunkItem>>& out)
+{
+    if (!node) {
+        return;
+    }
+    if (node->id == id) {
+        out.push_back(node);
+    }
+    for (const auto& child : node->children) {
+        CollectChunksByIdRecursive(child, id, out);
+    }
+}
+
+static QSet<QString> CollectHierarchyNamesFromRoots(
+    const std::vector<std::shared_ptr<ChunkItem>>& roots)
+{
+    std::vector<std::shared_ptr<ChunkItem>> hierarchyChunks;
+    for (const auto& root : roots) {
+        CollectChunksByIdRecursive(root, 0x0100, hierarchyChunks);
+    }
+
+    QSet<QString> names;
+    for (const auto& hierarchyChunk : hierarchyChunks) {
+        const auto headerChunk = FindFirstChildById(hierarchyChunk, 0x0101);
+        if (!headerChunk) {
+            continue;
+        }
+        auto parsed = ParseChunkStruct<W3dHierarchyStruct>(headerChunk);
+        if (const auto* header = std::get_if<W3dHierarchyStruct>(&parsed)) {
+            const QString name = ReadFixedString(header->Name, W3D_NAME_LEN).trimmed().toLower();
+            if (!name.isEmpty()) {
+                names.insert(name);
+            }
+        }
+    }
+
+    return names;
+}
+
+static int CollectAnimationCountFromRoots(
+    const std::vector<std::shared_ptr<ChunkItem>>& roots)
+{
+    std::vector<std::shared_ptr<ChunkItem>> rawAnimationChunks;
+    std::vector<std::shared_ptr<ChunkItem>> compressedAnimationChunks;
+    for (const auto& root : roots) {
+        CollectChunksByIdRecursive(root, 0x0200, rawAnimationChunks);
+        CollectChunksByIdRecursive(root, 0x0280, compressedAnimationChunks);
+    }
+    return static_cast<int>(rawAnimationChunks.size() + compressedAnimationChunks.size());
+}
+
+static QString NormalizeAbsolutePathKey(const QString& filePath) {
+    return QDir::cleanPath(QFileInfo(filePath).absoluteFilePath()).toLower();
+}
+
+static QString RenderSessionAssetRoleLabel(RenderSessionAssetRole role) {
+    switch (role) {
+    case RenderSessionAssetRole::Skeleton:
+        return QObject::tr("Skeleton");
+    case RenderSessionAssetRole::AnimationLibrary:
+        return QObject::tr("Animations");
+    }
+    return QObject::tr("Unknown");
+}
+
+static RenderAnimationClipIdentity BuildRenderAnimationClipIdentity(
+    const OW3D::Render::RenderAnimationClip& clip)
+{
+    RenderAnimationClipIdentity identity{};
+    identity.fullName = QString::fromStdString(clip.fullName);
+    identity.hierarchyName = QString::fromStdString(clip.hierarchyName);
+    identity.sourceFileLabel = QString::fromStdString(clip.sourceFileLabel);
+    identity.sourceFromAnimationLibrary = clip.sourceFromAnimationLibrary;
+    identity.compressed = clip.compressed;
+    return identity;
+}
+
+constexpr int kRenderAssetPathRole = Qt::UserRole;
+constexpr int kRenderAssetRoleRole = Qt::UserRole + 1;
+constexpr int kRenderAnimationIndexRole = Qt::UserRole;
+
+static float AnimationClipDurationSeconds(const OW3D::Render::RenderAnimationClip& clip)
+{
+    if (clip.frameRate <= 0.0f || clip.numFrames <= 1u) {
+        return 0.0f;
+    }
+    return static_cast<float>(clip.numFrames - 1u) / clip.frameRate;
+}
+
+static bool SceneHasCompatibleHierarchyForAnimation(
+    const OW3D::Render::RenderScene& scene,
+    int animationIndex)
+{
+    for (const auto& hierarchy : scene.hierarchies) {
+        if (std::find(
+            hierarchy.compatibleAnimationIndices.begin(),
+            hierarchy.compatibleAnimationIndices.end(),
+            animationIndex) != hierarchy.compatibleAnimationIndices.end())
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+static QStringList CollectMissingRenderHierarchyNames(
+    const OW3D::Render::SceneBuildResult& result)
+{
+    QSet<QString> names;
+    for (const auto& warning : result.warnings) {
+        if (warning.code != OW3D::Render::SceneBuildWarningCode::MissingHierarchy) {
+            continue;
+        }
+
+        const QString message = QString::fromStdString(warning.message);
+        const int sep = message.lastIndexOf(QStringLiteral(": "));
+        const QString name = (sep >= 0)
+            ? message.mid(sep + 2).trimmed()
+            : message.trimmed();
+        if (!name.isEmpty()) {
+            names.insert(name.toLower());
+        }
+    }
+
+    QStringList out = names.values();
+    std::sort(out.begin(), out.end(), [](const QString& a, const QString& b) {
+        return QString::compare(a, b, Qt::CaseInsensitive) < 0;
+    });
+    return out;
+}
+
+static bool LoadSupplementalRenderRootsFromFile(
+    const QString& filePath,
+    std::vector<std::shared_ptr<ChunkItem>>& outRoots,
+    QString* outError = nullptr)
+{
+    outRoots.clear();
+
+    ChunkData supplementalData;
+    if (!supplementalData.loadFromFile(filePath.toStdString())
+        || supplementalData.getChunks().empty())
+    {
+        if (outError) {
+            *outError = QObject::tr("Failed to load supplemental W3D/WLT.");
+        }
+        return false;
+    }
+
+    const auto& parsedRoots = supplementalData.getChunks();
+    outRoots.assign(parsedRoots.begin(), parsedRoots.end());
+    return !outRoots.empty();
 }
 
 static QString BuildMapperArgsReference() {
@@ -4183,12 +4356,95 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     renderSelectionLabel = new QLabel(tr("Selection: none"), renderPane);
     renderLayout->addWidget(renderSelectionLabel);
 
-    auto* renderTabs = new QTabWidget(renderPane);
+    renderTabs = new QTabWidget(renderPane);
     renderWarningsEdit = new QPlainTextEdit(renderTabs);
     renderWarningsEdit->setReadOnly(true);
     renderWarningsEdit->setPlaceholderText(tr("No scene warnings."));
     renderTabs->addTab(renderWarningsEdit, tr("Scene Warnings"));
-    renderTabs->setMinimumHeight(110);
+
+    auto* renderAnimationTab = new QWidget(renderTabs);
+    auto* renderAnimationLayout = new QVBoxLayout(renderAnimationTab);
+    renderAnimationLayout->setContentsMargins(6, 6, 6, 6);
+    renderAnimationLayout->setSpacing(6);
+
+    auto* renderAssetButtons = new QWidget(renderAnimationTab);
+    auto* renderAssetButtonsLayout = new QHBoxLayout(renderAssetButtons);
+    renderAssetButtonsLayout->setContentsMargins(0, 0, 0, 0);
+    renderAssetButtonsLayout->setSpacing(6);
+    renderAddSkeletonButton = new QPushButton(tr("Add Skeleton..."), renderAssetButtons);
+    renderAddAnimationsButton = new QPushButton(tr("Add Animations..."), renderAssetButtons);
+    renderRemoveAssetButton = new QPushButton(tr("Remove Selected Asset"), renderAssetButtons);
+    renderClearAnimationsButton = new QPushButton(tr("Clear Animation Libraries"), renderAssetButtons);
+    renderAssetButtonsLayout->addWidget(renderAddSkeletonButton);
+    renderAssetButtonsLayout->addWidget(renderAddAnimationsButton);
+    renderAssetButtonsLayout->addWidget(renderRemoveAssetButton);
+    renderAssetButtonsLayout->addWidget(renderClearAnimationsButton);
+    renderAssetButtonsLayout->addStretch(1);
+    renderAnimationLayout->addWidget(renderAssetButtons);
+
+    auto* renderAssetsLabel = new QLabel(tr("Loaded Render Assets"), renderAnimationTab);
+    renderAnimationLayout->addWidget(renderAssetsLabel);
+
+    renderAssetsTree = new QTreeWidget(renderAnimationTab);
+    renderAssetsTree->setColumnCount(4);
+    renderAssetsTree->setHeaderLabels({ tr("Role"), tr("File"), tr("Hierarchies"), tr("Clips") });
+    renderAssetsTree->setRootIsDecorated(false);
+    renderAssetsTree->setAlternatingRowColors(true);
+    renderAssetsTree->setSelectionMode(QAbstractItemView::SingleSelection);
+    renderAssetsTree->header()->setSectionResizeMode(0, QHeaderView::ResizeToContents);
+    renderAssetsTree->header()->setSectionResizeMode(1, QHeaderView::Stretch);
+    renderAssetsTree->header()->setSectionResizeMode(2, QHeaderView::ResizeToContents);
+    renderAssetsTree->header()->setSectionResizeMode(3, QHeaderView::ResizeToContents);
+    renderAnimationLayout->addWidget(renderAssetsTree, 1);
+
+    auto* renderAnimationsLabel = new QLabel(tr("Animations"), renderAnimationTab);
+    renderAnimationLayout->addWidget(renderAnimationsLabel);
+
+    renderAnimationsTree = new QTreeWidget(renderAnimationTab);
+    renderAnimationsTree->setColumnCount(3);
+    renderAnimationsTree->setHeaderLabels({ tr("Clip"), tr("Source"), tr("Status") });
+    renderAnimationsTree->setAlternatingRowColors(true);
+    renderAnimationsTree->setSelectionMode(QAbstractItemView::SingleSelection);
+    renderAnimationsTree->header()->setSectionResizeMode(0, QHeaderView::Stretch);
+    renderAnimationsTree->header()->setSectionResizeMode(1, QHeaderView::ResizeToContents);
+    renderAnimationsTree->header()->setSectionResizeMode(2, QHeaderView::ResizeToContents);
+    renderAnimationLayout->addWidget(renderAnimationsTree, 2);
+
+    auto* renderTransportRow = new QWidget(renderAnimationTab);
+    auto* renderTransportLayout = new QHBoxLayout(renderTransportRow);
+    renderTransportLayout->setContentsMargins(0, 0, 0, 0);
+    renderTransportLayout->setSpacing(6);
+    renderPlayPauseButton = new QPushButton(tr("Play"), renderTransportRow);
+    renderStopButton = new QPushButton(tr("Stop"), renderTransportRow);
+    renderAnimationLoopToggle = new QCheckBox(tr("Loop"), renderTransportRow);
+    renderAnimationLoopToggle->setChecked(true);
+    auto* renderSpeedLabel = new QLabel(tr("Speed"), renderTransportRow);
+    renderAnimationSpeedSpin = new QDoubleSpinBox(renderTransportRow);
+    renderAnimationSpeedSpin->setDecimals(2);
+    renderAnimationSpeedSpin->setRange(0.10, 8.00);
+    renderAnimationSpeedSpin->setSingleStep(0.10);
+    renderAnimationSpeedSpin->setValue(1.0);
+    renderTransportLayout->addWidget(renderPlayPauseButton);
+    renderTransportLayout->addWidget(renderStopButton);
+    renderTransportLayout->addWidget(renderAnimationLoopToggle);
+    renderTransportLayout->addWidget(renderSpeedLabel);
+    renderTransportLayout->addWidget(renderAnimationSpeedSpin);
+    renderTransportLayout->addStretch(1);
+    renderAnimationLayout->addWidget(renderTransportRow);
+
+    renderAnimationClipLabel = new QLabel(tr("Clip: none"), renderAnimationTab);
+    renderAnimationMetadataLabel = new QLabel(tr("No animation selected."), renderAnimationTab);
+    renderAnimationMetadataLabel->setWordWrap(true);
+    renderAnimationLayout->addWidget(renderAnimationClipLabel);
+    renderAnimationLayout->addWidget(renderAnimationMetadataLabel);
+
+    renderAnimationFrameSlider = new QSlider(Qt::Horizontal, renderAnimationTab);
+    renderAnimationFrameSlider->setRange(0, 0);
+    renderAnimationFrameSlider->setEnabled(false);
+    renderAnimationLayout->addWidget(renderAnimationFrameSlider);
+
+    renderTabs->addTab(renderAnimationTab, tr("Animations"));
+    renderTabs->setMinimumHeight(220);
     renderLayout->addWidget(renderTabs);
 
     splitter->addWidget(treeWidget);
@@ -4275,11 +4531,34 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
         &OW3D::Render::RenderViewportWidget::pivotTransformCommitRequested,
         this,
         &MainWindow::handleViewportPivotTransformCommit);
+    connect(renderAddSkeletonButton, &QPushButton::clicked, this, &MainWindow::addRenderSkeletons);
+    connect(renderAddAnimationsButton, &QPushButton::clicked, this, &MainWindow::addRenderAnimations);
+    connect(renderRemoveAssetButton, &QPushButton::clicked, this, &MainWindow::removeSelectedRenderSessionAsset);
+    connect(renderClearAnimationsButton, &QPushButton::clicked, this, &MainWindow::clearRenderAnimationLibraries);
+    connect(renderAnimationsTree, &QTreeWidget::itemSelectionChanged, this, &MainWindow::handleRenderAnimationSelectionChanged);
+    connect(renderAssetsTree, &QTreeWidget::itemSelectionChanged, this, [this]() {
+        if (!renderRemoveAssetButton || !renderAssetsTree) {
+            return;
+        }
+        const QTreeWidgetItem* item = renderAssetsTree->currentItem();
+        const bool removable = item && item->data(0, Qt::UserRole).isValid();
+        renderRemoveAssetButton->setEnabled(removable);
+    });
+    connect(renderPlayPauseButton, &QPushButton::clicked, this, &MainWindow::toggleRenderAnimationPlayback);
+    connect(renderStopButton, &QPushButton::clicked, this, &MainWindow::stopRenderAnimationPlayback);
+    connect(renderAnimationLoopToggle, &QCheckBox::toggled, this, &MainWindow::handleRenderAnimationLoopChanged);
+    connect(renderAnimationSpeedSpin, qOverload<double>(&QDoubleSpinBox::valueChanged), this, &MainWindow::handleRenderAnimationSpeedChanged);
+    connect(renderAnimationFrameSlider, &QSlider::valueChanged, this, &MainWindow::handleRenderAnimationFrameSliderChanged);
     connect(rawHexToggle, &QCheckBox::toggled, this, [this](bool on) {
         if (rawHexContainer) rawHexContainer->setVisible(on);
         updateRawHex(currentChunk);
         });
+    renderAnimationPlaybackTimer = new QTimer(this);
+    renderAnimationPlaybackTimer->setInterval(16);
+    connect(renderAnimationPlaybackTimer, &QTimer::timeout, this, &MainWindow::handleRenderAnimationPlaybackTimerTick);
     applyRenderSettingsToViewport();
+    resetRenderAnimationPlayback();
+    syncRenderAnimationUi();
 
     updateWindowTitle();
     recentFilesPath = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation) + "/recent_files.txt";
@@ -4298,6 +4577,8 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     undoRenderTransformAction->setShortcut(QKeySequence::Undo);
     QAction* redoRenderTransformAction = editMenu->addAction(tr("Redo Render Transform"));
     redoRenderTransformAction->setShortcut(QKeySequence::Redo);
+    QAction* editRenderRotationAction = editMenu->addAction(tr("Set Selected Render Rotation..."));
+    editRenderRotationAction->setShortcut(QKeySequence(tr("Ctrl+Shift+R")));
     editMenu->addSeparator();
     QAction* moveChunkUpAction = editMenu->addAction(tr("Move Chunk Up"));
     QAction* moveChunkDownAction = editMenu->addAction(tr("Move Chunk Down"));
@@ -4311,6 +4592,11 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     connect(addChildChunkAction, &QAction::triggered, this, &MainWindow::addChildChunk);
     connect(undoRenderTransformAction, &QAction::triggered, this, &MainWindow::undoRenderTransform);
     connect(redoRenderTransformAction, &QAction::triggered, this, &MainWindow::redoRenderTransform);
+    connect(editRenderRotationAction, &QAction::triggered, this, [this]() {
+        if (renderViewport) {
+            renderViewport->OpenManualPivotRotationDialog();
+        }
+        });
     connect(moveChunkUpAction, &QAction::triggered, this, &MainWindow::moveChunkUp);
     connect(moveChunkDownAction, &QAction::triggered, this, &MainWindow::moveChunkDown);
     connect(deleteChunkAction, &QAction::triggered, this, &MainWindow::deleteSelectedChunk);
@@ -4348,14 +4634,29 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
             renderPane->setVisible(on);
         }
         });
-    QAction* showWarningsSectionAction = viewMenu->addAction(tr("Show Render Warnings"));
+    QAction* showWarningsSectionAction = viewMenu->addAction(tr("Show Render Tabs"));
     showWarningsSectionAction->setCheckable(true);
     showWarningsSectionAction->setChecked(true);
-    connect(showWarningsSectionAction, &QAction::toggled, this, [renderTabs](bool on) {
+    connect(showWarningsSectionAction, &QAction::toggled, this, [this](bool on) {
         if (renderTabs) {
             renderTabs->setVisible(on);
         }
         });
+    QMenu* renderMenu = menuBar()->addMenu(tr("&Render"));
+    QAction* addRenderSkeletonsAction = renderMenu->addAction(tr("Add Skeleton..."));
+    QAction* addRenderAnimationsAction = renderMenu->addAction(tr("Add Animations..."));
+    QAction* removeRenderAssetAction = renderMenu->addAction(tr("Remove Selected Render Asset"));
+    QAction* clearRenderAnimationsAction = renderMenu->addAction(tr("Clear Animation Libraries"));
+    renderMenu->addSeparator();
+    QAction* toggleRenderPlaybackAction = renderMenu->addAction(tr("Play/Pause Animation"));
+    toggleRenderPlaybackAction->setShortcut(QKeySequence(Qt::Key_Space));
+    QAction* stopRenderPlaybackAction = renderMenu->addAction(tr("Stop Animation"));
+    connect(addRenderSkeletonsAction, &QAction::triggered, this, &MainWindow::addRenderSkeletons);
+    connect(addRenderAnimationsAction, &QAction::triggered, this, &MainWindow::addRenderAnimations);
+    connect(removeRenderAssetAction, &QAction::triggered, this, &MainWindow::removeSelectedRenderSessionAsset);
+    connect(clearRenderAnimationsAction, &QAction::triggered, this, &MainWindow::clearRenderAnimationLibraries);
+    connect(toggleRenderPlaybackAction, &QAction::triggered, this, &MainWindow::toggleRenderAnimationPlayback);
+    connect(stopRenderPlaybackAction, &QAction::triggered, this, &MainWindow::stopRenderAnimationPlayback);
     auto batchMenu = menuBar()->addMenu(tr("Batch Tools"));
     auto exportChunksAct = new QAction(tr("Export Chunk List..."), this);
     batchMenu->addAction(exportChunksAct);
@@ -4439,6 +4740,7 @@ void MainWindow::openFile(const QString& path) {
     else {
         clearArchiveRenderContext();
     }
+    clearExternalRenderContext();
     currentFilePath = filePath;
     ClearChunkTree();
     setDirty(false);
@@ -5975,6 +6277,443 @@ void MainWindow::clearArchiveRenderContext() {
     currentArchiveLoadedSupplementalEntryIds.clear();
 }
 
+void MainWindow::clearExternalRenderContext() {
+    currentExternalRenderAssets.clear();
+    currentExternalRenderAssetPaths.clear();
+    currentRenderTriedSkeletonAutoload = false;
+    currentRenderSuppressedMissingHierarchyKey.clear();
+    resetRenderAnimationPlayback();
+}
+
+void MainWindow::resetRenderAnimationPlayback() {
+    currentRenderAnimationPlayback = {};
+    currentRenderAnimationPlayback.activeAnimationIndex = -1;
+    currentRenderAnimationPlayback.timeSeconds = 0.0f;
+    currentRenderAnimationPlayback.playing = false;
+    currentRenderAnimationPlayback.loop = true;
+    currentRenderAnimationPlayback.speed = 1.0f;
+    currentRenderActiveClipIdentity.reset();
+    if (renderAnimationPlaybackTimer) {
+        renderAnimationPlaybackTimer->stop();
+    }
+    renderAnimationPlaybackElapsed.invalidate();
+    syncRenderAnimationPlaybackToViewport();
+}
+
+void MainWindow::syncRenderAnimationPlaybackToViewport() {
+    if (renderViewport) {
+        renderViewport->SetAnimationPlayback(currentRenderAnimationPlayback);
+    }
+}
+
+int MainWindow::findRenderAnimationIndexByIdentity(
+    const RenderAnimationClipIdentity& identity) const
+{
+    const auto& animations = currentRenderSceneResult.scene.animations;
+    for (std::size_t i = 0; i < animations.size(); ++i) {
+        const RenderAnimationClipIdentity candidate =
+            BuildRenderAnimationClipIdentity(animations[i]);
+        if (candidate == identity) {
+            return static_cast<int>(i);
+        }
+    }
+    return -1;
+}
+
+bool MainWindow::tryLoadRenderSessionAsset(
+    const QString& filePath,
+    RenderSessionAssetRole role,
+    RenderSessionAsset& outAsset,
+    QString* outError) const
+{
+    outAsset = {};
+
+    const QString absolutePath =
+        QDir::cleanPath(QFileInfo(filePath).absoluteFilePath());
+    const QString normalizedPath = NormalizeAbsolutePathKey(absolutePath);
+    if (normalizedPath.isEmpty()) {
+        if (outError) {
+            *outError = tr("The selected file path is invalid.");
+        }
+        return false;
+    }
+    if (currentExternalRenderAssetPaths.contains(normalizedPath)) {
+        if (outError) {
+            *outError = tr("This render asset is already loaded.");
+        }
+        return false;
+    }
+
+    std::vector<std::shared_ptr<ChunkItem>> loadedRoots;
+    if (!LoadSupplementalRenderRootsFromFile(absolutePath, loadedRoots, outError)) {
+        return false;
+    }
+
+    auto labelInUse = [&](const QString& candidate) {
+        if (!currentFilePath.isEmpty()) {
+            const QString primaryLabel =
+                QFileInfo(currentFilePath).fileName() + QStringLiteral(" [model]");
+            if (primaryLabel.compare(candidate, Qt::CaseInsensitive) == 0) {
+                return true;
+            }
+        }
+        for (const auto& asset : currentExternalRenderAssets) {
+            if (asset.displayLabel.compare(candidate, Qt::CaseInsensitive) == 0) {
+                return true;
+            }
+        }
+        return false;
+    };
+
+    QString displayLabel = QFileInfo(absolutePath).fileName();
+    if (displayLabel.isEmpty()) {
+        displayLabel = absolutePath;
+    }
+    if (labelInUse(displayLabel)) {
+        const QString parentDirName = QFileInfo(QFileInfo(absolutePath).absolutePath()).fileName();
+        if (!parentDirName.isEmpty()) {
+            const QString parentLabel =
+                tr("%1 [%2]").arg(displayLabel, parentDirName);
+            if (!labelInUse(parentLabel)) {
+                displayLabel = parentLabel;
+            }
+        }
+    }
+    if (labelInUse(displayLabel)) {
+        displayLabel = absolutePath;
+    }
+
+    outAsset.role = role;
+    outAsset.filePath = absolutePath;
+    outAsset.displayLabel = displayLabel;
+    outAsset.roots = std::move(loadedRoots);
+    outAsset.hierarchyNames = CollectHierarchyNamesFromRoots(outAsset.roots);
+    outAsset.animationCount = CollectAnimationCountFromRoots(outAsset.roots);
+    return true;
+}
+
+void MainWindow::refreshRenderAssetList() {
+    if (!renderAssetsTree) {
+        return;
+    }
+
+    const QString selectedPathKey = renderAssetsTree->currentItem()
+        ? renderAssetsTree->currentItem()->data(0, kRenderAssetPathRole).toString()
+        : QString();
+
+    QSignalBlocker blocker(renderAssetsTree);
+    renderAssetsTree->clear();
+
+    if (!currentFilePath.isEmpty()) {
+        int hierarchyCount = 0;
+        int animationCount = 0;
+        if (chunkData) {
+            const auto& primaryRoots = chunkData->getChunks();
+            hierarchyCount = CollectHierarchyNamesFromRoots(primaryRoots).size();
+            animationCount = CollectAnimationCountFromRoots(primaryRoots);
+        }
+
+        auto* primaryItem = new QTreeWidgetItem(renderAssetsTree);
+        primaryItem->setText(0, tr("Model"));
+        primaryItem->setText(1, QFileInfo(currentFilePath).fileName());
+        primaryItem->setText(2, QString::number(hierarchyCount));
+        primaryItem->setText(3, QString::number(animationCount));
+        primaryItem->setToolTip(1, currentFilePath);
+        primaryItem->setFlags(primaryItem->flags() & ~Qt::ItemIsDropEnabled);
+    }
+
+    for (const auto& asset : currentExternalRenderAssets) {
+        auto* item = new QTreeWidgetItem(renderAssetsTree);
+        item->setText(0, RenderSessionAssetRoleLabel(asset.role));
+        item->setText(1, asset.displayLabel);
+        item->setText(2, QString::number(asset.hierarchyNames.size()));
+        item->setText(3, QString::number(asset.animationCount));
+        item->setToolTip(1, asset.filePath);
+        item->setData(0, kRenderAssetPathRole, NormalizeAbsolutePathKey(asset.filePath));
+        item->setData(0, kRenderAssetRoleRole, static_cast<int>(asset.role));
+        if (!selectedPathKey.isEmpty()
+            && selectedPathKey.compare(
+                NormalizeAbsolutePathKey(asset.filePath),
+                Qt::CaseInsensitive) == 0)
+        {
+            renderAssetsTree->setCurrentItem(item);
+        }
+    }
+
+    if (renderAssetsTree->topLevelItemCount() == 0) {
+        auto* emptyItem = new QTreeWidgetItem(renderAssetsTree);
+        emptyItem->setText(0, tr("No render assets loaded."));
+        emptyItem->setFlags(emptyItem->flags() & ~(Qt::ItemIsSelectable | Qt::ItemIsEnabled));
+    }
+
+    const bool hasAnimationLibraries = std::any_of(
+        currentExternalRenderAssets.begin(),
+        currentExternalRenderAssets.end(),
+        [](const RenderSessionAsset& asset) {
+            return asset.role == RenderSessionAssetRole::AnimationLibrary;
+        });
+    if (renderClearAnimationsButton) {
+        renderClearAnimationsButton->setEnabled(hasAnimationLibraries);
+    }
+    if (renderRemoveAssetButton) {
+        const QTreeWidgetItem* item = renderAssetsTree->currentItem();
+        renderRemoveAssetButton->setEnabled(item && item->data(0, kRenderAssetPathRole).isValid());
+    }
+}
+
+void MainWindow::refreshRenderAnimationList() {
+    if (!renderAnimationsTree) {
+        return;
+    }
+
+    QSignalBlocker blocker(renderAnimationsTree);
+    renderAnimationsTree->clear();
+
+    const auto& animations = currentRenderSceneResult.scene.animations;
+    if (animations.empty()) {
+        auto* emptyItem = new QTreeWidgetItem(renderAnimationsTree);
+        emptyItem->setText(0, tr("No animations loaded."));
+        emptyItem->setFlags(emptyItem->flags() & ~(Qt::ItemIsSelectable | Qt::ItemIsEnabled));
+        return;
+    }
+
+    std::unordered_map<std::string, QTreeWidgetItem*> groups;
+    for (std::size_t i = 0; i < animations.size(); ++i) {
+        const auto& clip = animations[i];
+        const QString hierarchyName = clip.hierarchyName.empty()
+            ? tr("(No Hierarchy)")
+            : QString::fromStdString(clip.hierarchyName);
+        const std::string groupKey = QString(hierarchyName).trimmed().toLower().toStdString();
+
+        QTreeWidgetItem* groupItem = nullptr;
+        const auto groupIt = groups.find(groupKey);
+        if (groupIt == groups.end()) {
+            groupItem = new QTreeWidgetItem(renderAnimationsTree);
+            groupItem->setText(0, hierarchyName);
+            groupItem->setFirstColumnSpanned(false);
+            groupItem->setExpanded(true);
+            groupItem->setFlags(groupItem->flags() & ~Qt::ItemIsSelectable);
+            groups.emplace(groupKey, groupItem);
+        }
+        else {
+            groupItem = groupIt->second;
+        }
+
+        const bool compatible = SceneHasCompatibleHierarchyForAnimation(
+            currentRenderSceneResult.scene,
+            static_cast<int>(i));
+        const bool playable = compatible && clip.supportedForPlayback;
+
+        auto* child = new QTreeWidgetItem(groupItem);
+        child->setText(0, QString::fromStdString(clip.fullName));
+        child->setText(1, clip.sourceFileLabel.empty()
+            ? tr("(Unknown Source)")
+            : QString::fromStdString(clip.sourceFileLabel));
+        child->setText(2, !clip.supportedForPlayback
+            ? tr("Unsupported")
+            : (compatible ? tr("Ready") : tr("No Matching Hierarchy")));
+        child->setData(0, kRenderAnimationIndexRole, static_cast<int>(i));
+        const QString clipTooltip = tr("Hierarchy: %1\nSource: %2\nFrames: %3\nFPS: %4")
+            .arg(hierarchyName)
+            .arg(child->text(1))
+            .arg(QString::number(clip.numFrames))
+            .arg(QString::number(clip.frameRate, 'f', 2));
+        child->setToolTip(
+            0,
+            clipTooltip);
+        if (!playable) {
+            child->setFlags(child->flags() & ~(Qt::ItemIsSelectable | Qt::ItemIsEnabled));
+        }
+    }
+}
+
+void MainWindow::refreshRenderPlaybackSelection() {
+    if (!renderAnimationsTree) {
+        return;
+    }
+
+    QSignalBlocker blocker(renderAnimationsTree);
+
+    const int activeIndex = currentRenderAnimationPlayback.activeAnimationIndex;
+    if (activeIndex < 0) {
+        renderAnimationsTree->clearSelection();
+        return;
+    }
+
+    QTreeWidgetItem* selectedItem = nullptr;
+    for (int i = 0; i < renderAnimationsTree->topLevelItemCount() && !selectedItem; ++i) {
+        QTreeWidgetItem* groupItem = renderAnimationsTree->topLevelItem(i);
+        for (int j = 0; j < groupItem->childCount(); ++j) {
+            QTreeWidgetItem* child = groupItem->child(j);
+            if (child->data(0, kRenderAnimationIndexRole).toInt() == activeIndex) {
+                selectedItem = child;
+                groupItem->setExpanded(true);
+                break;
+            }
+        }
+    }
+
+    if (selectedItem) {
+        renderAnimationsTree->setCurrentItem(selectedItem);
+        renderAnimationsTree->scrollToItem(selectedItem, QAbstractItemView::PositionAtCenter);
+    }
+    else {
+        renderAnimationsTree->clearSelection();
+    }
+}
+
+void MainWindow::refreshRenderPlaybackControls() {
+    const auto& animations = currentRenderSceneResult.scene.animations;
+    const int activeIndex = currentRenderAnimationPlayback.activeAnimationIndex;
+    const bool activeValid =
+        activeIndex >= 0 && activeIndex < static_cast<int>(animations.size());
+
+    const OW3D::Render::RenderAnimationClip* activeClip =
+        activeValid ? &animations[static_cast<std::size_t>(activeIndex)] : nullptr;
+
+    bool selectedPlayable = false;
+    if (renderAnimationsTree && renderAnimationsTree->currentItem()) {
+        const QTreeWidgetItem* item = renderAnimationsTree->currentItem();
+        selectedPlayable = item->data(0, kRenderAnimationIndexRole).isValid()
+            && (item->flags() & Qt::ItemIsEnabled);
+    }
+
+    if (renderPlayPauseButton) {
+        renderPlayPauseButton->setText(
+            currentRenderAnimationPlayback.playing ? tr("Pause") : tr("Play"));
+        renderPlayPauseButton->setEnabled(activeClip != nullptr || selectedPlayable);
+    }
+    if (renderStopButton) {
+        renderStopButton->setEnabled(activeClip != nullptr);
+    }
+    if (renderAnimationLoopToggle) {
+        QSignalBlocker blocker(renderAnimationLoopToggle);
+        renderAnimationLoopToggle->setChecked(currentRenderAnimationPlayback.loop);
+        renderAnimationLoopToggle->setEnabled(activeClip != nullptr);
+    }
+    if (renderAnimationSpeedSpin) {
+        QSignalBlocker blocker(renderAnimationSpeedSpin);
+        renderAnimationSpeedSpin->setValue(currentRenderAnimationPlayback.speed);
+        renderAnimationSpeedSpin->setEnabled(activeClip != nullptr);
+    }
+
+    suppressRenderAnimationFrameSliderChange = true;
+    if (renderAnimationFrameSlider) {
+        renderAnimationFrameSlider->setEnabled(activeClip != nullptr);
+        if (!activeClip || activeClip->frameRate <= 0.0f || activeClip->numFrames == 0u) {
+            renderAnimationFrameSlider->setRange(0, 0);
+            renderAnimationFrameSlider->setValue(0);
+        }
+        else {
+            const int maxFrame = std::max(0, static_cast<int>(activeClip->numFrames) - 1);
+            const float frameFloat =
+                currentRenderAnimationPlayback.timeSeconds * activeClip->frameRate;
+            const int currentFrame = std::clamp(
+                static_cast<int>(std::round(frameFloat)),
+                0,
+                maxFrame);
+            renderAnimationFrameSlider->setRange(0, maxFrame);
+            renderAnimationFrameSlider->setValue(currentFrame);
+        }
+    }
+    suppressRenderAnimationFrameSliderChange = false;
+
+    if (!activeClip) {
+        if (renderAnimationClipLabel) {
+            renderAnimationClipLabel->setText(tr("Clip: none"));
+        }
+        if (renderAnimationMetadataLabel) {
+            renderAnimationMetadataLabel->setText(tr("No animation selected."));
+        }
+        return;
+    }
+
+    const QString clipName = QString::fromStdString(activeClip->fullName);
+    const QString hierarchyName = QString::fromStdString(activeClip->hierarchyName);
+    const QString sourceLabel = activeClip->sourceFileLabel.empty()
+        ? tr("(Unknown Source)")
+        : QString::fromStdString(activeClip->sourceFileLabel);
+    const float duration = AnimationClipDurationSeconds(*activeClip);
+    const float currentFrame = activeClip->frameRate > 0.0f
+        ? currentRenderAnimationPlayback.timeSeconds * activeClip->frameRate
+        : 0.0f;
+
+    if (renderAnimationClipLabel) {
+        renderAnimationClipLabel->setText(
+            tr("Clip: %1").arg(clipName.isEmpty() ? tr("(unnamed)") : clipName));
+    }
+    if (renderAnimationMetadataLabel) {
+        const QString metadataText =
+            tr("Hierarchy: %1 | Source: %2 | Frames: %3 | FPS: %4 | Frame: %5 | Time: %6 / %7 s")
+                .arg(hierarchyName.isEmpty() ? tr("(none)") : hierarchyName)
+                .arg(sourceLabel)
+                .arg(QString::number(activeClip->numFrames))
+                .arg(QString::number(activeClip->frameRate, 'f', 2))
+                .arg(QString::number(currentFrame, 'f', 2))
+                .arg(QString::number(currentRenderAnimationPlayback.timeSeconds, 'f', 2))
+                .arg(QString::number(duration, 'f', 2));
+        renderAnimationMetadataLabel->setText(
+            metadataText);
+    }
+}
+
+void MainWindow::syncRenderAnimationUi() {
+    refreshRenderAssetList();
+    refreshRenderAnimationList();
+    refreshRenderPlaybackSelection();
+    refreshRenderPlaybackControls();
+    syncRenderAnimationPlaybackToViewport();
+}
+
+void MainWindow::setRenderActiveAnimationIndex(
+    int animationIndex,
+    bool startPlaying,
+    bool resetTime)
+{
+    const auto& animations = currentRenderSceneResult.scene.animations;
+    const bool validIndex =
+        animationIndex >= 0 && animationIndex < static_cast<int>(animations.size());
+
+    if (!validIndex
+        || !animations[static_cast<std::size_t>(animationIndex)].supportedForPlayback
+        || !SceneHasCompatibleHierarchyForAnimation(currentRenderSceneResult.scene, animationIndex))
+    {
+        currentRenderAnimationPlayback.activeAnimationIndex = -1;
+        currentRenderAnimationPlayback.timeSeconds = 0.0f;
+        currentRenderAnimationPlayback.playing = false;
+        currentRenderActiveClipIdentity.reset();
+        if (renderAnimationPlaybackTimer) {
+            renderAnimationPlaybackTimer->stop();
+        }
+        renderAnimationPlaybackElapsed.invalidate();
+        syncRenderAnimationUi();
+        return;
+    }
+
+    currentRenderAnimationPlayback.activeAnimationIndex = animationIndex;
+    if (resetTime) {
+        currentRenderAnimationPlayback.timeSeconds = 0.0f;
+    }
+    currentRenderAnimationPlayback.playing = startPlaying;
+    currentRenderActiveClipIdentity =
+        BuildRenderAnimationClipIdentity(animations[static_cast<std::size_t>(animationIndex)]);
+
+    if (currentRenderAnimationPlayback.playing) {
+        renderAnimationPlaybackElapsed.restart();
+        if (renderAnimationPlaybackTimer) {
+            renderAnimationPlaybackTimer->start();
+        }
+    }
+    else {
+        if (renderAnimationPlaybackTimer) {
+            renderAnimationPlaybackTimer->stop();
+        }
+        renderAnimationPlaybackElapsed.invalidate();
+    }
+
+    syncRenderAnimationUi();
+}
+
 void MainWindow::handleViewportChunkActivated(void* chunkPtr) {
     if (!chunkPtr || !treeWidget) {
         return;
@@ -6176,6 +6915,333 @@ void MainWindow::applyRenderSettingsToViewport() {
     renderViewport->SetRenderSettings(settings);
 }
 
+void MainWindow::addRenderSkeletons() {
+    const QString startDir = !currentFilePath.isEmpty()
+        ? QFileInfo(currentFilePath).absolutePath()
+        : (lastDirectory.isEmpty() ? QDir::homePath() : lastDirectory);
+    const QStringList filePaths = QFileDialog::getOpenFileNames(
+        this,
+        tr("Add Skeleton W3D/WLT"),
+        startDir,
+        tr("W3D Files (*.w3d *.W3D *.wlt *.WLT);;All Files (*)"));
+    if (filePaths.isEmpty()) {
+        return;
+    }
+
+    lastDirectory = QFileInfo(filePaths.front()).absolutePath();
+
+    bool addedAny = false;
+    QStringList errors;
+    for (const QString& filePath : filePaths) {
+        if (currentExternalRenderAssetPaths.contains(NormalizeAbsolutePathKey(filePath))) {
+            continue;
+        }
+
+        RenderSessionAsset asset;
+        QString loadError;
+        if (!tryLoadRenderSessionAsset(filePath, RenderSessionAssetRole::Skeleton, asset, &loadError)) {
+            if (!loadError.isEmpty()) {
+                errors.push_back(tr("%1: %2").arg(QFileInfo(filePath).fileName(), loadError));
+            }
+            continue;
+        }
+        if (asset.hierarchyNames.isEmpty()) {
+            errors.push_back(tr("%1 does not contain any hierarchy data.").arg(asset.displayLabel));
+            continue;
+        }
+
+        currentExternalRenderAssetPaths.insert(NormalizeAbsolutePathKey(asset.filePath));
+        currentExternalRenderAssets.push_back(std::move(asset));
+        addedAny = true;
+    }
+
+    if (!errors.isEmpty()) {
+        QMessageBox::warning(
+            this,
+            tr("Some Skeletons Were Skipped"),
+            errors.join(QStringLiteral("\n\n")));
+    }
+
+    if (addedAny) {
+        currentRenderSuppressedMissingHierarchyKey.clear();
+        rebuildRenderScene();
+    }
+}
+
+void MainWindow::addRenderAnimations() {
+    const QString startDir = !currentFilePath.isEmpty()
+        ? QFileInfo(currentFilePath).absolutePath()
+        : (lastDirectory.isEmpty() ? QDir::homePath() : lastDirectory);
+    const QStringList filePaths = QFileDialog::getOpenFileNames(
+        this,
+        tr("Add Animation W3D/WLT"),
+        startDir,
+        tr("W3D Files (*.w3d *.W3D *.wlt *.WLT);;All Files (*)"));
+    if (filePaths.isEmpty()) {
+        return;
+    }
+
+    lastDirectory = QFileInfo(filePaths.front()).absolutePath();
+
+    bool addedAny = false;
+    QStringList errors;
+    for (const QString& filePath : filePaths) {
+        if (currentExternalRenderAssetPaths.contains(NormalizeAbsolutePathKey(filePath))) {
+            continue;
+        }
+
+        RenderSessionAsset asset;
+        QString loadError;
+        if (!tryLoadRenderSessionAsset(filePath, RenderSessionAssetRole::AnimationLibrary, asset, &loadError)) {
+            if (!loadError.isEmpty()) {
+                errors.push_back(tr("%1: %2").arg(QFileInfo(filePath).fileName(), loadError));
+            }
+            continue;
+        }
+        if (asset.animationCount <= 0) {
+            errors.push_back(tr("%1 does not contain any animation chunks.").arg(asset.displayLabel));
+            continue;
+        }
+
+        currentExternalRenderAssetPaths.insert(NormalizeAbsolutePathKey(asset.filePath));
+        currentExternalRenderAssets.push_back(std::move(asset));
+        addedAny = true;
+    }
+
+    if (!errors.isEmpty()) {
+        QMessageBox::warning(
+            this,
+            tr("Some Animation Files Were Skipped"),
+            errors.join(QStringLiteral("\n\n")));
+    }
+
+    if (addedAny) {
+        rebuildRenderScene();
+    }
+}
+
+void MainWindow::removeSelectedRenderSessionAsset() {
+    if (!renderAssetsTree || !renderAssetsTree->currentItem()) {
+        return;
+    }
+
+    const QString normalizedPath =
+        renderAssetsTree->currentItem()->data(0, kRenderAssetPathRole).toString();
+    if (normalizedPath.isEmpty()) {
+        return;
+    }
+
+    const auto newEnd = std::remove_if(
+        currentExternalRenderAssets.begin(),
+        currentExternalRenderAssets.end(),
+        [&](const RenderSessionAsset& asset) {
+            return NormalizeAbsolutePathKey(asset.filePath).compare(
+                normalizedPath,
+                Qt::CaseInsensitive) == 0;
+        });
+    if (newEnd == currentExternalRenderAssets.end()) {
+        return;
+    }
+    currentExternalRenderAssets.erase(newEnd, currentExternalRenderAssets.end());
+    currentExternalRenderAssetPaths.remove(normalizedPath);
+    rebuildRenderScene();
+}
+
+void MainWindow::clearRenderAnimationLibraries() {
+    const auto newEnd = std::remove_if(
+        currentExternalRenderAssets.begin(),
+        currentExternalRenderAssets.end(),
+        [](const RenderSessionAsset& asset) {
+            return asset.role == RenderSessionAssetRole::AnimationLibrary;
+        });
+    if (newEnd == currentExternalRenderAssets.end()) {
+        return;
+    }
+    currentExternalRenderAssets.erase(newEnd, currentExternalRenderAssets.end());
+
+    currentExternalRenderAssetPaths.clear();
+    for (const auto& asset : currentExternalRenderAssets) {
+        currentExternalRenderAssetPaths.insert(NormalizeAbsolutePathKey(asset.filePath));
+    }
+
+    rebuildRenderScene();
+}
+
+void MainWindow::handleRenderAnimationSelectionChanged() {
+    if (!renderAnimationsTree || !renderAnimationsTree->currentItem()) {
+        refreshRenderPlaybackControls();
+        return;
+    }
+
+    const QTreeWidgetItem* item = renderAnimationsTree->currentItem();
+    if (!item->data(0, kRenderAnimationIndexRole).isValid()
+        || !(item->flags() & Qt::ItemIsEnabled))
+    {
+        refreshRenderPlaybackControls();
+        return;
+    }
+
+    setRenderActiveAnimationIndex(
+        item->data(0, kRenderAnimationIndexRole).toInt(),
+        true,
+        true);
+}
+
+void MainWindow::toggleRenderAnimationPlayback() {
+    if (currentRenderAnimationPlayback.activeAnimationIndex < 0) {
+        if (!renderAnimationsTree || !renderAnimationsTree->currentItem()) {
+            refreshRenderPlaybackControls();
+            return;
+        }
+        const QTreeWidgetItem* item = renderAnimationsTree->currentItem();
+        if (!item->data(0, kRenderAnimationIndexRole).isValid()
+            || !(item->flags() & Qt::ItemIsEnabled))
+        {
+            refreshRenderPlaybackControls();
+            return;
+        }
+        setRenderActiveAnimationIndex(
+            item->data(0, kRenderAnimationIndexRole).toInt(),
+            true,
+            true);
+        return;
+    }
+
+    currentRenderAnimationPlayback.playing = !currentRenderAnimationPlayback.playing;
+    if (currentRenderAnimationPlayback.playing) {
+        renderAnimationPlaybackElapsed.restart();
+        if (renderAnimationPlaybackTimer) {
+            renderAnimationPlaybackTimer->start();
+        }
+    }
+    else {
+        if (renderAnimationPlaybackTimer) {
+            renderAnimationPlaybackTimer->stop();
+        }
+        renderAnimationPlaybackElapsed.invalidate();
+    }
+
+    syncRenderAnimationUi();
+}
+
+void MainWindow::stopRenderAnimationPlayback() {
+    if (currentRenderAnimationPlayback.activeAnimationIndex < 0) {
+        return;
+    }
+
+    currentRenderAnimationPlayback.playing = false;
+    currentRenderAnimationPlayback.timeSeconds = 0.0f;
+    if (renderAnimationPlaybackTimer) {
+        renderAnimationPlaybackTimer->stop();
+    }
+    renderAnimationPlaybackElapsed.invalidate();
+    syncRenderAnimationUi();
+}
+
+void MainWindow::handleRenderAnimationLoopChanged(bool checked) {
+    currentRenderAnimationPlayback.loop = checked;
+    syncRenderAnimationUi();
+}
+
+void MainWindow::handleRenderAnimationSpeedChanged(double value) {
+    currentRenderAnimationPlayback.speed = std::max(0.1f, static_cast<float>(value));
+    if (currentRenderAnimationPlayback.playing) {
+        renderAnimationPlaybackElapsed.restart();
+    }
+    syncRenderAnimationUi();
+}
+
+void MainWindow::handleRenderAnimationFrameSliderChanged(int value) {
+    if (suppressRenderAnimationFrameSliderChange) {
+        return;
+    }
+
+    const int activeIndex = currentRenderAnimationPlayback.activeAnimationIndex;
+    const auto& animations = currentRenderSceneResult.scene.animations;
+    if (activeIndex < 0 || activeIndex >= static_cast<int>(animations.size())) {
+        return;
+    }
+
+    const auto& clip = animations[static_cast<std::size_t>(activeIndex)];
+    if (clip.frameRate <= 0.0f) {
+        currentRenderAnimationPlayback.timeSeconds = 0.0f;
+    }
+    else {
+        currentRenderAnimationPlayback.timeSeconds =
+            static_cast<float>(value) / clip.frameRate;
+    }
+    if (currentRenderAnimationPlayback.playing) {
+        renderAnimationPlaybackElapsed.restart();
+        if (renderAnimationPlaybackTimer) {
+            renderAnimationPlaybackTimer->start();
+        }
+    }
+    else {
+        if (renderAnimationPlaybackTimer) {
+            renderAnimationPlaybackTimer->stop();
+        }
+        renderAnimationPlaybackElapsed.invalidate();
+    }
+    syncRenderAnimationUi();
+}
+
+void MainWindow::handleRenderAnimationPlaybackTimerTick() {
+    const int activeIndex = currentRenderAnimationPlayback.activeAnimationIndex;
+    const auto& animations = currentRenderSceneResult.scene.animations;
+    if (!currentRenderAnimationPlayback.playing
+        || activeIndex < 0
+        || activeIndex >= static_cast<int>(animations.size()))
+    {
+        if (renderAnimationPlaybackTimer) {
+            renderAnimationPlaybackTimer->stop();
+        }
+        refreshRenderPlaybackControls();
+        return;
+    }
+
+    if (!renderAnimationPlaybackElapsed.isValid()) {
+        renderAnimationPlaybackElapsed.restart();
+        return;
+    }
+
+    const float deltaSeconds =
+        static_cast<float>(renderAnimationPlaybackElapsed.restart()) / 1000.0f;
+    if (deltaSeconds <= 0.0f) {
+        return;
+    }
+
+    const auto& clip = animations[static_cast<std::size_t>(activeIndex)];
+    const float duration = AnimationClipDurationSeconds(clip);
+    currentRenderAnimationPlayback.timeSeconds +=
+        deltaSeconds * currentRenderAnimationPlayback.speed;
+
+    if (duration <= 0.0f) {
+        currentRenderAnimationPlayback.timeSeconds = 0.0f;
+        currentRenderAnimationPlayback.playing = false;
+        if (renderAnimationPlaybackTimer) {
+            renderAnimationPlaybackTimer->stop();
+        }
+    }
+    else if (currentRenderAnimationPlayback.loop) {
+        currentRenderAnimationPlayback.timeSeconds =
+            std::fmod(currentRenderAnimationPlayback.timeSeconds, duration);
+        if (currentRenderAnimationPlayback.timeSeconds < 0.0f) {
+            currentRenderAnimationPlayback.timeSeconds += duration;
+        }
+    }
+    else if (currentRenderAnimationPlayback.timeSeconds > duration) {
+        currentRenderAnimationPlayback.timeSeconds = duration;
+        currentRenderAnimationPlayback.playing = false;
+        if (renderAnimationPlaybackTimer) {
+            renderAnimationPlaybackTimer->stop();
+        }
+        renderAnimationPlaybackElapsed.invalidate();
+    }
+
+    syncRenderAnimationPlaybackToViewport();
+    refreshRenderPlaybackControls();
+}
+
 void MainWindow::rebuildRenderScene() {
     if (!renderViewport) {
         return;
@@ -6192,12 +7258,62 @@ void MainWindow::rebuildRenderScene() {
         options.textureSearchDirectory = lastDirectory.toStdString();
     }
 
-    const OW3D::Render::W3DChunk emptyRoot{};
-    const auto& roots = chunkData ? chunkData->getChunks() : emptyRoot;
-    const OW3D::Render::W3DChunk* supplementalRoots =
-        currentArchiveSupplementalRoots.empty() ? nullptr : &currentArchiveSupplementalRoots;
-    OW3D::Render::SceneBuildResult result =
-        OW3D::Render::BuildRenderScene(roots, options, supplementalRoots);
+    const QString primarySourceLabel = currentFilePath.isEmpty()
+        ? tr("Current Scene [model]")
+        : QFileInfo(currentFilePath).fileName() + QStringLiteral(" [model]");
+
+    auto rebuildWithCurrentSession = [&]() -> OW3D::Render::SceneBuildResult {
+        options.rootSourceLabels.clear();
+
+        OW3D::Render::W3DChunk primaryRoots;
+        if (chunkData) {
+            const auto& roots = chunkData->getChunks();
+            primaryRoots.assign(roots.begin(), roots.end());
+        }
+        for (const auto& root : primaryRoots) {
+            if (root) {
+                options.rootSourceLabels[root.get()] = primarySourceLabel.toStdString();
+            }
+        }
+
+        if (!currentArchiveSupplementalRoots.empty()) {
+            primaryRoots.insert(
+                primaryRoots.end(),
+                currentArchiveSupplementalRoots.begin(),
+                currentArchiveSupplementalRoots.end());
+            for (const auto& root : currentArchiveSupplementalRoots) {
+                if (root) {
+                    options.rootSourceLabels[root.get()] = primarySourceLabel.toStdString();
+                }
+            }
+        }
+
+        OW3D::Render::W3DChunk skeletonRoots;
+        OW3D::Render::W3DChunk animationLibraryRoots;
+        for (const auto& asset : currentExternalRenderAssets) {
+            auto& targetRoots = asset.role == RenderSessionAssetRole::Skeleton
+                ? skeletonRoots
+                : animationLibraryRoots;
+            targetRoots.insert(targetRoots.end(), asset.roots.begin(), asset.roots.end());
+            for (const auto& root : asset.roots) {
+                if (root) {
+                    options.rootSourceLabels[root.get()] = asset.displayLabel.toStdString();
+                }
+            }
+        }
+
+        const OW3D::Render::W3DChunk* skeletonRootsPtr =
+            skeletonRoots.empty() ? nullptr : &skeletonRoots;
+        const OW3D::Render::W3DChunk* animationRootsPtr =
+            animationLibraryRoots.empty() ? nullptr : &animationLibraryRoots;
+        return OW3D::Render::BuildRenderScene(
+            primaryRoots,
+            options,
+            skeletonRootsPtr,
+            animationRootsPtr);
+    };
+
+    OW3D::Render::SceneBuildResult result = rebuildWithCurrentSession();
 
     if (!currentArchiveRenderPath.isEmpty() && !currentArchiveRenderEntries.empty()) {
         static const std::string kMissingSubObjectPrefix = "Referenced subobject mesh not found: ";
@@ -6295,10 +7411,139 @@ void MainWindow::rebuildRenderScene() {
         }
 
         if (loadedSupplementalEntries) {
-            result = OW3D::Render::BuildRenderScene(
-                roots,
-                options,
-                &currentArchiveSupplementalRoots);
+            result = rebuildWithCurrentSession();
+        }
+    }
+
+    if (currentArchiveRenderPath.isEmpty() && !currentFilePath.isEmpty()) {
+        QStringList missingHierarchyNames = CollectMissingRenderHierarchyNames(result);
+        QString missingHierarchyKey = missingHierarchyNames.join(QLatin1Char('|'));
+
+        if (!missingHierarchyNames.isEmpty() && !currentRenderTriedSkeletonAutoload) {
+            currentRenderTriedSkeletonAutoload = true;
+
+            const QFileInfo currentInfo(currentFilePath);
+            const QDir currentDir = currentInfo.absoluteDir();
+            const QStringList candidates = currentDir.entryList(
+                QStringList{ QStringLiteral("*.w3d"), QStringLiteral("*.W3D"), QStringLiteral("*.wlt"), QStringLiteral("*.WLT") },
+                QDir::Files | QDir::Readable,
+                QDir::Name | QDir::IgnoreCase);
+
+            QSet<QString> unresolved;
+            for (const QString& name : missingHierarchyNames) {
+                unresolved.insert(name.toLower());
+            }
+
+            bool loadedAnySkeleton = false;
+            for (const QString& fileName : candidates) {
+                if (unresolved.isEmpty()) {
+                    break;
+                }
+
+                const QString candidatePath =
+                    QDir::cleanPath(currentDir.absoluteFilePath(fileName));
+                if (candidatePath.compare(
+                    QDir::cleanPath(currentInfo.absoluteFilePath()),
+                    Qt::CaseInsensitive) == 0)
+                {
+                    continue;
+                }
+                if (currentExternalRenderAssetPaths.contains(
+                    NormalizeAbsolutePathKey(candidatePath)))
+                {
+                    continue;
+                }
+
+                RenderSessionAsset candidateAsset;
+                QString loadError;
+                if (!tryLoadRenderSessionAsset(
+                    candidatePath,
+                    RenderSessionAssetRole::Skeleton,
+                    candidateAsset,
+                    &loadError))
+                {
+                    continue;
+                }
+
+                bool matchesMissingHierarchy = false;
+                for (const QString& missingName : unresolved) {
+                    if (candidateAsset.hierarchyNames.contains(missingName)) {
+                        matchesMissingHierarchy = true;
+                        break;
+                    }
+                }
+                if (!matchesMissingHierarchy) {
+                    continue;
+                }
+
+                currentExternalRenderAssetPaths.insert(
+                    NormalizeAbsolutePathKey(candidateAsset.filePath));
+                currentExternalRenderAssets.push_back(std::move(candidateAsset));
+                loadedAnySkeleton = true;
+
+                const auto& loadedAsset = currentExternalRenderAssets.back();
+                for (const QString& hierarchyName : loadedAsset.hierarchyNames) {
+                    unresolved.remove(hierarchyName.toLower());
+                }
+            }
+
+            if (loadedAnySkeleton) {
+                result = rebuildWithCurrentSession();
+                missingHierarchyNames = CollectMissingRenderHierarchyNames(result);
+                missingHierarchyKey = missingHierarchyNames.join(QLatin1Char('|'));
+            }
+        }
+
+        if (missingHierarchyNames.isEmpty()) {
+            currentRenderSuppressedMissingHierarchyKey.clear();
+        }
+        else if (currentRenderSuppressedMissingHierarchyKey != missingHierarchyKey) {
+            const QString selectedSkeletonPath = QFileDialog::getOpenFileName(
+                this,
+                tr("Select Skeleton W3D/WLT"),
+                QFileInfo(currentFilePath).absolutePath(),
+                tr("W3D Files (*.w3d *.W3D *.wlt *.WLT);;All Files (*)"));
+
+            if (selectedSkeletonPath.isEmpty()) {
+                currentRenderSuppressedMissingHierarchyKey = missingHierarchyKey;
+            }
+            else {
+                const QString normalizedSkeletonPath = NormalizeAbsolutePathKey(selectedSkeletonPath);
+                if (!currentExternalRenderAssetPaths.contains(normalizedSkeletonPath)) {
+                    RenderSessionAsset selectedAsset;
+                    QString loadError;
+                    if (!tryLoadRenderSessionAsset(
+                        selectedSkeletonPath,
+                        RenderSessionAssetRole::Skeleton,
+                        selectedAsset,
+                        &loadError))
+                    {
+                        QMessageBox::warning(
+                            this,
+                            tr("Skeleton Load Failed"),
+                            loadError.isEmpty()
+                                ? tr("Failed to load the selected skeleton file.")
+                                : loadError);
+                    }
+                    else if (selectedAsset.hierarchyNames.isEmpty()) {
+                        QMessageBox::warning(
+                            this,
+                            tr("Skeleton Load Failed"),
+                            tr("The selected file does not contain any hierarchy data."));
+                    }
+                    else {
+                        currentExternalRenderAssetPaths.insert(
+                            NormalizeAbsolutePathKey(selectedAsset.filePath));
+                        currentExternalRenderAssets.push_back(std::move(selectedAsset));
+                        currentRenderSuppressedMissingHierarchyKey.clear();
+                        result = rebuildWithCurrentSession();
+                    }
+                }
+                else {
+                    currentRenderSuppressedMissingHierarchyKey.clear();
+                    result = rebuildWithCurrentSession();
+                }
+            }
         }
     }
 
@@ -6357,7 +7602,69 @@ void MainWindow::rebuildRenderScene() {
         }
     }
 
-    renderViewport->SetSceneResult(result);
+    currentRenderSceneResult = result;
+    if (currentRenderActiveClipIdentity) {
+        const int remappedIndex = findRenderAnimationIndexByIdentity(*currentRenderActiveClipIdentity);
+        if (remappedIndex >= 0
+            && currentRenderSceneResult.scene.animations[static_cast<std::size_t>(remappedIndex)].supportedForPlayback
+            && SceneHasCompatibleHierarchyForAnimation(currentRenderSceneResult.scene, remappedIndex))
+        {
+            currentRenderAnimationPlayback.activeAnimationIndex = remappedIndex;
+            const auto& clip =
+                currentRenderSceneResult.scene.animations[static_cast<std::size_t>(remappedIndex)];
+            const float duration = AnimationClipDurationSeconds(clip);
+            if (duration <= 0.0f) {
+                currentRenderAnimationPlayback.timeSeconds = 0.0f;
+                currentRenderAnimationPlayback.playing = false;
+            }
+            else if (currentRenderAnimationPlayback.loop) {
+                currentRenderAnimationPlayback.timeSeconds = std::fmod(
+                    std::max(0.0f, currentRenderAnimationPlayback.timeSeconds),
+                    duration);
+            }
+            else {
+                currentRenderAnimationPlayback.timeSeconds = std::clamp(
+                    currentRenderAnimationPlayback.timeSeconds,
+                    0.0f,
+                    duration);
+            }
+
+            if (currentRenderAnimationPlayback.playing) {
+                renderAnimationPlaybackElapsed.restart();
+                if (renderAnimationPlaybackTimer) {
+                    renderAnimationPlaybackTimer->start();
+                }
+            }
+            else {
+                if (renderAnimationPlaybackTimer) {
+                    renderAnimationPlaybackTimer->stop();
+                }
+                renderAnimationPlaybackElapsed.invalidate();
+            }
+        }
+        else {
+            currentRenderAnimationPlayback.activeAnimationIndex = -1;
+            currentRenderAnimationPlayback.timeSeconds = 0.0f;
+            currentRenderAnimationPlayback.playing = false;
+            currentRenderActiveClipIdentity.reset();
+            if (renderAnimationPlaybackTimer) {
+                renderAnimationPlaybackTimer->stop();
+            }
+            renderAnimationPlaybackElapsed.invalidate();
+        }
+    }
+    else {
+        currentRenderAnimationPlayback.activeAnimationIndex = -1;
+        currentRenderAnimationPlayback.timeSeconds = 0.0f;
+        currentRenderAnimationPlayback.playing = false;
+        if (renderAnimationPlaybackTimer) {
+            renderAnimationPlaybackTimer->stop();
+        }
+        renderAnimationPlaybackElapsed.invalidate();
+    }
+
+    renderViewport->SetSceneResult(currentRenderSceneResult);
+    syncRenderAnimationUi();
     applyRenderSettingsToViewport();
 }
 

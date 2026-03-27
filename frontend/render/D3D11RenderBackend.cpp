@@ -25,13 +25,6 @@
 namespace OW3D::Render {
 namespace {
 
-struct D3DVertex {
-    float position[3];
-    float normal[3];
-    float uv[2];
-    float color[4];
-};
-
 constexpr uint32_t MakeFourCC(char a, char b, char c, char d) {
     return static_cast<uint32_t>(static_cast<uint8_t>(a))
         | (static_cast<uint32_t>(static_cast<uint8_t>(b)) << 8)
@@ -81,15 +74,251 @@ uint32_t HashString32(const std::string& text) {
 Vec3 CameraForwardFromYawPitch(float yaw, float pitch) {
     const float cp = std::cos(pitch);
     return {
+        std::cos(yaw) * cp,
         std::sin(yaw) * cp,
-        std::sin(pitch),
-        std::cos(yaw) * cp
+        std::sin(pitch)
     };
 }
 
 float ClampPitch(float pitch) {
     const float limit = 1.55334303f; // ~89 degrees
     return std::clamp(pitch, -limit, limit);
+}
+
+Vec3 TransformDirection(const Mat4& m, const Vec3& v) {
+    return {
+        v.x * m.m[0] + v.y * m.m[4] + v.z * m.m[8],
+        v.x * m.m[1] + v.y * m.m[5] + v.z * m.m[9],
+        v.x * m.m[2] + v.y * m.m[6] + v.z * m.m[10]
+    };
+}
+
+Mat4 TTSkinIdentity() {
+    return Mat4::Identity();
+}
+
+Mat4 TTSkinQuaternionToMatrix(float x, float y, float z, float w) {
+    Mat4 out = Mat4::Identity();
+    out.m[0] = 1.0f - 2.0f * (y * y + z * z);
+    out.m[1] = 2.0f * (x * y - z * w);
+    out.m[2] = 2.0f * (z * x + y * w);
+
+    out.m[4] = 2.0f * (x * y + z * w);
+    out.m[5] = 1.0f - 2.0f * (z * z + x * x);
+    out.m[6] = 2.0f * (y * z - x * w);
+
+    out.m[8] = 2.0f * (z * x - y * w);
+    out.m[9] = 2.0f * (y * z + x * w);
+    out.m[10] = 1.0f - 2.0f * (y * y + x * x);
+    return out;
+}
+
+Mat4 TTSkinTransformFromTranslationRotation(const Vec3& translation, const Vec4& rotation) {
+    Mat4 out = TTSkinQuaternionToMatrix(rotation.x, rotation.y, rotation.z, rotation.w);
+    out.m[3] = translation.x;
+    out.m[7] = translation.y;
+    out.m[11] = translation.z;
+    return out;
+}
+
+Mat4 TTSkinMultiply(const Mat4& a, const Mat4& b) {
+    Mat4 out{};
+    for (int r = 0; r < 4; ++r) {
+        for (int c = 0; c < 4; ++c) {
+            out.m[r * 4 + c] =
+                a.m[r * 4 + 0] * b.m[0 * 4 + c] +
+                a.m[r * 4 + 1] * b.m[1 * 4 + c] +
+                a.m[r * 4 + 2] * b.m[2 * 4 + c] +
+                a.m[r * 4 + 3] * b.m[3 * 4 + c];
+        }
+    }
+    return out;
+}
+
+Vec3 TTSkinTransformPoint(const Mat4& m, const Vec3& p) {
+    return {
+        m.m[0] * p.x + m.m[1] * p.y + m.m[2] * p.z + m.m[3],
+        m.m[4] * p.x + m.m[5] * p.y + m.m[6] * p.z + m.m[7],
+        m.m[8] * p.x + m.m[9] * p.y + m.m[10] * p.z + m.m[11]
+    };
+}
+
+Vec3 TTSkinTransformDirection(const Mat4& m, const Vec3& v) {
+    return {
+        m.m[0] * v.x + m.m[1] * v.y + m.m[2] * v.z,
+        m.m[4] * v.x + m.m[5] * v.y + m.m[6] * v.z,
+        m.m[8] * v.x + m.m[9] * v.y + m.m[10] * v.z
+    };
+}
+
+float DotQuat(const Vec4& a, const Vec4& b) {
+    return a.x * b.x + a.y * b.y + a.z * b.z + a.w * b.w;
+}
+
+Vec4 NormalizeQuat(Vec4 q) {
+    const float len = std::sqrt(DotQuat(q, q));
+    if (len <= 1.0e-6f) {
+        return { 0.0f, 0.0f, 0.0f, 1.0f };
+    }
+    const float invLen = 1.0f / len;
+    q.x *= invLen;
+    q.y *= invLen;
+    q.z *= invLen;
+    q.w *= invLen;
+    return q;
+}
+
+Vec4 SlerpQuat(Vec4 a, Vec4 b, float t) {
+    a = NormalizeQuat(a);
+    b = NormalizeQuat(b);
+
+    float cosTheta = DotQuat(a, b);
+    if (cosTheta < 0.0f) {
+        cosTheta = -cosTheta;
+        b.x = -b.x;
+        b.y = -b.y;
+        b.z = -b.z;
+        b.w = -b.w;
+    }
+
+    if (cosTheta > 0.9995f) {
+        Vec4 out{
+            a.x + (b.x - a.x) * t,
+            a.y + (b.y - a.y) * t,
+            a.z + (b.z - a.z) * t,
+            a.w + (b.w - a.w) * t
+        };
+        return NormalizeQuat(out);
+    }
+
+    const float theta = std::acos(std::clamp(cosTheta, -1.0f, 1.0f));
+    const float sinTheta = std::sin(theta);
+    if (sinTheta <= 1.0e-6f) {
+        return a;
+    }
+
+    const float weightA = std::sin((1.0f - t) * theta) / sinTheta;
+    const float weightB = std::sin(t * theta) / sinTheta;
+    return {
+        a.x * weightA + b.x * weightB,
+        a.y * weightA + b.y * weightB,
+        a.z * weightA + b.z * weightB,
+        a.w * weightA + b.w * weightB
+    };
+}
+
+float SampleFloatTrack(const std::vector<RenderFloatKeyframe>& track, float frame) {
+    if (track.empty()) {
+        return 0.0f;
+    }
+    if (track.size() == 1 || frame <= track.front().frame) {
+        return track.front().value;
+    }
+
+    for (std::size_t i = 0; i + 1u < track.size(); ++i) {
+        const auto& current = track[i];
+        const auto& next = track[i + 1u];
+        if (frame > next.frame) {
+            continue;
+        }
+        if (current.hold || next.frame <= current.frame) {
+            return current.value;
+        }
+        const float t = std::clamp(
+            (frame - current.frame) / std::max(1.0e-6f, next.frame - current.frame),
+            0.0f,
+            1.0f);
+        return current.value + (next.value - current.value) * t;
+    }
+
+    return track.back().value;
+}
+
+Vec4 SampleQuatTrack(const std::vector<RenderQuatKeyframe>& track, float frame) {
+    if (track.empty()) {
+        return { 0.0f, 0.0f, 0.0f, 1.0f };
+    }
+    if (track.size() == 1 || frame <= track.front().frame) {
+        return NormalizeQuat(track.front().value);
+    }
+
+    for (std::size_t i = 0; i + 1u < track.size(); ++i) {
+        const auto& current = track[i];
+        const auto& next = track[i + 1u];
+        if (frame > next.frame) {
+            continue;
+        }
+        if (current.hold || next.frame <= current.frame) {
+            return NormalizeQuat(current.value);
+        }
+        const float t = std::clamp(
+            (frame - current.frame) / std::max(1.0e-6f, next.frame - current.frame),
+            0.0f,
+            1.0f);
+        return NormalizeQuat(SlerpQuat(current.value, next.value, t));
+    }
+
+    return NormalizeQuat(track.back().value);
+}
+
+float WrapAnimationFrame(const RenderAnimationClip& clip, float timeSeconds) {
+    if (clip.numFrames == 0u || clip.frameRate <= 0.0f) {
+        return 0.0f;
+    }
+
+    const float totalFrames = static_cast<float>(clip.numFrames);
+    if (totalFrames <= 1.0f) {
+        return 0.0f;
+    }
+
+    float frame = std::fmod(timeSeconds * clip.frameRate, totalFrames);
+    if (frame < 0.0f) {
+        frame += totalFrames;
+    }
+    return frame;
+}
+
+const RenderAnimationClip* ResolveActiveClipForHierarchy(
+    const RenderScene& scene,
+    const RenderHierarchy& hierarchy,
+    const AnimationPlaybackState& playback,
+    float timeSeconds,
+    float& outAnimationFrame)
+{
+    outAnimationFrame = 0.0f;
+    if (playback.activeAnimationIndex < 0
+        || playback.activeAnimationIndex >= static_cast<int>(scene.animations.size())) {
+        return nullptr;
+    }
+    if (std::find(
+        hierarchy.compatibleAnimationIndices.begin(),
+        hierarchy.compatibleAnimationIndices.end(),
+        playback.activeAnimationIndex) == hierarchy.compatibleAnimationIndices.end()) {
+        return nullptr;
+    }
+
+    const RenderAnimationClip& clip = scene.animations[static_cast<std::size_t>(playback.activeAnimationIndex)];
+    if (!clip.supportedForPlayback) {
+        return nullptr;
+    }
+
+    if (clip.numFrames == 0u || clip.frameRate <= 0.0f) {
+        outAnimationFrame = 0.0f;
+        return &clip;
+    }
+
+    const float rawFrame = timeSeconds * clip.frameRate;
+    if (playback.loop) {
+        outAnimationFrame = WrapAnimationFrame(clip, timeSeconds);
+    }
+    else {
+        outAnimationFrame = std::clamp(
+            rawFrame,
+            0.0f,
+            std::max(0.0f, static_cast<float>(clip.numFrames) - 1.0f));
+    }
+
+    return &clip;
 }
 
 bool BuildSrvFromDdsData(
@@ -347,7 +576,6 @@ bool D3D11RenderBackend::UploadScene(const RenderScene& scene) {
     m_scene = scene;
     m_gpuMeshes.clear();
     m_gpuTextures.clear();
-    m_startTime = std::chrono::steady_clock::now();
 
     m_gpuMeshes.reserve(scene.meshes.size());
     for (const auto& mesh : scene.meshes) {
@@ -403,6 +631,16 @@ void D3D11RenderBackend::SetRenderSettings(const RenderSettings& settings) {
     m_settings = settings;
 }
 
+void D3D11RenderBackend::SetAnimationPlayback(const AnimationPlaybackState& playback) {
+    m_animationPlayback = playback;
+    m_animationPlayback.activeAnimationIndex = std::clamp(
+        m_animationPlayback.activeAnimationIndex,
+        -1,
+        static_cast<int>(m_scene.animations.size()) - 1);
+    m_animationPlayback.timeSeconds = std::max(0.0f, m_animationPlayback.timeSeconds);
+    m_animationPlayback.speed = std::max(0.01f, m_animationPlayback.speed);
+}
+
 void D3D11RenderBackend::SetSelectedInstance(const std::optional<RenderInstanceKey>& selected) {
     m_selectedInstance = selected;
 }
@@ -450,7 +688,7 @@ void D3D11RenderBackend::RenderFrame(const std::function<void()>& overlayCallbac
     const Vec3 cameraForward = CameraForwardFromYawPitch(m_camera.yaw, m_camera.pitch);
     const Vec3 cameraPos = m_camera.target - cameraForward * m_camera.distance;
 
-    const Mat4 view = LookAtLH(cameraPos, m_camera.target, { 0.0f, 1.0f, 0.0f });
+    const Mat4 view = LookAtLH(cameraPos, m_camera.target, { 0.0f, 0.0f, 1.0f });
     const float aspect = static_cast<float>(m_viewWidth) / static_cast<float>(std::max<uint32_t>(1, m_viewHeight));
     const Mat4 projection = PerspectiveFovLH(DegToRad(m_camera.fovDeg), aspect, m_camera.nearPlane, m_camera.farPlane);
 
@@ -488,43 +726,12 @@ void D3D11RenderBackend::RenderFrame(const std::function<void()>& overlayCallbac
     m_context->VSSetConstantBuffers(0, 1, &frameCB);
     m_context->PSSetConstantBuffers(0, 1, &frameCB);
 
-    std::vector<std::vector<Mat4>> hierarchyWorld;
-    hierarchyWorld.resize(m_scene.hierarchies.size());
-    for (std::size_t h = 0; h < m_scene.hierarchies.size(); ++h) {
-        const auto& hierarchy = m_scene.hierarchies[h];
-        auto& worlds = hierarchyWorld[h];
-        worlds.resize(hierarchy.pivots.size(), Mat4::Identity());
-
-        std::vector<uint8_t> state(hierarchy.pivots.size(), 0);
-        std::function<void(int)> buildPivot = [&](int pivotIndex) {
-            if (pivotIndex < 0 || pivotIndex >= static_cast<int>(hierarchy.pivots.size())) {
-                return;
-            }
-            if (state[pivotIndex] == 2) {
-                return;
-            }
-            if (state[pivotIndex] == 1) {
-                worlds[pivotIndex] = hierarchy.pivots[pivotIndex].localTransform;
-                state[pivotIndex] = 2;
-                return;
-            }
-
-            state[pivotIndex] = 1;
-            const int parentIndex = hierarchy.pivots[pivotIndex].parentIndex;
-            if (parentIndex >= 0 && parentIndex < static_cast<int>(hierarchy.pivots.size())) {
-                buildPivot(parentIndex);
-                worlds[pivotIndex] = Multiply(worlds[parentIndex], hierarchy.pivots[pivotIndex].localTransform);
-            }
-            else {
-                worlds[pivotIndex] = hierarchy.pivots[pivotIndex].localTransform;
-            }
-            state[pivotIndex] = 2;
-        };
-
-        for (int i = 0; i < static_cast<int>(hierarchy.pivots.size()); ++i) {
-            buildPivot(i);
-        }
-    }
+    FrameStats stats{};
+    const float timeSeconds = std::max(0.0f, m_animationPlayback.timeSeconds);
+    const std::vector<std::vector<Mat4>> hierarchyWorld =
+        BuildAnimatedHierarchyWorldTransforms(timeSeconds);
+    const std::vector<std::vector<Mat4>> cpuSkinHierarchyWorld =
+        BuildCpuSkinHierarchyWorldTransforms(timeSeconds);
 
     auto getWorldForBinding = [&](int hierarchyIndex, int pivotIndex, const Mat4& fallback) -> Mat4 {
         if (hierarchyIndex < 0 || hierarchyIndex >= static_cast<int>(hierarchyWorld.size())) {
@@ -536,10 +743,6 @@ void D3D11RenderBackend::RenderFrame(const std::function<void()>& overlayCallbac
         }
         return worlds[pivotIndex];
     };
-
-    FrameStats stats{};
-    const auto now = std::chrono::steady_clock::now();
-    const float timeSeconds = std::chrono::duration<float>(now - m_startTime).count();
 
     for (std::size_t lodGroupIndex = 0; lodGroupIndex < m_scene.lodGroups.size(); ++lodGroupIndex) {
         const auto& lodGroup = m_scene.lodGroups[lodGroupIndex];
@@ -561,7 +764,7 @@ void D3D11RenderBackend::RenderFrame(const std::function<void()>& overlayCallbac
                 continue;
             }
 
-            const GpuMesh& gpuMesh = m_gpuMeshes[entry.meshIndex];
+            GpuMesh& gpuMesh = m_gpuMeshes[entry.meshIndex];
             if (gpuMesh.hidden) {
                 continue;
             }
@@ -574,11 +777,21 @@ void D3D11RenderBackend::RenderFrame(const std::function<void()>& overlayCallbac
                 continue;
             }
 
-            Mat4 world = getWorldForBinding(entry.hierarchyIndex, entry.pivotIndex, Mat4::Identity());
+            Mat4 world = gpuMesh.skinned
+                ? Mat4::Identity()
+                : getWorldForBinding(entry.hierarchyIndex, entry.pivotIndex, Mat4::Identity());
             if (const auto overrideIt = m_transformOverrides.find(key); overrideIt != m_transformOverrides.end()) {
                 world = overrideIt->second;
             }
-            const Vec3 worldCenter = TransformPoint(world, gpuMesh.boundsCenter);
+            Mat4 boundsWorld = world;
+            if (gpuMesh.skinned
+                && entry.hierarchyIndex >= 0
+                && entry.hierarchyIndex < static_cast<int>(hierarchyWorld.size())
+                && !hierarchyWorld[static_cast<std::size_t>(entry.hierarchyIndex)].empty())
+            {
+                boundsWorld = hierarchyWorld[static_cast<std::size_t>(entry.hierarchyIndex)].front();
+            }
+            const Vec3 worldCenter = TransformPoint(boundsWorld, gpuMesh.boundsCenter);
             const float distanceToCamera = Length(worldCenter - cameraPos);
 
             if (forcedEntryIndex < 0 && !ShouldRenderLodEntry(entry, gpuMesh, distanceToCamera)) {
@@ -588,6 +801,16 @@ void D3D11RenderBackend::RenderFrame(const std::function<void()>& overlayCallbac
             const RenderMaterial* material = nullptr;
             if (gpuMesh.materialIndex >= 0 && gpuMesh.materialIndex < static_cast<int>(m_scene.materials.size())) {
                 material = &m_scene.materials[gpuMesh.materialIndex];
+            }
+
+            if (gpuMesh.skinned
+                && !UpdateSkinnedMeshVertices(
+                    m_scene.meshes[static_cast<std::size_t>(entry.meshIndex)],
+                    gpuMesh,
+                    entry.hierarchyIndex,
+                    cpuSkinHierarchyWorld))
+            {
+                continue;
             }
 
             const bool selected = m_selectedInstance.has_value() && *m_selectedInstance == key;
@@ -601,7 +824,7 @@ void D3D11RenderBackend::RenderFrame(const std::function<void()>& overlayCallbac
             continue;
         }
 
-        const GpuMesh& gpuMesh = m_gpuMeshes[node.meshIndex];
+        GpuMesh& gpuMesh = m_gpuMeshes[node.meshIndex];
         if (gpuMesh.hidden) {
             continue;
         }
@@ -614,13 +837,25 @@ void D3D11RenderBackend::RenderFrame(const std::function<void()>& overlayCallbac
             continue;
         }
 
-        Mat4 world = getWorldForBinding(node.hierarchyIndex, node.pivotIndex, node.localTransform);
+        Mat4 world = gpuMesh.skinned
+            ? Mat4::Identity()
+            : getWorldForBinding(node.hierarchyIndex, node.pivotIndex, node.localTransform);
         if (const auto overrideIt = m_transformOverrides.find(key); overrideIt != m_transformOverrides.end()) {
             world = overrideIt->second;
         }
         const RenderMaterial* material = nullptr;
         if (gpuMesh.materialIndex >= 0 && gpuMesh.materialIndex < static_cast<int>(m_scene.materials.size())) {
             material = &m_scene.materials[gpuMesh.materialIndex];
+        }
+
+        if (gpuMesh.skinned
+            && !UpdateSkinnedMeshVertices(
+                m_scene.meshes[static_cast<std::size_t>(node.meshIndex)],
+                gpuMesh,
+                node.hierarchyIndex,
+                cpuSkinHierarchyWorld))
+        {
+            continue;
         }
 
         const bool selected = m_selectedInstance.has_value() && *m_selectedInstance == key;
@@ -909,10 +1144,10 @@ float4 PSMain(VSOut input) : SV_TARGET
     }
 
     constexpr std::array<D3D11_INPUT_ELEMENT_DESC, 4> kInputLayout = {
-        D3D11_INPUT_ELEMENT_DESC{ "POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, static_cast<UINT>(offsetof(D3DVertex, position)), D3D11_INPUT_PER_VERTEX_DATA, 0 },
-        D3D11_INPUT_ELEMENT_DESC{ "NORMAL", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, static_cast<UINT>(offsetof(D3DVertex, normal)), D3D11_INPUT_PER_VERTEX_DATA, 0 },
-        D3D11_INPUT_ELEMENT_DESC{ "TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 0, static_cast<UINT>(offsetof(D3DVertex, uv)), D3D11_INPUT_PER_VERTEX_DATA, 0 },
-        D3D11_INPUT_ELEMENT_DESC{ "COLOR", 0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, static_cast<UINT>(offsetof(D3DVertex, color)), D3D11_INPUT_PER_VERTEX_DATA, 0 }
+        D3D11_INPUT_ELEMENT_DESC{ "POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, static_cast<UINT>(offsetof(CpuVertex, position)), D3D11_INPUT_PER_VERTEX_DATA, 0 },
+        D3D11_INPUT_ELEMENT_DESC{ "NORMAL", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, static_cast<UINT>(offsetof(CpuVertex, normal)), D3D11_INPUT_PER_VERTEX_DATA, 0 },
+        D3D11_INPUT_ELEMENT_DESC{ "TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 0, static_cast<UINT>(offsetof(CpuVertex, uv)), D3D11_INPUT_PER_VERTEX_DATA, 0 },
+        D3D11_INPUT_ELEMENT_DESC{ "COLOR", 0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, static_cast<UINT>(offsetof(CpuVertex, color)), D3D11_INPUT_PER_VERTEX_DATA, 0 }
     };
 
     hr = m_device->CreateInputLayout(
@@ -1040,10 +1275,10 @@ bool D3D11RenderBackend::BuildGpuMesh(const RenderMesh& mesh, GpuMesh& outMesh) 
         return false;
     }
 
-    std::vector<D3DVertex> vertices;
+    std::vector<CpuVertex> vertices;
     vertices.reserve(mesh.vertices.size());
     for (const auto& src : mesh.vertices) {
-        D3DVertex dst{};
+        CpuVertex dst{};
         dst.position[0] = src.position.x;
         dst.position[1] = src.position.y;
         dst.position[2] = src.position.z;
@@ -1061,8 +1296,9 @@ bool D3D11RenderBackend::BuildGpuMesh(const RenderMesh& mesh, GpuMesh& outMesh) 
 
     D3D11_BUFFER_DESC vbDesc{};
     vbDesc.BindFlags = D3D11_BIND_VERTEX_BUFFER;
-    vbDesc.ByteWidth = static_cast<UINT>(vertices.size() * sizeof(D3DVertex));
-    vbDesc.Usage = D3D11_USAGE_IMMUTABLE;
+    vbDesc.ByteWidth = static_cast<UINT>(vertices.size() * sizeof(CpuVertex));
+    vbDesc.Usage = mesh.skinned ? D3D11_USAGE_DYNAMIC : D3D11_USAGE_IMMUTABLE;
+    vbDesc.CPUAccessFlags = mesh.skinned ? D3D11_CPU_ACCESS_WRITE : 0u;
 
     D3D11_SUBRESOURCE_DATA vbInit{};
     vbInit.pSysMem = vertices.data();
@@ -1090,8 +1326,10 @@ bool D3D11RenderBackend::BuildGpuMesh(const RenderMesh& mesh, GpuMesh& outMesh) 
     outMesh.materialIndex = mesh.materialIndex;
     outMesh.twoSided = mesh.twoSided;
     outMesh.hidden = mesh.hidden;
+    outMesh.skinned = mesh.skinned;
     outMesh.boundsCenter = mesh.boundsCenter;
     outMesh.boundsRadius = mesh.boundsRadius;
+    outMesh.cpuVertices = std::move(vertices);
 
     return true;
 }
@@ -1144,6 +1382,238 @@ bool D3D11RenderBackend::BuildGpuTexture(const RenderTexture& texture, GpuTextur
     return SUCCEEDED(hr);
 }
 
+std::vector<std::vector<Mat4>> D3D11RenderBackend::BuildAnimatedHierarchyWorldTransforms(
+    float timeSeconds) const
+{
+    std::vector<std::vector<Mat4>> hierarchyWorld;
+    hierarchyWorld.resize(m_scene.hierarchies.size());
+
+    for (std::size_t h = 0; h < m_scene.hierarchies.size(); ++h) {
+        const auto& hierarchy = m_scene.hierarchies[h];
+        auto& worlds = hierarchyWorld[h];
+        worlds.resize(hierarchy.pivots.size(), Mat4::Identity());
+
+        float animationFrame = 0.0f;
+        const RenderAnimationClip* activeClip =
+            ResolveActiveClipForHierarchy(
+                m_scene,
+                hierarchy,
+                m_animationPlayback,
+                timeSeconds,
+                animationFrame);
+
+        std::vector<uint8_t> state(hierarchy.pivots.size(), 0);
+        std::function<void(int)> buildPivot = [&](int pivotIndex) {
+            if (pivotIndex < 0 || pivotIndex >= static_cast<int>(hierarchy.pivots.size())) {
+                return;
+            }
+            if (state[static_cast<std::size_t>(pivotIndex)] == 2) {
+                return;
+            }
+            if (state[static_cast<std::size_t>(pivotIndex)] == 1) {
+                worlds[static_cast<std::size_t>(pivotIndex)] =
+                    hierarchy.pivots[static_cast<std::size_t>(pivotIndex)].localTransform;
+                state[static_cast<std::size_t>(pivotIndex)] = 2;
+                return;
+            }
+
+            state[static_cast<std::size_t>(pivotIndex)] = 1;
+            Mat4 local = hierarchy.pivots[static_cast<std::size_t>(pivotIndex)].localTransform;
+
+            if (activeClip
+                && pivotIndex > 0
+                && pivotIndex < static_cast<int>(activeClip->pivots.size())) {
+                const auto& animPivot = activeClip->pivots[static_cast<std::size_t>(pivotIndex)];
+                const Vec3 translation = {
+                    SampleFloatTrack(animPivot.translationX, animationFrame),
+                    SampleFloatTrack(animPivot.translationY, animationFrame),
+                    SampleFloatTrack(animPivot.translationZ, animationFrame)
+                };
+                const Vec4 rotation = SampleQuatTrack(animPivot.rotation, animationFrame);
+                const Mat4 animationLocal = TransformFromTranslationRotation(
+                    translation,
+                    rotation.x,
+                    rotation.y,
+                    rotation.z,
+                    rotation.w);
+                local = Multiply(local, animationLocal);
+            }
+
+            const int parentIndex = hierarchy.pivots[static_cast<std::size_t>(pivotIndex)].parentIndex;
+            if (parentIndex >= 0 && parentIndex < static_cast<int>(hierarchy.pivots.size())) {
+                buildPivot(parentIndex);
+                worlds[static_cast<std::size_t>(pivotIndex)] =
+                    Multiply(worlds[static_cast<std::size_t>(parentIndex)], local);
+            }
+            else {
+                worlds[static_cast<std::size_t>(pivotIndex)] = local;
+            }
+            state[static_cast<std::size_t>(pivotIndex)] = 2;
+        };
+
+        for (int i = 0; i < static_cast<int>(hierarchy.pivots.size()); ++i) {
+            buildPivot(i);
+        }
+    }
+
+    return hierarchyWorld;
+}
+
+std::vector<std::vector<Mat4>> D3D11RenderBackend::BuildCpuSkinHierarchyWorldTransforms(
+    float timeSeconds) const
+{
+    std::vector<std::vector<Mat4>> hierarchyWorld;
+    hierarchyWorld.resize(m_scene.hierarchies.size());
+
+    for (std::size_t h = 0; h < m_scene.hierarchies.size(); ++h) {
+        const auto& hierarchy = m_scene.hierarchies[h];
+        auto& worlds = hierarchyWorld[h];
+        worlds.resize(hierarchy.pivots.size(), TTSkinIdentity());
+
+        float animationFrame = 0.0f;
+        const RenderAnimationClip* activeClip =
+            ResolveActiveClipForHierarchy(
+                m_scene,
+                hierarchy,
+                m_animationPlayback,
+                timeSeconds,
+                animationFrame);
+
+        std::vector<uint8_t> state(hierarchy.pivots.size(), 0);
+        std::function<void(int)> buildPivot = [&](int pivotIndex) {
+            if (pivotIndex < 0 || pivotIndex >= static_cast<int>(hierarchy.pivots.size())) {
+                return;
+            }
+            if (state[static_cast<std::size_t>(pivotIndex)] == 2) {
+                return;
+            }
+            if (state[static_cast<std::size_t>(pivotIndex)] == 1) {
+                worlds[static_cast<std::size_t>(pivotIndex)] = TTSkinIdentity();
+                state[static_cast<std::size_t>(pivotIndex)] = 2;
+                return;
+            }
+
+            state[static_cast<std::size_t>(pivotIndex)] = 1;
+            const auto& pivot = hierarchy.pivots[static_cast<std::size_t>(pivotIndex)];
+            Mat4 local = (pivotIndex == 0)
+                ? TTSkinIdentity()
+                : TTSkinTransformFromTranslationRotation(pivot.baseTranslation, pivot.baseRotation);
+
+            if (activeClip
+                && pivotIndex > 0
+                && pivotIndex < static_cast<int>(activeClip->pivots.size())) {
+                const auto& animPivot = activeClip->pivots[static_cast<std::size_t>(pivotIndex)];
+                const Vec3 translation = {
+                    SampleFloatTrack(animPivot.translationX, animationFrame),
+                    SampleFloatTrack(animPivot.translationY, animationFrame),
+                    SampleFloatTrack(animPivot.translationZ, animationFrame)
+                };
+                const Vec4 rotation = SampleQuatTrack(animPivot.rotation, animationFrame);
+                const Mat4 animationLocal = TTSkinTransformFromTranslationRotation(translation, rotation);
+                local = TTSkinMultiply(local, animationLocal);
+            }
+
+            const int parentIndex = pivot.parentIndex;
+            if (parentIndex >= 0 && parentIndex < static_cast<int>(hierarchy.pivots.size())) {
+                buildPivot(parentIndex);
+                worlds[static_cast<std::size_t>(pivotIndex)] =
+                    TTSkinMultiply(worlds[static_cast<std::size_t>(parentIndex)], local);
+            }
+            else {
+                worlds[static_cast<std::size_t>(pivotIndex)] = local;
+            }
+            state[static_cast<std::size_t>(pivotIndex)] = 2;
+        };
+
+        for (int i = 0; i < static_cast<int>(hierarchy.pivots.size()); ++i) {
+            buildPivot(i);
+        }
+    }
+
+    return hierarchyWorld;
+}
+
+bool D3D11RenderBackend::UpdateSkinnedMeshVertices(
+    const RenderMesh& mesh,
+    GpuMesh& gpuMesh,
+    int hierarchyIndex,
+    const std::vector<std::vector<Mat4>>& hierarchyWorld)
+{
+    if (!m_context || !gpuMesh.vertexBuffer || gpuMesh.cpuVertices.size() != mesh.vertices.size()) {
+        return false;
+    }
+
+    const std::vector<Mat4>* bones = nullptr;
+    if (hierarchyIndex >= 0 && hierarchyIndex < static_cast<int>(hierarchyWorld.size())) {
+        bones = &hierarchyWorld[static_cast<std::size_t>(hierarchyIndex)];
+    }
+
+    const int influencesPerVertex =
+        std::clamp<int>(static_cast<int>(mesh.bonesPerVertex), 1, 4);
+
+    for (std::size_t i = 0; i < mesh.vertices.size(); ++i) {
+        const auto& src = mesh.vertices[i];
+        auto& dst = gpuMesh.cpuVertices[i];
+
+        Vec3 positionAccum{ 0.0f, 0.0f, 0.0f };
+        Vec3 normalAccum{ 0.0f, 0.0f, 0.0f };
+        bool wroteSkinning = false;
+
+        if (bones && !bones->empty()) {
+            for (int influence = 0; influence < influencesPerVertex; ++influence) {
+                const uint16_t boneIndex = src.boneIndices[static_cast<std::size_t>(influence)];
+                const float weight = src.boneWeights[static_cast<std::size_t>(influence)];
+                if (boneIndex == 0xFFFFu || weight <= 0.0f) {
+                    continue;
+                }
+                if (boneIndex >= bones->size()) {
+                    continue;
+                }
+
+                const bool useSecondary = (influence == 1) && mesh.hasSecondaryVertexStream;
+                const Vec3& sourcePosition = useSecondary ? src.secondaryPosition : src.position;
+                const Vec3& sourceNormal = useSecondary ? src.secondaryNormal : src.normal;
+                const Mat4& boneTransform = (*bones)[boneIndex];
+
+                positionAccum = positionAccum + (TTSkinTransformPoint(boneTransform, sourcePosition) * weight);
+                normalAccum = normalAccum + (TTSkinTransformDirection(boneTransform, sourceNormal) * weight);
+                wroteSkinning = true;
+            }
+        }
+
+        if (!wroteSkinning) {
+            positionAccum = src.position;
+            normalAccum = src.normal;
+        }
+
+        normalAccum = Normalize(normalAccum);
+        dst.position[0] = positionAccum.x;
+        dst.position[1] = positionAccum.y;
+        dst.position[2] = positionAccum.z;
+        dst.normal[0] = normalAccum.x;
+        dst.normal[1] = normalAccum.y;
+        dst.normal[2] = normalAccum.z;
+    }
+
+    D3D11_MAPPED_SUBRESOURCE mapped{};
+    const HRESULT hr = m_context->Map(
+        gpuMesh.vertexBuffer.Get(),
+        0,
+        D3D11_MAP_WRITE_DISCARD,
+        0,
+        &mapped);
+    if (FAILED(hr) || !mapped.pData) {
+        return false;
+    }
+
+    std::memcpy(
+        mapped.pData,
+        gpuMesh.cpuVertices.data(),
+        gpuMesh.cpuVertices.size() * sizeof(CpuVertex));
+    m_context->Unmap(gpuMesh.vertexBuffer.Get(), 0);
+    return true;
+}
+
 void D3D11RenderBackend::DrawMesh(
     const GpuMesh& mesh,
     const Mat4& world,
@@ -1157,7 +1627,7 @@ void D3D11RenderBackend::DrawMesh(
         return;
     }
 
-    const UINT stride = sizeof(D3DVertex);
+    const UINT stride = sizeof(CpuVertex);
     const UINT offset = 0;
 
     ID3D11Buffer* vb = mesh.vertexBuffer.Get();

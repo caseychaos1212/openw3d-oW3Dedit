@@ -30,6 +30,7 @@ public:
     void Resize(uint32_t width, uint32_t height) override;
     void SetCamera(const CameraState& camera) override;
     void SetRenderSettings(const RenderSettings& settings) override;
+    void SetAnimationPlayback(const AnimationPlaybackState& playback) override;
     void SetSelectedInstance(const std::optional<RenderInstanceKey>& selected) override;
     void SetTransformOverrides(
         const std::unordered_map<RenderInstanceKey, Mat4, RenderInstanceKeyHash>& overrides) override;
@@ -41,6 +42,13 @@ public:
     void* NativeDeviceContextHandle() const override { return m_context.Get(); }
 
 private:
+    struct CpuVertex {
+        float position[3];
+        float normal[3];
+        float uv[2];
+        float color[4];
+    };
+
     struct GpuMesh {
         Microsoft::WRL::ComPtr<ID3D11Buffer> vertexBuffer;
         Microsoft::WRL::ComPtr<ID3D11Buffer> indexBuffer;
@@ -49,8 +57,10 @@ private:
         int materialIndex = -1;
         bool twoSided = false;
         bool hidden = false;
+        bool skinned = false;
         Vec3 boundsCenter{};
         float boundsRadius = 0.0f;
+        std::vector<CpuVertex> cpuVertices;
     };
 
     struct GpuTexture {
@@ -96,6 +106,13 @@ private:
         FrameStats& stats);
 
     Mat4 BuildPivotWorldTransform(int hierarchyIndex, int pivotIndex) const;
+    std::vector<std::vector<Mat4>> BuildAnimatedHierarchyWorldTransforms(float timeSeconds) const;
+    std::vector<std::vector<Mat4>> BuildCpuSkinHierarchyWorldTransforms(float timeSeconds) const;
+    bool UpdateSkinnedMeshVertices(
+        const RenderMesh& mesh,
+        GpuMesh& gpuMesh,
+        int hierarchyIndex,
+        const std::vector<std::vector<Mat4>>& hierarchyWorld);
     bool ShouldRenderLodEntry(const RenderLodEntry& entry, const GpuMesh& mesh, float cameraDistance) const;
 
     Microsoft::WRL::ComPtr<ID3D11Device> m_device;
@@ -127,12 +144,11 @@ private:
 
     CameraState m_camera{};
     RenderSettings m_settings{};
+    AnimationPlaybackState m_animationPlayback{};
     FrameStats m_lastFrameStats{};
     std::optional<RenderInstanceKey> m_selectedInstance;
     std::unordered_map<RenderInstanceKey, Mat4, RenderInstanceKeyHash> m_transformOverrides;
     std::unordered_set<RenderInstanceKey, RenderInstanceKeyHash> m_hiddenInstances;
-
-    std::chrono::steady_clock::time_point m_startTime = std::chrono::steady_clock::now();
 
     uint32_t m_viewWidth = 1;
     uint32_t m_viewHeight = 1;

@@ -7,13 +7,20 @@
 
 #include <QApplication>
 #include <QCursor>
+#include <QDialog>
+#include <QDialogButtonBox>
+#include <QDoubleSpinBox>
+#include <QFormLayout>
 #include <QHideEvent>
 #include <QKeyEvent>
+#include <QLabel>
 #include <QMouseEvent>
+#include <QMessageBox>
 #include <QPaintEngine>
 #include <QResizeEvent>
 #include <QShowEvent>
 #include <QTimer>
+#include <QVBoxLayout>
 #include <QWheelEvent>
 
 #include "D3D11RenderBackend.h"
@@ -32,12 +39,22 @@ struct Quaternion {
     float w = 1.0f;
 };
 
+constexpr float kCameraPitchLimit = 1.55334303f; // ~89 degrees
+
+Vec3 WorldUp() {
+    return { 0.0f, 0.0f, 1.0f };
+}
+
+float RadToDeg(float radians) {
+    return radians * 57.29577951308232f;
+}
+
 Vec3 CameraForward(float yaw, float pitch) {
     const float cp = std::cos(pitch);
     return {
+        std::cos(yaw) * cp,
         std::sin(yaw) * cp,
-        std::sin(pitch),
-        std::cos(yaw) * cp
+        std::sin(pitch)
     };
 }
 
@@ -48,6 +65,49 @@ void Mat4ToFloatArray(const Mat4& m, float out[16]) {
 Mat4 Mat4FromFloatArray(const float in[16]) {
     Mat4 out{};
     std::memcpy(out.m, in, sizeof(float) * 16);
+    return out;
+}
+
+Mat4 OrthonormalizeRigidTransform(const Mat4& m) {
+    Vec3 x = { m.m[0], m.m[1], m.m[2] };
+    Vec3 y = { m.m[4], m.m[5], m.m[6] };
+    Vec3 z = { m.m[8], m.m[9], m.m[10] };
+
+    if (Length(x) <= 1e-6f) {
+        x = { 1.0f, 0.0f, 0.0f };
+    }
+    x = Normalize(x);
+
+    y = y - x * Dot(x, y);
+    if (Length(y) <= 1e-6f) {
+        y = Cross({ 0.0f, 0.0f, 1.0f }, x);
+        if (Length(y) <= 1e-6f) {
+            y = Cross({ 0.0f, 1.0f, 0.0f }, x);
+        }
+    }
+    y = Normalize(y);
+
+    z = Cross(x, y);
+    if (Length(z) <= 1e-6f) {
+        z = { 0.0f, 0.0f, 1.0f };
+    }
+    z = Normalize(z);
+
+    y = Normalize(Cross(z, x));
+
+    Mat4 out = Mat4::Identity();
+    out.m[0] = x.x;
+    out.m[1] = x.y;
+    out.m[2] = x.z;
+    out.m[4] = y.x;
+    out.m[5] = y.y;
+    out.m[6] = y.z;
+    out.m[8] = z.x;
+    out.m[9] = z.y;
+    out.m[10] = z.z;
+    out.m[12] = m.m[12];
+    out.m[13] = m.m[13];
+    out.m[14] = m.m[14];
     return out;
 }
 
@@ -99,6 +159,70 @@ Quaternion QuaternionFromMatrix(const Mat4& m) {
     return q;
 }
 
+Quaternion NormalizeQuaternion(const Quaternion& qIn) {
+    Quaternion q = qIn;
+    const float len = std::sqrt(q.x * q.x + q.y * q.y + q.z * q.z + q.w * q.w);
+    if (len > 1e-6f) {
+        const float inv = 1.0f / len;
+        q.x *= inv;
+        q.y *= inv;
+        q.z *= inv;
+        q.w *= inv;
+    }
+    else {
+        q = {};
+    }
+    return q;
+}
+
+Vec3 EulerDegreesFromQuaternion(const Quaternion& qIn) {
+    const Quaternion q = NormalizeQuaternion(qIn);
+    const float xx = q.x * q.x;
+    const float yy = q.y * q.y;
+    const float zz = q.z * q.z;
+
+    const float sinr_cosp = 2.0f * (q.w * q.x + q.y * q.z);
+    const float cosr_cosp = 1.0f - 2.0f * (xx + yy);
+    const float roll = std::atan2(sinr_cosp, cosr_cosp);
+
+    const float sinp = 2.0f * (q.w * q.y - q.z * q.x);
+    const float pitch = (std::fabs(sinp) >= 1.0f)
+        ? std::copysign(1.57079632679f, sinp)
+        : std::asin(sinp);
+
+    const float siny_cosp = 2.0f * (q.w * q.z + q.x * q.y);
+    const float cosy_cosp = 1.0f - 2.0f * (yy + zz);
+    const float yaw = std::atan2(siny_cosp, cosy_cosp);
+
+    constexpr float kRadToDeg = 57.29577951308232f;
+    return {
+        roll * kRadToDeg,
+        pitch * kRadToDeg,
+        yaw * kRadToDeg
+    };
+}
+
+Quaternion QuaternionFromEulerDegrees(const Vec3& eulerDegrees) {
+    constexpr float kDegToRad = 0.01745329251994329577f;
+    const float roll = eulerDegrees.x * kDegToRad;
+    const float pitch = eulerDegrees.y * kDegToRad;
+    const float yaw = eulerDegrees.z * kDegToRad;
+
+    const float cy = std::cos(yaw * 0.5f);
+    const float sy = std::sin(yaw * 0.5f);
+    const float cp = std::cos(pitch * 0.5f);
+    const float sp = std::sin(pitch * 0.5f);
+    const float cr = std::cos(roll * 0.5f);
+    const float sr = std::sin(roll * 0.5f);
+
+    Quaternion q{};
+    q.w = cr * cp * cy + sr * sp * sy;
+    q.x = sr * cp * cy - cr * sp * sy;
+    q.y = cr * sp * cy + sr * cp * sy;
+    q.z = cr * cp * sy - sr * sp * cy;
+    return NormalizeQuaternion(q);
+}
+
 } // namespace
 
 RenderViewportWidget::RenderViewportWidget(QWidget* parent)
@@ -117,6 +241,7 @@ RenderViewportWidget::RenderViewportWidget(QWidget* parent)
     m_camera.fovDeg = 60.0f;
     m_camera.nearPlane = 0.1f;
     m_camera.farPlane = 10000.0f;
+    SyncCameraInspectorStateFromCamera();
 
     m_settings.profile = ParityProfile::W3DViewD3D11Baseline;
     m_settings.enableFog = true;
@@ -171,6 +296,13 @@ void RenderViewportWidget::SetRenderSettings(const RenderSettings& settings) {
     }
 }
 
+void RenderViewportWidget::SetAnimationPlayback(const AnimationPlaybackState& playback) {
+    m_animationPlayback = playback;
+    if (m_backendInitialized && m_backend) {
+        m_backend->SetAnimationPlayback(m_animationPlayback);
+    }
+}
+
 void RenderViewportWidget::FocusScene() {
     const Vec3 center = ComputeSceneCenter();
     const float radius = ComputeSceneRadius(center);
@@ -179,6 +311,201 @@ void RenderViewportWidget::FocusScene() {
     m_camera.distance = std::max(6.0f, radius * 2.5f);
     m_camera.nearPlane = std::max(0.1f, radius * 0.002f);
     m_camera.farPlane = std::max(1000.0f, radius * 24.0f + m_camera.distance);
+    SyncCameraInspectorStateFromCamera();
+}
+
+bool RenderViewportWidget::TryGetSelectedEditablePivot(
+    const VisibleInstance*& outSelected,
+    Mat4& outLocal,
+    QString* outError) const
+{
+    outSelected = nullptr;
+    outLocal = Mat4::Identity();
+
+    if (m_selectedVisibleIndex < 0
+        || m_selectedVisibleIndex >= static_cast<int>(m_visibleInstances.size())) {
+        if (outError) {
+            *outError = tr("Select a render mesh or pivot first.");
+        }
+        return false;
+    }
+
+    const auto& selected = m_visibleInstances[static_cast<std::size_t>(m_selectedVisibleIndex)];
+    if (!selected.editable) {
+        if (outError) {
+            *outError = tr("The selected render item is read-only.");
+        }
+        return false;
+    }
+    if (!selected.pivotsChunk) {
+        if (outError) {
+            *outError = tr("The selected render item does not have an editable skeleton pivot.");
+        }
+        return false;
+    }
+    if (selected.hierarchyIndex < 0
+        || selected.hierarchyIndex >= static_cast<int>(m_sceneResult.scene.hierarchies.size())) {
+        if (outError) {
+            *outError = tr("The selected render item is not bound to a valid hierarchy.");
+        }
+        return false;
+    }
+
+    const auto& hierarchy = m_sceneResult.scene.hierarchies[static_cast<std::size_t>(selected.hierarchyIndex)];
+    if (selected.pivotIndex < 0
+        || selected.pivotIndex >= static_cast<int>(hierarchy.pivots.size())) {
+        if (outError) {
+            *outError = tr("The selected render item is not bound to a valid pivot.");
+        }
+        return false;
+    }
+
+    PivotKey key{};
+    key.hierarchyIndex = selected.hierarchyIndex;
+    key.pivotIndex = selected.pivotIndex;
+    const auto overrideIt = m_pivotLocalOverrides.find(key);
+    if (overrideIt != m_pivotLocalOverrides.end()) {
+        outLocal = OrthonormalizeRigidTransform(overrideIt->second);
+    }
+    else {
+        outLocal = OrthonormalizeRigidTransform(
+            hierarchy.pivots[static_cast<std::size_t>(selected.pivotIndex)].localTransform);
+    }
+
+    outSelected = &selected;
+    return true;
+}
+
+void RenderViewportWidget::OpenManualPivotRotationDialog() {
+    const VisibleInstance* selected = nullptr;
+    Mat4 local = Mat4::Identity();
+    QString errorText;
+    if (!TryGetSelectedEditablePivot(selected, local, &errorText)) {
+        QMessageBox::information(
+            this,
+            tr("No Editable Pivot"),
+            errorText.isEmpty() ? tr("Select a render mesh or pivot first.") : errorText);
+        return;
+    }
+
+    const Quaternion currentRotation = QuaternionFromMatrix(local);
+    const Vec3 currentEulerDegrees = EulerDegreesFromQuaternion(currentRotation);
+
+    QDialog dialog(this);
+    dialog.setWindowTitle(tr("Set Pivot Rotation"));
+
+    auto* layout = new QVBoxLayout(&dialog);
+    auto* noteLabel = new QLabel(
+        tr("Local axes: X = forward, Y = right, Z = up.\n"
+           "To make the model face you, adjust Z rotation."),
+        &dialog);
+    noteLabel->setWordWrap(true);
+    layout->addWidget(noteLabel);
+
+    auto* formLayout = new QFormLayout();
+    auto* xSpin = new QDoubleSpinBox(&dialog);
+    auto* ySpin = new QDoubleSpinBox(&dialog);
+    auto* zSpin = new QDoubleSpinBox(&dialog);
+    for (QDoubleSpinBox* spin : { xSpin, ySpin, zSpin }) {
+        spin->setDecimals(2);
+        spin->setRange(-3600.0, 3600.0);
+        spin->setSingleStep(5.0);
+    }
+    xSpin->setValue(currentEulerDegrees.x);
+    ySpin->setValue(currentEulerDegrees.y);
+    zSpin->setValue(currentEulerDegrees.z);
+    formLayout->addRow(tr("Rotation X (deg)"), xSpin);
+    formLayout->addRow(tr("Rotation Y (deg)"), ySpin);
+    formLayout->addRow(tr("Rotation Z (deg)"), zSpin);
+    layout->addLayout(formLayout);
+
+    auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
+    connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+    connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+    layout->addWidget(buttons);
+
+    if (dialog.exec() != QDialog::Accepted) {
+        return;
+    }
+
+    const Vec3 newEulerDegrees{
+        static_cast<float>(xSpin->value()),
+        static_cast<float>(ySpin->value()),
+        static_cast<float>(zSpin->value())
+    };
+    const Quaternion newRotation = QuaternionFromEulerDegrees(newEulerDegrees);
+
+    emit pivotTransformCommitRequested(
+        const_cast<::ChunkItem*>(selected->pivotsChunk),
+        selected->pivotIndex,
+        local.m[12],
+        local.m[13],
+        local.m[14],
+        newRotation.x,
+        newRotation.y,
+        newRotation.z,
+        newRotation.w);
+
+    ClearPivotOverrides();
+}
+
+void RenderViewportWidget::SyncTransformInspectorState(const VisibleInstance* selected, const Mat4& local) {
+    if (!selected || selected->hierarchyIndex < 0 || selected->pivotIndex < 0) {
+        m_transformInspectorHasSelection = false;
+        return;
+    }
+
+    PivotKey key{};
+    key.hierarchyIndex = selected->hierarchyIndex;
+    key.pivotIndex = selected->pivotIndex;
+    if (!m_transformInspectorHasSelection || !(m_transformInspectorPivot == key)) {
+        m_transformInspectorHasSelection = true;
+        m_transformInspectorPivot = key;
+        m_transformInspectorTranslation = { local.m[12], local.m[13], local.m[14] };
+        m_transformInspectorRotationDegrees =
+            EulerDegreesFromQuaternion(QuaternionFromMatrix(local));
+    }
+}
+
+void RenderViewportWidget::ApplyTransformInspectorEdits() {
+    const VisibleInstance* selected = nullptr;
+    Mat4 local = Mat4::Identity();
+    QString errorText;
+    if (!TryGetSelectedEditablePivot(selected, local, &errorText)) {
+        QMessageBox::information(
+            this,
+            tr("No Editable Pivot"),
+            errorText.isEmpty() ? tr("Select a render mesh or pivot first.") : errorText);
+        return;
+    }
+
+    const Quaternion newRotation = QuaternionFromEulerDegrees(m_transformInspectorRotationDegrees);
+    emit pivotTransformCommitRequested(
+        const_cast<::ChunkItem*>(selected->pivotsChunk),
+        selected->pivotIndex,
+        m_transformInspectorTranslation.x,
+        m_transformInspectorTranslation.y,
+        m_transformInspectorTranslation.z,
+        newRotation.x,
+        newRotation.y,
+        newRotation.z,
+        newRotation.w);
+
+    ClearPivotOverrides();
+}
+
+void RenderViewportWidget::SyncCameraInspectorStateFromCamera() {
+    m_cameraInspectorTarget = m_camera.target;
+    m_cameraInspectorYawDegrees = RadToDeg(m_camera.yaw);
+    m_cameraInspectorPitchDegrees = RadToDeg(m_camera.pitch);
+    m_cameraInspectorDistance = m_camera.distance;
+}
+
+void RenderViewportWidget::ApplyCameraInspectorEdits() {
+    m_camera.target = m_cameraInspectorTarget;
+    m_camera.yaw = DegToRad(m_cameraInspectorYawDegrees);
+    m_camera.pitch = std::clamp(DegToRad(m_cameraInspectorPitchDegrees), -kCameraPitchLimit, kCameraPitchLimit);
+    m_camera.distance = std::max(0.01f, m_cameraInspectorDistance);
 }
 
 QPaintEngine* RenderViewportWidget::paintEngine() const {
@@ -272,14 +599,14 @@ void RenderViewportWidget::mouseMoveEvent(QMouseEvent* event) {
     if (m_dragMode == DragMode::Orbit) {
         m_camera.yaw += static_cast<float>(delta.x()) * 0.0075f;
         m_camera.pitch += static_cast<float>(delta.y()) * 0.0075f;
-        m_camera.pitch = std::clamp(m_camera.pitch, DegToRad(-89.0f), DegToRad(89.0f));
+        m_camera.pitch = std::clamp(m_camera.pitch, -kCameraPitchLimit, kCameraPitchLimit);
     }
     else if (m_dragMode == DragMode::Pan) {
         const float panScale = std::max(0.05f, m_camera.distance * 0.0018f);
         const Vec3 forward = Normalize(CameraForward(m_camera.yaw, m_camera.pitch));
-        Vec3 right = Normalize(Cross({ 0.0f, 1.0f, 0.0f }, forward));
+        Vec3 right = Normalize(Cross(WorldUp(), forward));
         if (Length(right) < 0.001f) {
-            right = { 1.0f, 0.0f, 0.0f };
+            right = { 0.0f, 1.0f, 0.0f };
         }
         const Vec3 up = Normalize(Cross(forward, right));
 
@@ -413,6 +740,7 @@ void RenderViewportWidget::EnsureBackendInitialized() {
 
     m_backendInitialized = true;
     m_backend->SetRenderSettings(m_settings);
+    m_backend->SetAnimationPlayback(m_animationPlayback);
     m_backend->SetCamera(m_camera);
     m_sceneDirty = true;
     m_deltaTimer.restart();
@@ -439,7 +767,7 @@ void RenderViewportWidget::TickFrame() {
         m_sceneDirty = false;
     }
 
-    m_camera.pitch = std::clamp(m_camera.pitch, DegToRad(-89.0f), DegToRad(89.0f));
+    m_camera.pitch = std::clamp(m_camera.pitch, -kCameraPitchLimit, kCameraPitchLimit);
     m_camera.distance = std::max(0.01f, m_camera.distance);
 
     Vec3 cameraPos = m_camera.target - Normalize(CameraForward(m_camera.yaw, m_camera.pitch)) * m_camera.distance;
@@ -466,7 +794,7 @@ void RenderViewportWidget::TickFrame() {
         ImGui_ImplDX11_NewFrame();
         ImGui::NewFrame();
 
-        const Mat4 view = LookAtLH(cameraPos, m_camera.target, { 0.0f, 1.0f, 0.0f });
+        const Mat4 view = LookAtLH(cameraPos, m_camera.target, WorldUp());
         const float aspect = static_cast<float>(std::max(1, width())) / static_cast<float>(std::max(1, height()));
         const Mat4 projection = PerspectiveFovLH(
             DegToRad(m_camera.fovDeg),
@@ -488,6 +816,7 @@ void RenderViewportWidget::TickFrame() {
     RebuildBackendOverrides();
 
     m_backend->SetRenderSettings(m_settings);
+    m_backend->SetAnimationPlayback(m_animationPlayback);
     m_backend->SetCamera(m_camera);
 
     if (m_imguiInitialized) {
@@ -524,6 +853,9 @@ void RenderViewportWidget::EmitWarnings() {
             break;
         case SceneBuildWarningCode::MissingTexture:
             prefix = QStringLiteral("MissingTexture");
+            break;
+        case SceneBuildWarningCode::MissingHierarchy:
+            prefix = QStringLiteral("MissingHierarchy");
             break;
         case SceneBuildWarningCode::CyclicHierarchy:
             prefix = QStringLiteral("CyclicHierarchy");
@@ -793,7 +1125,7 @@ void RenderViewportWidget::DrawSceneBrowserOverlay() {
             visibilityChanged = true;
         }
     }
-    ImGui::TextUnformatted("Select by mesh name. B toggles this panel.");
+    ImGui::TextUnformatted("Click a mesh row to select the gizmo target. B toggles this panel.");
     ImGui::Separator();
     ImGui::BeginChild("##SceneBrowserList", ImVec2(0.0f, 0.0f), false);
 
@@ -1052,6 +1384,286 @@ void RenderViewportWidget::DrawSceneBrowserOverlay() {
     }
 }
 
+void RenderViewportWidget::DrawTransformInspectorOverlay() {
+    if (!m_showTransformInspector) {
+        ImGui::SetNextWindowPos(
+            ImVec2(std::max(12.0f, static_cast<float>(width()) - 210.0f), 12.0f),
+            ImGuiCond_Always);
+        ImGui::SetNextWindowBgAlpha(0.45f);
+        const ImGuiWindowFlags flags =
+            ImGuiWindowFlags_NoDecoration
+            | ImGuiWindowFlags_AlwaysAutoResize
+            | ImGuiWindowFlags_NoSavedSettings
+            | ImGuiWindowFlags_NoFocusOnAppearing
+            | ImGuiWindowFlags_NoNav;
+        if (ImGui::Begin("Viewport Inspector Toggle", nullptr, flags)) {
+            if (ImGui::Button("Viewport Inspector")) {
+                m_showTransformInspector = true;
+            }
+        }
+        ImGui::End();
+        return;
+    }
+
+    ImGui::SetNextWindowPos(
+        ImVec2(std::max(12.0f, static_cast<float>(width()) - 380.0f), 150.0f),
+        ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(ImVec2(360.0f, 430.0f), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowBgAlpha(0.9f);
+    if (!ImGui::Begin("Viewport Inspector", &m_showTransformInspector, ImGuiWindowFlags_NoCollapse)) {
+        ImGui::End();
+        return;
+    }
+
+    const float currentYawDegrees = RadToDeg(m_camera.yaw);
+    const float currentPitchDegrees = RadToDeg(m_camera.pitch);
+    ImGui::TextUnformatted("Scene View");
+    ImGui::Text("Current View: yaw %.2f  pitch %.2f  dist %.3f",
+        currentYawDegrees,
+        currentPitchDegrees,
+        m_camera.distance);
+    ImGui::Text("Current Target: X %.3f  Y %.3f  Z %.3f",
+        m_camera.target.x,
+        m_camera.target.y,
+        m_camera.target.z);
+    ImGui::TextUnformatted("Axes: X = forward, Y = right, Z = up");
+    ImGui::TextUnformatted("Alt+LMB orbit, RMB/MMB pan, wheel zoom, drag cube to orbit.");
+
+    if (ImGui::Button("Front")) {
+        m_camera.yaw = DegToRad(180.0f);
+        m_camera.pitch = 0.0f;
+        SyncCameraInspectorStateFromCamera();
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Back")) {
+        m_camera.yaw = 0.0f;
+        m_camera.pitch = 0.0f;
+        SyncCameraInspectorStateFromCamera();
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Left")) {
+        m_camera.yaw = DegToRad(90.0f);
+        m_camera.pitch = 0.0f;
+        SyncCameraInspectorStateFromCamera();
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Right")) {
+        m_camera.yaw = DegToRad(-90.0f);
+        m_camera.pitch = 0.0f;
+        SyncCameraInspectorStateFromCamera();
+    }
+    if (ImGui::Button("Top")) {
+        m_camera.yaw = DegToRad(180.0f);
+        m_camera.pitch = -kCameraPitchLimit;
+        SyncCameraInspectorStateFromCamera();
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Bottom")) {
+        m_camera.yaw = DegToRad(180.0f);
+        m_camera.pitch = kCameraPitchLimit;
+        SyncCameraInspectorStateFromCamera();
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Iso")) {
+        m_camera.yaw = DegToRad(-135.0f);
+        m_camera.pitch = DegToRad(-35.2643897f);
+        SyncCameraInspectorStateFromCamera();
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Use Current View")) {
+        SyncCameraInspectorStateFromCamera();
+    }
+
+    float cameraTarget[3] = {
+        m_cameraInspectorTarget.x,
+        m_cameraInspectorTarget.y,
+        m_cameraInspectorTarget.z
+    };
+    float cameraAngles[2] = {
+        m_cameraInspectorYawDegrees,
+        m_cameraInspectorPitchDegrees
+    };
+    ImGui::InputFloat3("View Target", cameraTarget, "%.3f");
+    ImGui::InputFloat2("Yaw/Pitch (deg)", cameraAngles, "%.2f");
+    ImGui::InputFloat("View Distance", &m_cameraInspectorDistance, 0.1f, 1.0f, "%.3f");
+    m_cameraInspectorTarget = { cameraTarget[0], cameraTarget[1], cameraTarget[2] };
+    m_cameraInspectorYawDegrees = cameraAngles[0];
+    m_cameraInspectorPitchDegrees = cameraAngles[1];
+    if (ImGui::Button("Apply View")) {
+        ApplyCameraInspectorEdits();
+        SyncCameraInspectorStateFromCamera();
+    }
+
+    ImGui::Separator();
+    ImGui::TextUnformatted("Mesh/Pivot Target");
+
+    const VisibleInstance* selected = nullptr;
+    Mat4 currentLocal = Mat4::Identity();
+    bool hasReadableLocal = false;
+    if (m_selectedVisibleIndex >= 0
+        && m_selectedVisibleIndex < static_cast<int>(m_visibleInstances.size())) {
+        selected = &m_visibleInstances[static_cast<std::size_t>(m_selectedVisibleIndex)];
+        if (selected->hierarchyIndex >= 0
+            && selected->hierarchyIndex < static_cast<int>(m_sceneResult.scene.hierarchies.size())) {
+            const auto& hierarchy =
+                m_sceneResult.scene.hierarchies[static_cast<std::size_t>(selected->hierarchyIndex)];
+            if (selected->pivotIndex >= 0
+                && selected->pivotIndex < static_cast<int>(hierarchy.pivots.size())) {
+                PivotKey key{};
+                key.hierarchyIndex = selected->hierarchyIndex;
+                key.pivotIndex = selected->pivotIndex;
+                const auto overrideIt = m_pivotLocalOverrides.find(key);
+                currentLocal = (overrideIt != m_pivotLocalOverrides.end())
+                    ? OrthonormalizeRigidTransform(overrideIt->second)
+                    : OrthonormalizeRigidTransform(
+                        hierarchy.pivots[static_cast<std::size_t>(selected->pivotIndex)].localTransform);
+                hasReadableLocal = true;
+            }
+        }
+    }
+
+    if (!selected) {
+        m_transformInspectorHasSelection = false;
+        ImGui::TextUnformatted("No render target selected.");
+        ImGui::TextUnformatted("Click a mesh in the viewport or in Scene Browser.");
+        ImGui::End();
+        return;
+    }
+
+    auto meshNameFor = [&](const VisibleInstance& instance) -> QString {
+        if (instance.meshIndex >= 0 && instance.meshIndex < static_cast<int>(m_sceneResult.scene.meshes.size())) {
+            const QString fullName =
+                QString::fromStdString(m_sceneResult.scene.meshes[static_cast<std::size_t>(instance.meshIndex)].fullName);
+            if (!fullName.isEmpty()) {
+                return fullName;
+            }
+        }
+        return QStringLiteral("Mesh %1").arg(instance.meshIndex);
+    };
+
+    auto hierarchyNameFor = [&](int hierarchyIndex) -> QString {
+        if (hierarchyIndex >= 0
+            && hierarchyIndex < static_cast<int>(m_sceneResult.scene.hierarchies.size())) {
+            const QString name =
+                QString::fromStdString(m_sceneResult.scene.hierarchies[static_cast<std::size_t>(hierarchyIndex)].name);
+            if (!name.isEmpty()) {
+                return name;
+            }
+        }
+        return QStringLiteral("Hierarchy %1").arg(hierarchyIndex);
+    };
+
+    auto pivotNameFor = [&](int hierarchyIndex, int pivotIndex) -> QString {
+        if (hierarchyIndex >= 0
+            && hierarchyIndex < static_cast<int>(m_sceneResult.scene.hierarchies.size())) {
+            const auto& hierarchy = m_sceneResult.scene.hierarchies[static_cast<std::size_t>(hierarchyIndex)];
+            if (pivotIndex >= 0 && pivotIndex < static_cast<int>(hierarchy.pivots.size())) {
+                const QString name = QString::fromStdString(hierarchy.pivots[static_cast<std::size_t>(pivotIndex)].name);
+                if (!name.isEmpty()) {
+                    return name;
+                }
+            }
+        }
+        return QStringLiteral("Pivot %1").arg(pivotIndex);
+    };
+
+    const QString meshName = meshNameFor(*selected);
+    const QString hierarchyName = hierarchyNameFor(selected->hierarchyIndex);
+    const QString pivotName = pivotNameFor(selected->hierarchyIndex, selected->pivotIndex);
+    ImGui::TextWrapped("Target Mesh: %s", meshName.toUtf8().constData());
+    ImGui::TextWrapped("Hierarchy: %s", hierarchyName.toUtf8().constData());
+    ImGui::TextWrapped("Pivot: %s (%d)", pivotName.toUtf8().constData(), selected->pivotIndex);
+    ImGui::TextUnformatted(selected->editable ? "Target: editable" : "Target: read-only");
+    if (!selected->readOnlyReason.isEmpty()) {
+        ImGui::TextWrapped("Reason: %s", selected->readOnlyReason.toUtf8().constData());
+    }
+    if (selected->hiddenByUser) {
+        ImGui::TextUnformatted("Viewport state: hidden");
+    }
+
+    ImGui::Separator();
+    if (ImGui::Button(m_gizmoMode == GizmoMode::Translate ? "Translate (W) [active]" : "Translate (W)")) {
+        m_gizmoMode = GizmoMode::Translate;
+    }
+    ImGui::SameLine();
+    if (ImGui::Button(m_gizmoMode == GizmoMode::Rotate ? "Rotate (E) [active]" : "Rotate (E)")) {
+        m_gizmoMode = GizmoMode::Rotate;
+    }
+
+    if (!hasReadableLocal) {
+        m_transformInspectorHasSelection = false;
+        ImGui::Separator();
+        ImGui::TextUnformatted("No readable local transform for this target.");
+        ImGui::End();
+        return;
+    }
+
+    const auto& hierarchy =
+        m_sceneResult.scene.hierarchies[static_cast<std::size_t>(selected->hierarchyIndex)];
+    const bool rootPivot = selected->pivotIndex >= 0
+        && selected->pivotIndex < static_cast<int>(hierarchy.pivots.size())
+        && hierarchy.pivots[static_cast<std::size_t>(selected->pivotIndex)].parentIndex < 0;
+    SyncTransformInspectorState(selected, currentLocal);
+
+    const Vec3 currentTranslation{ currentLocal.m[12], currentLocal.m[13], currentLocal.m[14] };
+    const Vec3 currentRotationDegrees =
+        EulerDegreesFromQuaternion(QuaternionFromMatrix(currentLocal));
+
+    ImGui::TextUnformatted(
+        (m_gizmoMode == GizmoMode::Rotate)
+        ? (rootPivot ? "Rotate Space: world (root pivot)" : "Rotate Space: local")
+        : "Translate Space: world");
+    ImGui::Text("Current Pos: X %.3f  Y %.3f  Z %.3f",
+        currentTranslation.x,
+        currentTranslation.y,
+        currentTranslation.z);
+    ImGui::Text("Current Rot: X %.2f  Y %.2f  Z %.2f deg",
+        currentRotationDegrees.x,
+        currentRotationDegrees.y,
+        currentRotationDegrees.z);
+    ImGui::TextUnformatted("Axes: X = forward, Y = right, Z = up");
+
+    ImGui::Separator();
+    ImGui::TextUnformatted("Direct Local Transform Edit");
+    float editTranslation[3] = {
+        m_transformInspectorTranslation.x,
+        m_transformInspectorTranslation.y,
+        m_transformInspectorTranslation.z
+    };
+    float editRotation[3] = {
+        m_transformInspectorRotationDegrees.x,
+        m_transformInspectorRotationDegrees.y,
+        m_transformInspectorRotationDegrees.z
+    };
+    if (!selected->editable) {
+        ImGui::BeginDisabled();
+    }
+    ImGui::InputFloat3("Position", editTranslation, "%.3f");
+    ImGui::InputFloat3("Rotation (deg)", editRotation, "%.2f");
+    if (!selected->editable) {
+        ImGui::EndDisabled();
+    }
+    m_transformInspectorTranslation = { editTranslation[0], editTranslation[1], editTranslation[2] };
+    m_transformInspectorRotationDegrees = { editRotation[0], editRotation[1], editRotation[2] };
+
+    if (ImGui::Button("Use Current Transform")) {
+        m_transformInspectorTranslation = currentTranslation;
+        m_transformInspectorRotationDegrees = currentRotationDegrees;
+    }
+    ImGui::SameLine();
+    if (!selected->editable) {
+        ImGui::BeginDisabled();
+    }
+    if (ImGui::Button("Apply")) {
+        ApplyTransformInspectorEdits();
+    }
+    if (!selected->editable) {
+        ImGui::EndDisabled();
+    }
+
+    ImGui::End();
+}
+
 bool RenderViewportWidget::HandleGizmos(const Mat4& view, const Mat4& projection) {
     bool changed = false;
 
@@ -1079,14 +1691,15 @@ bool RenderViewportWidget::HandleGizmos(const Mat4& view, const Mat4& projection
     }
 
     DrawSceneBrowserOverlay();
+    DrawTransformInspectorOverlay();
 
     if (std::memcmp(viewMatrixBefore, viewMatrix, sizeof(viewMatrixBefore)) != 0) {
         const Mat4 manipulatedView = Mat4FromFloatArray(viewMatrix);
         const Mat4 invView = Inverse(manipulatedView);
         const Vec3 forward = Normalize({ invView.m[8], invView.m[9], invView.m[10] });
         if (Length(forward) > 1e-4f) {
-            m_camera.yaw = std::atan2(forward.x, forward.z);
-            m_camera.pitch = std::asin(std::clamp(forward.y, -1.0f, 1.0f));
+            m_camera.yaw = std::atan2(forward.y, forward.x);
+            m_camera.pitch = std::asin(std::clamp(forward.z, -1.0f, 1.0f));
             changed = true;
         }
     }
@@ -1110,6 +1723,13 @@ bool RenderViewportWidget::HandleGizmos(const Mat4& view, const Mat4& projection
             if (m_gizmoMode == GizmoMode::Rotate) {
                 operation = ImGuizmo::ROTATE;
                 mode = ImGuizmo::LOCAL;
+                const auto& hierarchy =
+                    m_sceneResult.scene.hierarchies[static_cast<std::size_t>(selected.hierarchyIndex)];
+                if (selected.pivotIndex >= 0
+                    && selected.pivotIndex < static_cast<int>(hierarchy.pivots.size())
+                    && hierarchy.pivots[static_cast<std::size_t>(selected.pivotIndex)].parentIndex < 0) {
+                    mode = ImGuizmo::WORLD;
+                }
                 snapValues[0] = 15.0f;
                 snapValues[1] = 15.0f;
                 snapValues[2] = 15.0f;
@@ -1141,7 +1761,8 @@ bool RenderViewportWidget::HandleGizmos(const Mat4& view, const Mat4& projection
                 }
 
                 const Mat4 manipulatedWorld = Mat4FromFloatArray(modelMatrix);
-                const Mat4 newLocal = Multiply(Inverse(parentWorld), manipulatedWorld);
+                const Mat4 newLocal = OrthonormalizeRigidTransform(
+                    Multiply(Inverse(parentWorld), manipulatedWorld));
 
                 PivotKey key{};
                 key.hierarchyIndex = selected.hierarchyIndex;
@@ -1183,7 +1804,7 @@ void RenderViewportWidget::CommitPivotOverrideIfNeeded() {
         return;
     }
 
-    const Mat4 local = it->second;
+    const Mat4 local = OrthonormalizeRigidTransform(it->second);
     const Quaternion q = QuaternionFromMatrix(local);
     const float tx = local.m[12];
     const float ty = local.m[13];
@@ -1249,6 +1870,26 @@ void RenderViewportWidget::SetSelectedVisibleInstance(int index, bool emitChunkS
     const auto& selected = m_visibleInstances[static_cast<std::size_t>(index)];
     m_selectedInstance = selected.key;
     const bool hiddenByUser = m_hiddenInstances.contains(selected.key);
+    const QString meshName =
+        (selected.meshIndex >= 0 && selected.meshIndex < static_cast<int>(m_sceneResult.scene.meshes.size()))
+        ? QString::fromStdString(m_sceneResult.scene.meshes[static_cast<std::size_t>(selected.meshIndex)].fullName)
+        : QStringLiteral("Mesh %1").arg(selected.meshIndex);
+    QString hierarchyName = QStringLiteral("Hierarchy %1").arg(selected.hierarchyIndex);
+    QString pivotName = QStringLiteral("Pivot %1").arg(selected.pivotIndex);
+    if (selected.hierarchyIndex >= 0
+        && selected.hierarchyIndex < static_cast<int>(m_sceneResult.scene.hierarchies.size())) {
+        const auto& hierarchy =
+            m_sceneResult.scene.hierarchies[static_cast<std::size_t>(selected.hierarchyIndex)];
+        if (!hierarchy.name.empty()) {
+            hierarchyName = QString::fromStdString(hierarchy.name);
+        }
+        if (selected.pivotIndex >= 0
+            && selected.pivotIndex < static_cast<int>(hierarchy.pivots.size())
+            && !hierarchy.pivots[static_cast<std::size_t>(selected.pivotIndex)].name.empty()) {
+            pivotName = QString::fromStdString(
+                hierarchy.pivots[static_cast<std::size_t>(selected.pivotIndex)].name);
+        }
+    }
 
     if (emitChunkSignal && selected.meshChunk) {
         emit sceneChunkActivated(const_cast<::ChunkItem*>(selected.meshChunk));
@@ -1256,13 +1897,20 @@ void RenderViewportWidget::SetSelectedVisibleInstance(int index, bool emitChunkS
 
     if (selected.editable) {
         EmitSelectionStatus(
-            hiddenByUser
-            ? QStringLiteral("Selection: editable (pivot %1, hidden)").arg(selected.pivotIndex)
-            : QStringLiteral("Selection: editable (pivot %1)").arg(selected.pivotIndex));
+            QStringLiteral("Selection: %1 | %2 | %3 (%4) | editable%5")
+                .arg(meshName.isEmpty() ? QStringLiteral("Unnamed Mesh") : meshName)
+                .arg(hierarchyName)
+                .arg(pivotName)
+                .arg(selected.pivotIndex)
+                .arg(hiddenByUser ? QStringLiteral(", hidden") : QString()));
     }
     else {
-        const QString baseStatus =
-            QStringLiteral("Selection: read-only (%1)").arg(selected.readOnlyReason);
+        const QString baseStatus = QStringLiteral("Selection: %1 | %2 | %3 (%4) | read-only (%5)")
+            .arg(meshName.isEmpty() ? QStringLiteral("Unnamed Mesh") : meshName)
+            .arg(hierarchyName)
+            .arg(pivotName)
+            .arg(selected.pivotIndex)
+            .arg(selected.readOnlyReason);
         EmitSelectionStatus(hiddenByUser ? (baseStatus + QStringLiteral(", hidden")) : baseStatus);
     }
 }
@@ -1305,9 +1953,9 @@ bool RenderViewportWidget::BuildRayFromScreen(const QPoint& pos, Vec3& rayOrigin
     const float ndcY = 1.0f - (2.0f * (static_cast<float>(pos.y()) + 0.5f) / static_cast<float>(h));
 
     const Vec3 forward = Normalize(CameraForward(m_camera.yaw, m_camera.pitch));
-    Vec3 right = Normalize(Cross({ 0.0f, 1.0f, 0.0f }, forward));
+    Vec3 right = Normalize(Cross(WorldUp(), forward));
     if (Length(right) < 0.001f) {
-        right = { 1.0f, 0.0f, 0.0f };
+        right = { 0.0f, 1.0f, 0.0f };
     }
     const Vec3 up = Normalize(Cross(forward, right));
 

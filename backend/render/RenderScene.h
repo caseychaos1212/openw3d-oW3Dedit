@@ -1,9 +1,11 @@
 #pragma once
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #include "RenderTypes.h"
@@ -20,6 +22,7 @@ enum class SceneBuildWarningCode {
     MissingPayload,
     InvalidIndex,
     MissingTexture,
+    MissingHierarchy,
     CyclicHierarchy,
     UnsupportedChunk
 };
@@ -35,6 +38,7 @@ struct SceneBuildOptions {
     std::string textureSearchDirectory;
     std::vector<std::string> externalTextureNames;
     std::vector<uint32_t> externalTextureHashes;
+    std::unordered_map<const ChunkItem*, std::string> rootSourceLabels;
     bool assembleWholeFileScene = true;
 };
 
@@ -66,8 +70,12 @@ struct RenderMaterial {
 struct RenderVertex {
     Vec3 position{};
     Vec3 normal{ 0.0f, 1.0f, 0.0f };
+    Vec3 secondaryPosition{};
+    Vec3 secondaryNormal{ 0.0f, 1.0f, 0.0f };
     Vec2 uv{};
     Vec4 color{ 1.0f, 1.0f, 1.0f, 1.0f };
+    std::array<uint16_t, 4> boneIndices{ 0xFFFFu, 0xFFFFu, 0xFFFFu, 0xFFFFu };
+    std::array<float, 4> boneWeights{ 0.0f, 0.0f, 0.0f, 0.0f };
 };
 
 struct RenderMesh {
@@ -81,6 +89,9 @@ struct RenderMesh {
     float boundsRadius = 0.0f;
     bool twoSided = false;
     bool hidden = false;
+    bool skinned = false;
+    bool hasSecondaryVertexStream = false;
+    uint8_t bonesPerVertex = 0;
     const ::ChunkItem* sourceMeshHeaderChunk = nullptr;
     bool sourceFromSupplemental = false;
 };
@@ -89,13 +100,48 @@ struct RenderPivot {
     std::string name;
     int parentIndex = -1;
     Mat4 localTransform = Mat4::Identity();
+    Vec3 baseTranslation{};
+    Vec4 baseRotation{ 0.0f, 0.0f, 0.0f, 1.0f };
 };
 
 struct RenderHierarchy {
     std::string name;
     std::vector<RenderPivot> pivots;
+    std::vector<int> compatibleAnimationIndices;
     const ::ChunkItem* sourceHierarchyChunk = nullptr;
     const ::ChunkItem* sourcePivotsChunk = nullptr;
+};
+
+struct RenderFloatKeyframe {
+    float frame = 0.0f;
+    float value = 0.0f;
+    bool hold = false;
+};
+
+struct RenderQuatKeyframe {
+    float frame = 0.0f;
+    Vec4 value{ 0.0f, 0.0f, 0.0f, 1.0f };
+    bool hold = false;
+};
+
+struct RenderPivotAnimation {
+    std::vector<RenderFloatKeyframe> translationX;
+    std::vector<RenderFloatKeyframe> translationY;
+    std::vector<RenderFloatKeyframe> translationZ;
+    std::vector<RenderQuatKeyframe> rotation;
+};
+
+struct RenderAnimationClip {
+    std::string fullName;
+    std::string hierarchyName;
+    std::string sourceFileLabel;
+    uint32_t numFrames = 0;
+    float frameRate = 0.0f;
+    bool compressed = false;
+    bool supportedForPlayback = true;
+    bool sourceFromAnimationLibrary = false;
+    const ::ChunkItem* sourceAnimationChunk = nullptr;
+    std::vector<RenderPivotAnimation> pivots;
 };
 
 struct RenderLodEntry {
@@ -137,6 +183,7 @@ struct RenderScene {
     std::vector<RenderMaterial> materials;
     std::vector<RenderMesh> meshes;
     std::vector<RenderHierarchy> hierarchies;
+    std::vector<RenderAnimationClip> animations;
     std::vector<RenderLodGroup> lodGroups;
     std::vector<RenderNode> looseNodes;
     RenderFog fog{};

@@ -4,6 +4,7 @@
 #include <array>
 #include <cctype>
 #include <cmath>
+#include <cstring>
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
@@ -26,6 +27,7 @@ constexpr uint32_t kChunkMesh = 0x0000;
 constexpr uint32_t kChunkVertices = 0x0002;
 constexpr uint32_t kChunkVertexNormals = 0x0003;
 constexpr uint32_t kChunkTexCoords = 0x0005;
+constexpr uint32_t kChunkVertexInfluences = 0x000E;
 constexpr uint32_t kChunkMeshHeader3 = 0x001F;
 constexpr uint32_t kChunkTriangles = 0x0020;
 constexpr uint32_t kChunkTextureWrapper = 0x0031;
@@ -45,6 +47,19 @@ constexpr uint32_t kChunkPrelitLightmapMultiTexture = 0x0026;
 constexpr uint32_t kChunkHierarchy = 0x0100;
 constexpr uint32_t kChunkHierarchyHeader = 0x0101;
 constexpr uint32_t kChunkPivots = 0x0102;
+constexpr uint32_t kChunkAnimation = 0x0200;
+constexpr uint32_t kChunkAnimationHeader = 0x0201;
+constexpr uint32_t kChunkAnimationChannel = 0x0202;
+constexpr uint32_t kChunkAnimationBitChannel = 0x0203;
+constexpr uint32_t kChunkCompressedAnimation = 0x0280;
+constexpr uint32_t kChunkCompressedAnimationHeader = 0x0281;
+constexpr uint32_t kChunkCompressedAnimationChannel = 0x0282;
+constexpr uint32_t kChunkCompressedAnimationBitChannel = 0x0283;
+constexpr uint32_t kChunkCompressedAnimationAdaptiveDeltaChannel = 0x0284;
+constexpr uint32_t kChunkHModel = 0x0300;
+constexpr uint32_t kChunkHModelHeader = 0x0301;
+constexpr uint32_t kChunkHModelNode = 0x0302;
+constexpr uint32_t kChunkHModelSkinNode = 0x0304;
 constexpr uint32_t kChunkLodModel = 0x0400;
 constexpr uint32_t kChunkLodModelHeader = 0x0401;
 constexpr uint32_t kChunkLodModelLod = 0x0402;
@@ -53,6 +68,9 @@ constexpr uint32_t kChunkHLodHeader = 0x0701;
 constexpr uint32_t kChunkHLodLodArray = 0x0702;
 constexpr uint32_t kChunkHLodSubObjectArrayHeader = 0x0703;
 constexpr uint32_t kChunkHLodSubObject = 0x0704;
+constexpr uint32_t kChunkSecondaryVertices = 0x0C00;
+constexpr uint32_t kChunkSecondaryVertexNormals = 0x0C01;
+constexpr uint32_t kChunkVertexInfluencesExtended = 0x0C03;
 constexpr uint8_t kStageMappingScreen = 0x03;
 constexpr uint8_t kStageMappingLinearOffset = 0x04;
 constexpr uint8_t kStageMappingRotate = 0x08;
@@ -211,6 +229,171 @@ std::optional<std::vector<T>> ParseArrayWithWarning(
         return std::nullopt;
     }
     return std::get<std::vector<T>>(parsed);
+}
+
+template <typename T>
+bool ReadChunkValueAt(
+    const std::shared_ptr<ChunkItem>& chunk,
+    std::size_t offset,
+    T& outValue)
+{
+    if (!chunk) {
+        return false;
+    }
+    if ((offset + sizeof(T)) > chunk->data.size()) {
+        return false;
+    }
+    std::memcpy(&outValue, chunk->data.data() + offset, sizeof(T));
+    return true;
+}
+
+template <typename T>
+bool ReadChunkArrayAt(
+    const std::shared_ptr<ChunkItem>& chunk,
+    std::size_t offset,
+    std::size_t count,
+    std::vector<T>& outValues)
+{
+    outValues.clear();
+    if (!chunk) {
+        return false;
+    }
+    const std::size_t bytes = count * sizeof(T);
+    if ((offset + bytes) > chunk->data.size()) {
+        return false;
+    }
+    outValues.resize(count);
+    if (bytes > 0) {
+        std::memcpy(outValues.data(), chunk->data.data() + offset, bytes);
+    }
+    return true;
+}
+
+struct ParsedRawAnimChannel {
+    uint16_t firstFrame = 0;
+    uint16_t lastFrame = 0;
+    uint16_t vectorLen = 0;
+    uint16_t flags = 0;
+    uint16_t pivot = 0;
+    std::vector<float> data;
+};
+
+std::optional<ParsedRawAnimChannel> ParseRawAnimChannel(
+    const std::shared_ptr<ChunkItem>& chunk,
+    std::vector<SceneBuildWarning>& warnings)
+{
+    constexpr std::size_t kHeaderSize = 12;
+    if (!chunk || chunk->data.size() < kHeaderSize) {
+        warnings.push_back({
+            SceneBuildWarningCode::MissingPayload,
+            BuildChunkPath(chunk.get()),
+            "Animation channel payload is truncated."
+            });
+        return std::nullopt;
+    }
+
+    ParsedRawAnimChannel parsed{};
+    if (!ReadChunkValueAt(chunk, 0, parsed.firstFrame)
+        || !ReadChunkValueAt(chunk, 2, parsed.lastFrame)
+        || !ReadChunkValueAt(chunk, 4, parsed.vectorLen)
+        || !ReadChunkValueAt(chunk, 6, parsed.flags)
+        || !ReadChunkValueAt(chunk, 8, parsed.pivot))
+    {
+        warnings.push_back({
+            SceneBuildWarningCode::MissingPayload,
+            BuildChunkPath(chunk.get()),
+            "Animation channel header could not be read."
+            });
+        return std::nullopt;
+    }
+
+    const uint32_t frameCount =
+        (parsed.lastFrame >= parsed.firstFrame)
+        ? (static_cast<uint32_t>(parsed.lastFrame) - static_cast<uint32_t>(parsed.firstFrame) + 1u)
+        : 0u;
+    const std::size_t sampleCount =
+        static_cast<std::size_t>(frameCount) * static_cast<std::size_t>(parsed.vectorLen);
+    if (!ReadChunkArrayAt(chunk, kHeaderSize, sampleCount, parsed.data)) {
+        warnings.push_back({
+            SceneBuildWarningCode::MissingPayload,
+            BuildChunkPath(chunk.get()),
+            "Animation channel sample payload is truncated."
+            });
+        return std::nullopt;
+    }
+
+    return parsed;
+}
+
+struct ParsedTimeCodedAnimChannel {
+    uint32_t numTimeCodes = 0;
+    uint16_t pivot = 0;
+    uint8_t vectorLen = 0;
+    uint8_t flags = 0;
+    std::vector<uint32_t> words;
+};
+
+std::optional<ParsedTimeCodedAnimChannel> ParseTimeCodedAnimChannel(
+    const std::shared_ptr<ChunkItem>& chunk,
+    std::vector<SceneBuildWarning>& warnings)
+{
+    constexpr std::size_t kHeaderSize = 8;
+    if (!chunk || chunk->data.size() < kHeaderSize) {
+        warnings.push_back({
+            SceneBuildWarningCode::MissingPayload,
+            BuildChunkPath(chunk.get()),
+            "Compressed animation channel payload is truncated."
+            });
+        return std::nullopt;
+    }
+
+    ParsedTimeCodedAnimChannel parsed{};
+    if (!ReadChunkValueAt(chunk, 0, parsed.numTimeCodes)
+        || !ReadChunkValueAt(chunk, 4, parsed.pivot)
+        || !ReadChunkValueAt(chunk, 6, parsed.vectorLen)
+        || !ReadChunkValueAt(chunk, 7, parsed.flags))
+    {
+        warnings.push_back({
+            SceneBuildWarningCode::MissingPayload,
+            BuildChunkPath(chunk.get()),
+            "Compressed animation channel header could not be read."
+            });
+        return std::nullopt;
+    }
+
+    const std::size_t packetSize = static_cast<std::size_t>(parsed.vectorLen) + 1u;
+    const std::size_t wordCount = static_cast<std::size_t>(parsed.numTimeCodes) * packetSize;
+    if (!ReadChunkArrayAt(chunk, kHeaderSize, wordCount, parsed.words)) {
+        warnings.push_back({
+            SceneBuildWarningCode::MissingPayload,
+            BuildChunkPath(chunk.get()),
+            "Compressed animation channel sample payload is truncated."
+            });
+        return std::nullopt;
+    }
+
+    return parsed;
+}
+
+void AppendRoots(
+    std::vector<std::shared_ptr<ChunkItem>>& out,
+    const W3DChunk* roots)
+{
+    if (!roots || roots->empty()) {
+        return;
+    }
+    out.insert(out.end(), roots->begin(), roots->end());
+}
+
+std::vector<std::shared_ptr<ChunkItem>> CollectAllRoots(
+    const W3DChunk& primaryRoots,
+    const W3DChunk* skeletonRoots,
+    const W3DChunk* animationRoots)
+{
+    std::vector<std::shared_ptr<ChunkItem>> allRoots = primaryRoots;
+    AppendRoots(allRoots, skeletonRoots);
+    AppendRoots(allRoots, animationRoots);
+    return allRoots;
 }
 
 bool FileExists(const std::filesystem::path& path) {
@@ -540,6 +723,7 @@ struct HlodLodArray {
 struct HlodDefinition {
     std::string name;
     std::string hierarchyName;
+    const ChunkItem* sourceChunk = nullptr;
     std::vector<HlodLodArray> lodArrays;
 };
 
@@ -552,6 +736,24 @@ struct LodModelDefinition {
     std::vector<EntryRef> entries;
 };
 
+struct HModelDefinition {
+    std::string name;
+    std::string hierarchyName;
+    struct NodeRef {
+        std::string renderObjName;
+        int pivotIndex = -1;
+        bool skinned = false;
+        const ChunkItem* sourceChunk = nullptr;
+    };
+    std::vector<NodeRef> nodes;
+    const ChunkItem* sourceChunk = nullptr;
+};
+
+struct ParsedAnimationDefinition {
+    RenderAnimationClip clip{};
+    const ChunkItem* sourceHeaderChunk = nullptr;
+};
+
 struct BuildContext {
     SceneBuildOptions options{};
     SceneBuildResult result{};
@@ -560,6 +762,7 @@ struct BuildContext {
     std::unordered_map<std::string, int> materialByKey;
     std::unordered_map<std::string, int> meshByName;
     std::unordered_map<std::string, int> hierarchyByName;
+    std::unordered_set<std::string> warnedMissingHierarchies;
     std::unordered_set<int> referencedMeshes;
     std::unordered_set<int> supplementalMeshes;
     std::unordered_set<std::string> externalTextureByPath;
@@ -756,7 +959,40 @@ struct BuildContext {
         materialByKey.emplace(key, index);
         return index;
     }
+
+    std::string LookupRootSourceLabel(const std::shared_ptr<ChunkItem>& root) const {
+        if (!root) {
+            return {};
+        }
+        const auto it = options.rootSourceLabels.find(root.get());
+        if (it == options.rootSourceLabels.end()) {
+            return {};
+        }
+        return it->second;
+    }
+
+    void WarnMissingHierarchy(
+        const ChunkItem* sourceNode,
+        const std::string& hierarchyName,
+        const std::string& context)
+    {
+        if (hierarchyName.empty()) {
+            return;
+        }
+        const std::string key = NormalizeName(hierarchyName);
+        if (!warnedMissingHierarchies.insert(key + "|" + context).second) {
+            return;
+        }
+
+        result.warnings.push_back({
+            SceneBuildWarningCode::MissingHierarchy,
+            BuildChunkPath(sourceNode),
+            context + ": " + hierarchyName
+            });
+    }
 };
+
+int ResolveHierarchyIndex(BuildContext& ctx, const std::string& hierarchyName, const std::string& fallbackName);
 
 std::optional<RenderMesh> BuildRenderMeshFromChunk(
     BuildContext& ctx,
@@ -806,6 +1042,20 @@ std::optional<RenderMesh> BuildRenderMeshFromChunk(
     if (const auto normalsChunk = FindFirstChildById(meshChunk, kChunkVertexNormals)) {
         if (const auto parsed = ParseArrayWithWarning<W3dVectorStruct>(normalsChunk, ctx.result.warnings)) {
             normals = *parsed;
+        }
+    }
+
+    std::vector<W3dVectorStruct> secondaryVertices;
+    if (const auto secondaryVerticesChunk = FindFirstChildById(meshChunk, kChunkSecondaryVertices)) {
+        if (const auto parsed = ParseArrayWithWarning<W3dVectorStruct>(secondaryVerticesChunk, ctx.result.warnings)) {
+            secondaryVertices = *parsed;
+        }
+    }
+
+    std::vector<W3dVectorStruct> secondaryNormals;
+    if (const auto secondaryNormalsChunk = FindFirstChildById(meshChunk, kChunkSecondaryVertexNormals)) {
+        if (const auto parsed = ParseArrayWithWarning<W3dVectorStruct>(secondaryNormalsChunk, ctx.result.warnings)) {
+            secondaryNormals = *parsed;
         }
     }
 
@@ -877,6 +1127,29 @@ std::optional<RenderMesh> BuildRenderMeshFromChunk(
     const auto headerValue = *header;
     const std::string meshName = ReadFixedString(headerValue.MeshName, W3D_NAME_LEN);
     const std::string containerName = ReadFixedString(headerValue.ContainerName, W3D_NAME_LEN);
+    const bool geometryIsSkin =
+        (headerValue.Attributes & static_cast<uint32_t>(MeshAttr::W3D_MESH_FLAG_GEOMETRY_TYPE_MASK))
+        == static_cast<uint32_t>(MeshAttr::W3D_MESH_FLAG_GEOMETRY_TYPE_SKIN);
+
+    std::vector<W3dVertInfStruct> legacyInfluences;
+    std::vector<W3dVertInf3WStruct> extendedInfluences;
+    if (const auto influencesChunk = FindFirstChildById(meshChunk, kChunkVertexInfluencesExtended)) {
+        if (const auto parsed = ParseArrayWithWarning<W3dVertInf3WStruct>(influencesChunk, ctx.result.warnings)) {
+            extendedInfluences = *parsed;
+        }
+    }
+    if (extendedInfluences.empty()) {
+        if (const auto influencesChunk = FindFirstChildById(meshChunk, kChunkVertexInfluences)) {
+            if (const auto parsed = ParseArrayWithWarning<W3dVertInfStruct>(influencesChunk, ctx.result.warnings)) {
+                legacyInfluences = *parsed;
+            }
+        }
+    }
+
+    const bool skinned = !extendedInfluences.empty() || !legacyInfluences.empty();
+    const uint8_t bonesPerVertex = !extendedInfluences.empty()
+        ? 4u
+        : ((!legacyInfluences.empty() || geometryIsSkin) ? 2u : 0u);
 
     std::string fullName = meshName;
     if (!containerName.empty()) {
@@ -917,15 +1190,73 @@ std::optional<RenderMesh> BuildRenderMeshFromChunk(
         const auto& v = (*vertices)[i];
         auto& dst = baseVertices[i];
         dst.position = { v.X, v.Y, v.Z };
+        dst.secondaryPosition = dst.position;
 
         if (i < normals.size()) {
             const auto& n = normals[i];
             dst.normal = { n.X, n.Y, n.Z };
         }
+        dst.secondaryNormal = dst.normal;
+
+        if (i < secondaryVertices.size()) {
+            const auto& sv = secondaryVertices[i];
+            dst.secondaryPosition = { sv.X, sv.Y, sv.Z };
+        }
+        if (i < secondaryNormals.size()) {
+            const auto& sn = secondaryNormals[i];
+            dst.secondaryNormal = { sn.X, sn.Y, sn.Z };
+        }
 
         if (i < texCoords.size()) {
             const auto& uv = texCoords[i];
             dst.uv = { uv.U, 1.0f - uv.V };
+        }
+
+        if (i < extendedInfluences.size()) {
+            const auto& influence = extendedInfluences[i];
+            for (int j = 0; j < 4; ++j) {
+                dst.boneIndices[static_cast<std::size_t>(j)] = influence.BoneIdx[j];
+            }
+            dst.boneWeights[0] = static_cast<float>(influence.Weight[0]) / 65535.0f;
+            dst.boneWeights[1] = static_cast<float>(influence.Weight[1]) / 65535.0f;
+            dst.boneWeights[2] = static_cast<float>(influence.Weight[2]) / 65535.0f;
+            dst.boneWeights[3] = static_cast<float>(DeriveVertInf3WWeight3(influence)) / 65535.0f;
+
+            float weightSum = 0.0f;
+            for (float weight : dst.boneWeights) {
+                weightSum += std::max(0.0f, weight);
+            }
+            if (weightSum > 0.0f) {
+                const float invWeightSum = 1.0f / weightSum;
+                for (float& weight : dst.boneWeights) {
+                    weight = std::max(0.0f, weight) * invWeightSum;
+                }
+            }
+            else if (dst.boneIndices[0] != 0xFFFFu) {
+                dst.boneWeights[0] = 1.0f;
+            }
+        }
+        else if (i < legacyInfluences.size()) {
+            const auto& influence = legacyInfluences[i];
+            dst.boneIndices[0] = influence.BoneIdx[0];
+            dst.boneIndices[1] = influence.BoneIdx[1];
+
+            float w0 = static_cast<float>(influence.Weight[0]) / 100.0f;
+            float w1 = static_cast<float>(influence.Weight[1]) / 100.0f;
+            if (dst.boneIndices[0] == 0xFFFFu) {
+                w0 = 0.0f;
+            }
+            if (dst.boneIndices[1] == 0xFFFFu) {
+                w1 = 0.0f;
+            }
+            const float weightSum = std::max(0.0f, w0) + std::max(0.0f, w1);
+            if (weightSum > 0.0f) {
+                dst.boneWeights[0] = std::max(0.0f, w0) / weightSum;
+                dst.boneWeights[1] = std::max(0.0f, w1) / weightSum;
+            }
+            else if (dst.boneIndices[0] != 0xFFFFu) {
+                dst.boneWeights[0] = 1.0f;
+            }
         }
     }
 
@@ -993,6 +1324,9 @@ std::optional<RenderMesh> BuildRenderMeshFromChunk(
         subMesh.boundsRadius =
             (headerValue.SphRadius > 0.0f) ? headerValue.SphRadius : ComputeRadiusFromBounds(boundsMin, boundsMax);
         subMesh.sourceMeshHeaderChunk = headerChunk.get();
+        subMesh.skinned = skinned;
+        subMesh.hasSecondaryVertexStream = !secondaryVertices.empty();
+        subMesh.bonesPerVertex = bonesPerVertex;
 
         const std::string materialNameHint = subMesh.fullName + "_mat";
         subMesh.materialIndex = ctx.EnsureMaterial(textureIndex, twoSided, uvAnim, materialNameHint);
@@ -1050,15 +1384,31 @@ void ParseHierarchies(const W3DChunk& roots, BuildContext& ctx) {
             const auto& src = (*pivots)[i];
             RenderPivot pivot{};
             pivot.name = ReadFixedString(src.Name, W3D_NAME_LEN);
-            pivot.parentIndex = (src.ParentIdx == 0xFFFFFFFFu)
-                ? -1
-                : static_cast<int>(src.ParentIdx);
-            pivot.localTransform = TransformFromTranslationRotation(
-                { src.Translation.X, src.Translation.Y, src.Translation.Z },
+            pivot.baseTranslation = { src.Translation.X, src.Translation.Y, src.Translation.Z };
+            pivot.baseRotation = {
                 src.Rotation.Q[0],
                 src.Rotation.Q[1],
                 src.Rotation.Q[2],
-                src.Rotation.Q[3]);
+                src.Rotation.Q[3]
+            };
+            if (i == 0) {
+                // Match TT HTreeClass semantics: pivot 0 is the object root, not a serialized base transform.
+                pivot.parentIndex = -1;
+                pivot.baseTranslation = { 0.0f, 0.0f, 0.0f };
+                pivot.baseRotation = { 0.0f, 0.0f, 0.0f, 1.0f };
+                pivot.localTransform = Mat4::Identity();
+            }
+            else {
+                pivot.parentIndex = (src.ParentIdx == 0xFFFFFFFFu)
+                    ? -1
+                    : static_cast<int>(src.ParentIdx);
+                pivot.localTransform = TransformFromTranslationRotation(
+                    { src.Translation.X, src.Translation.Y, src.Translation.Z },
+                    src.Rotation.Q[0],
+                    src.Rotation.Q[1],
+                    src.Rotation.Q[2],
+                    src.Rotation.Q[3]);
+            }
 
             if (pivot.parentIndex >= static_cast<int>(pivots->size())) {
                 ctx.result.warnings.push_back({
@@ -1109,6 +1459,439 @@ void ParseHierarchies(const W3DChunk& roots, BuildContext& ctx) {
     }
 }
 
+float ReadWordAsFloat(uint32_t word) {
+    float out = 0.0f;
+    std::memcpy(&out, &word, sizeof(out));
+    return out;
+}
+
+void AddFloatKeyframes(
+    std::vector<RenderFloatKeyframe>& track,
+    uint16_t firstFrame,
+    const std::vector<float>& samples)
+{
+    track.reserve(track.size() + samples.size());
+    for (std::size_t i = 0; i < samples.size(); ++i) {
+        RenderFloatKeyframe key{};
+        key.frame = static_cast<float>(static_cast<uint32_t>(firstFrame) + static_cast<uint32_t>(i));
+        key.value = samples[i];
+        key.hold = false;
+        track.push_back(key);
+    }
+}
+
+void AddQuatKeyframes(
+    std::vector<RenderQuatKeyframe>& track,
+    uint16_t firstFrame,
+    const std::vector<float>& samples)
+{
+    const std::size_t keyCount = samples.size() / 4u;
+    track.reserve(track.size() + keyCount);
+    for (std::size_t i = 0; i < keyCount; ++i) {
+        const std::size_t base = i * 4u;
+        RenderQuatKeyframe key{};
+        key.frame = static_cast<float>(static_cast<uint32_t>(firstFrame) + static_cast<uint32_t>(i));
+        key.value = {
+            samples[base + 0],
+            samples[base + 1],
+            samples[base + 2],
+            samples[base + 3]
+        };
+        key.hold = false;
+        track.push_back(key);
+    }
+}
+
+void AddTimeCodedFloatKeyframes(
+    std::vector<RenderFloatKeyframe>& track,
+    const ParsedTimeCodedAnimChannel& channel)
+{
+    const std::size_t packetSize = static_cast<std::size_t>(channel.vectorLen) + 1u;
+    track.reserve(track.size() + channel.numTimeCodes);
+    for (std::size_t i = 0; i < channel.numTimeCodes; ++i) {
+        const std::size_t offset = i * packetSize;
+        RenderFloatKeyframe key{};
+        key.frame = static_cast<float>(channel.words[offset] & 0x7FFFFFFFu);
+        key.value = (packetSize > 1u) ? ReadWordAsFloat(channel.words[offset + 1u]) : 0.0f;
+        key.hold =
+            (i + 1u < channel.numTimeCodes)
+            && ((channel.words[offset + packetSize] & W3D_TIMECODED_BINARY_MOVEMENT_FLAG) != 0u);
+        track.push_back(key);
+    }
+}
+
+void AddTimeCodedQuatKeyframes(
+    std::vector<RenderQuatKeyframe>& track,
+    const ParsedTimeCodedAnimChannel& channel)
+{
+    const std::size_t packetSize = static_cast<std::size_t>(channel.vectorLen) + 1u;
+    track.reserve(track.size() + channel.numTimeCodes);
+    for (std::size_t i = 0; i < channel.numTimeCodes; ++i) {
+        const std::size_t offset = i * packetSize;
+        RenderQuatKeyframe key{};
+        key.frame = static_cast<float>(channel.words[offset] & 0x7FFFFFFFu);
+        key.value = {
+            (packetSize > 1u) ? ReadWordAsFloat(channel.words[offset + 1u]) : 0.0f,
+            (packetSize > 2u) ? ReadWordAsFloat(channel.words[offset + 2u]) : 0.0f,
+            (packetSize > 3u) ? ReadWordAsFloat(channel.words[offset + 3u]) : 0.0f,
+            (packetSize > 4u) ? ReadWordAsFloat(channel.words[offset + 4u]) : 1.0f
+        };
+        key.hold =
+            (i + 1u < channel.numTimeCodes)
+            && ((channel.words[offset + packetSize] & W3D_TIMECODED_BINARY_MOVEMENT_FLAG) != 0u);
+        track.push_back(key);
+    }
+}
+
+void AddRawAnimationChannel(
+    RenderAnimationClip& clip,
+    const ParsedRawAnimChannel& channel,
+    const ChunkItem* sourceChunk,
+    BuildContext& ctx)
+{
+    if (channel.pivot >= clip.pivots.size()) {
+        clip.pivots.resize(static_cast<std::size_t>(channel.pivot) + 1u);
+    }
+    auto& pivot = clip.pivots[static_cast<std::size_t>(channel.pivot)];
+
+    switch (channel.flags) {
+    case 0:
+        if (channel.vectorLen >= 1u) {
+            AddFloatKeyframes(pivot.translationX, channel.firstFrame, channel.data);
+        }
+        break;
+    case 1:
+        if (channel.vectorLen >= 1u) {
+            AddFloatKeyframes(pivot.translationY, channel.firstFrame, channel.data);
+        }
+        break;
+    case 2:
+        if (channel.vectorLen >= 1u) {
+            AddFloatKeyframes(pivot.translationZ, channel.firstFrame, channel.data);
+        }
+        break;
+    case 6:
+        if (channel.vectorLen >= 4u) {
+            AddQuatKeyframes(pivot.rotation, channel.firstFrame, channel.data);
+        }
+        break;
+    default:
+        ctx.result.warnings.push_back({
+            SceneBuildWarningCode::UnsupportedChunk,
+            BuildChunkPath(sourceChunk),
+            "Animation channel type is not supported for rendering: " + std::to_string(channel.flags)
+            });
+        break;
+    }
+}
+
+void AddCompressedAnimationChannel(
+    RenderAnimationClip& clip,
+    const ParsedTimeCodedAnimChannel& channel,
+    const ChunkItem* sourceChunk,
+    BuildContext& ctx)
+{
+    if (channel.pivot >= clip.pivots.size()) {
+        clip.pivots.resize(static_cast<std::size_t>(channel.pivot) + 1u);
+    }
+    auto& pivot = clip.pivots[static_cast<std::size_t>(channel.pivot)];
+
+    switch (channel.flags) {
+    case 0:
+        if (channel.vectorLen >= 1u) {
+            AddTimeCodedFloatKeyframes(pivot.translationX, channel);
+        }
+        break;
+    case 1:
+        if (channel.vectorLen >= 1u) {
+            AddTimeCodedFloatKeyframes(pivot.translationY, channel);
+        }
+        break;
+    case 2:
+        if (channel.vectorLen >= 1u) {
+            AddTimeCodedFloatKeyframes(pivot.translationZ, channel);
+        }
+        break;
+    case 6:
+        if (channel.vectorLen >= 4u) {
+            AddTimeCodedQuatKeyframes(pivot.rotation, channel);
+        }
+        break;
+    default:
+        ctx.result.warnings.push_back({
+            SceneBuildWarningCode::UnsupportedChunk,
+            BuildChunkPath(sourceChunk),
+            "Compressed animation channel type is not supported for rendering: " + std::to_string(channel.flags)
+            });
+        break;
+    }
+}
+
+std::vector<ParsedAnimationDefinition> ParseAnimationDefinitions(
+    const W3DChunk& roots,
+    BuildContext& ctx,
+    bool sourceFromAnimationLibrary)
+{
+    std::vector<std::shared_ptr<ChunkItem>> rawAnimationChunks;
+    std::vector<std::shared_ptr<ChunkItem>> compressedAnimationChunks;
+
+    std::vector<ParsedAnimationDefinition> out;
+    for (const auto& root : roots) {
+        if (!root) {
+            continue;
+        }
+
+        rawAnimationChunks.clear();
+        compressedAnimationChunks.clear();
+        CollectChunksByIdRecursive(root, kChunkAnimation, rawAnimationChunks);
+        CollectChunksByIdRecursive(root, kChunkCompressedAnimation, compressedAnimationChunks);
+
+        const std::string sourceFileLabel = ctx.LookupRootSourceLabel(root);
+
+        for (const auto& animationChunk : rawAnimationChunks) {
+            const auto headerChunk = FindFirstChildById(animationChunk, kChunkAnimationHeader);
+            if (!headerChunk) {
+                continue;
+            }
+            const auto header = ParseStructWithWarning<W3dAnimHeaderStruct>(headerChunk, ctx.result.warnings);
+            if (!header) {
+                continue;
+            }
+
+            ParsedAnimationDefinition def{};
+            def.clip.fullName = ReadFixedString(header->Name, W3D_NAME_LEN);
+            def.clip.hierarchyName = ReadFixedString(header->HierarchyName, W3D_NAME_LEN);
+            if (!def.clip.hierarchyName.empty() && !def.clip.fullName.empty()) {
+                def.clip.fullName = def.clip.hierarchyName + "." + def.clip.fullName;
+            }
+            def.clip.sourceFileLabel = sourceFileLabel;
+            def.clip.numFrames = header->NumFrames;
+            def.clip.frameRate = static_cast<float>(header->FrameRate);
+            def.clip.compressed = false;
+            def.clip.supportedForPlayback = true;
+            def.clip.sourceFromAnimationLibrary = sourceFromAnimationLibrary;
+            def.clip.sourceAnimationChunk = animationChunk.get();
+            def.sourceHeaderChunk = headerChunk.get();
+
+            const auto channels = FindChildrenById(animationChunk, kChunkAnimationChannel);
+            for (const auto& channelChunk : channels) {
+                const auto parsed = ParseRawAnimChannel(channelChunk, ctx.result.warnings);
+                if (parsed) {
+                    AddRawAnimationChannel(def.clip, *parsed, channelChunk.get(), ctx);
+                }
+            }
+
+            out.push_back(std::move(def));
+        }
+
+        for (const auto& animationChunk : compressedAnimationChunks) {
+            const auto headerChunk = FindFirstChildById(animationChunk, kChunkCompressedAnimationHeader);
+            if (!headerChunk) {
+                continue;
+            }
+            const auto header =
+                ParseStructWithWarning<W3dCompressedAnimHeaderStruct>(headerChunk, ctx.result.warnings);
+            if (!header) {
+                continue;
+            }
+
+            ParsedAnimationDefinition def{};
+            def.clip.fullName = ReadFixedString(header->Name, W3D_NAME_LEN);
+            def.clip.hierarchyName = ReadFixedString(header->HierarchyName, W3D_NAME_LEN);
+            if (!def.clip.hierarchyName.empty() && !def.clip.fullName.empty()) {
+                def.clip.fullName = def.clip.hierarchyName + "." + def.clip.fullName;
+            }
+            def.clip.sourceFileLabel = sourceFileLabel;
+            def.clip.numFrames = header->NumFrames;
+            def.clip.frameRate = static_cast<float>(header->FrameRate);
+            def.clip.compressed = true;
+            def.clip.supportedForPlayback = true;
+            def.clip.sourceFromAnimationLibrary = sourceFromAnimationLibrary;
+            def.clip.sourceAnimationChunk = animationChunk.get();
+            def.sourceHeaderChunk = headerChunk.get();
+
+            if (header->Flavor == 1u) {
+                def.clip.supportedForPlayback = false;
+                ctx.result.warnings.push_back({
+                    SceneBuildWarningCode::UnsupportedChunk,
+                    BuildChunkPath(animationChunk.get()),
+                    "Adaptive-delta compressed animation is not supported for rendering yet."
+                    });
+                out.push_back(std::move(def));
+                continue;
+            }
+
+            const auto channels = FindChildrenById(animationChunk, kChunkCompressedAnimationChannel);
+            for (const auto& channelChunk : channels) {
+                const auto parsed = ParseTimeCodedAnimChannel(channelChunk, ctx.result.warnings);
+                if (parsed) {
+                    AddCompressedAnimationChannel(def.clip, *parsed, channelChunk.get(), ctx);
+                }
+            }
+
+            if (FindFirstChildById(animationChunk, kChunkCompressedAnimationAdaptiveDeltaChannel)) {
+                def.clip.supportedForPlayback = false;
+                ctx.result.warnings.push_back({
+                    SceneBuildWarningCode::UnsupportedChunk,
+                    BuildChunkPath(animationChunk.get()),
+                    "Adaptive-delta animation channels are not supported for rendering yet."
+                    });
+            }
+
+            out.push_back(std::move(def));
+        }
+    }
+
+    return out;
+}
+
+std::vector<HModelDefinition> ParseHModelDefinitions(const W3DChunk& roots, BuildContext& ctx) {
+    std::vector<std::shared_ptr<ChunkItem>> hmodelChunks;
+    for (const auto& root : roots) {
+        CollectChunksByIdRecursive(root, kChunkHModel, hmodelChunks);
+    }
+
+    std::vector<HModelDefinition> out;
+    out.reserve(hmodelChunks.size());
+    for (const auto& hmodelChunk : hmodelChunks) {
+        if (!hmodelChunk) {
+            continue;
+        }
+
+        const auto headerChunk = FindFirstChildById(hmodelChunk, kChunkHModelHeader);
+        if (!headerChunk) {
+            continue;
+        }
+        const auto header = ParseStructWithWarning<W3dHModelHeaderStruct>(headerChunk, ctx.result.warnings);
+        if (!header) {
+            continue;
+        }
+
+        HModelDefinition def{};
+        def.name = ReadFixedString(header->Name, W3D_NAME_LEN);
+        def.hierarchyName = ReadFixedString(header->HierarchyName, W3D_NAME_LEN);
+        def.sourceChunk = hmodelChunk.get();
+
+        for (const auto& child : hmodelChunk->children) {
+            if (!child) {
+                continue;
+            }
+            if (child->id != kChunkHModelNode && child->id != kChunkHModelSkinNode) {
+                continue;
+            }
+            const auto parsedNode = ParseStructWithWarning<W3dHModelNodeStruct>(child, ctx.result.warnings);
+            if (!parsedNode) {
+                continue;
+            }
+
+            HModelDefinition::NodeRef node{};
+            node.renderObjName = ReadFixedString(parsedNode->RenderObjName, W3D_NAME_LEN);
+            if (!def.name.empty() && node.renderObjName.find('.') == std::string::npos) {
+                node.renderObjName = def.name + "." + node.renderObjName;
+            }
+            node.pivotIndex = static_cast<int>(parsedNode->PivotIdx);
+            node.skinned = (child->id == kChunkHModelSkinNode);
+            node.sourceChunk = child.get();
+            def.nodes.push_back(std::move(node));
+        }
+
+        if (!def.nodes.empty()) {
+            out.push_back(std::move(def));
+        }
+    }
+
+    return out;
+}
+
+void AssignAnimationsToHierarchies(
+    BuildContext& ctx,
+    const std::vector<ParsedAnimationDefinition>& animations)
+{
+    for (const auto& animation : animations) {
+        const int animationIndex = static_cast<int>(ctx.result.scene.animations.size());
+        ctx.result.scene.animations.push_back(animation.clip);
+
+        if (animation.clip.hierarchyName.empty()) {
+            continue;
+        }
+
+        const auto hierarchyIt = ctx.hierarchyByName.find(NormalizeName(animation.clip.hierarchyName));
+        if (hierarchyIt == ctx.hierarchyByName.end()) {
+            ctx.WarnMissingHierarchy(
+                animation.sourceHeaderChunk,
+                animation.clip.hierarchyName,
+                "Animation hierarchy was not found");
+            continue;
+        }
+
+        RenderHierarchy& hierarchy =
+            ctx.result.scene.hierarchies[static_cast<std::size_t>(hierarchyIt->second)];
+        hierarchy.compatibleAnimationIndices.push_back(animationIndex);
+    }
+}
+
+void BuildNodesFromHModelDefinitions(
+    BuildContext& ctx,
+    const std::vector<HModelDefinition>& defs)
+{
+    for (const auto& def : defs) {
+        const int hierarchyIndex = ResolveHierarchyIndex(ctx, def.hierarchyName, def.name);
+        if (hierarchyIndex < 0) {
+            ctx.WarnMissingHierarchy(
+                def.sourceChunk,
+                !def.hierarchyName.empty() ? def.hierarchyName : def.name,
+                "HModel hierarchy was not found");
+        }
+
+        for (const auto& source : def.nodes) {
+            const auto meshIt = ctx.meshByName.find(NormalizeName(source.renderObjName));
+            if (meshIt == ctx.meshByName.end()) {
+                ctx.result.warnings.push_back({
+                    SceneBuildWarningCode::InvalidIndex,
+                    BuildChunkPath(source.sourceChunk),
+                    "Referenced HModel mesh not found: " + source.renderObjName
+                    });
+                continue;
+            }
+
+            RenderNode node{};
+            node.name = source.renderObjName;
+            node.meshIndex = meshIt->second;
+            node.hierarchyIndex = hierarchyIndex;
+            node.localTransform = Mat4::Identity();
+            node.sourceBindingChunk = source.sourceChunk;
+
+            const RenderMesh& mesh =
+                ctx.result.scene.meshes[static_cast<std::size_t>(node.meshIndex)];
+            if (mesh.skinned) {
+                node.pivotIndex = -1;
+            }
+            else {
+                node.pivotIndex = source.pivotIndex;
+                if (hierarchyIndex >= 0
+                    && hierarchyIndex < static_cast<int>(ctx.result.scene.hierarchies.size())) {
+                    const auto& pivots =
+                        ctx.result.scene.hierarchies[static_cast<std::size_t>(hierarchyIndex)].pivots;
+                    if (node.pivotIndex < 0 || node.pivotIndex >= static_cast<int>(pivots.size())) {
+                        ctx.result.warnings.push_back({
+                            SceneBuildWarningCode::InvalidIndex,
+                            BuildChunkPath(source.sourceChunk),
+                            "HModel pivot index is out of range for hierarchy: " + std::to_string(node.pivotIndex)
+                            });
+                        node.pivotIndex = -1;
+                    }
+                }
+                else {
+                    node.pivotIndex = -1;
+                }
+            }
+
+            ctx.referencedMeshes.insert(node.meshIndex);
+            ctx.result.scene.looseNodes.push_back(std::move(node));
+        }
+    }
+}
+
 std::vector<HlodDefinition> ParseHLodDefinitions(const W3DChunk& roots, BuildContext& ctx) {
     std::vector<std::shared_ptr<ChunkItem>> hlodChunks;
     for (const auto& root : roots) {
@@ -1141,6 +1924,7 @@ std::vector<HlodDefinition> ParseHLodDefinitions(const W3DChunk& roots, BuildCon
         HlodDefinition def{};
         def.name = ReadFixedString(header->Name, W3D_NAME_LEN);
         def.hierarchyName = ReadFixedString(header->HierarchyName, W3D_NAME_LEN);
+        def.sourceChunk = headerChunk.get();
 
         const auto lodArrays = FindChildrenById(hlodChunk, kChunkHLodLodArray);
         for (const auto& lodArrayChunk : lodArrays) {
@@ -1254,6 +2038,12 @@ void BuildLodGroupsFromHLodDefinitions(
         RenderLodGroup group{};
         group.name = def.name;
         group.hierarchyIndex = ResolveHierarchyIndex(ctx, def.hierarchyName, def.name);
+        if (group.hierarchyIndex < 0) {
+            ctx.WarnMissingHierarchy(
+                def.sourceChunk,
+                !def.hierarchyName.empty() ? def.hierarchyName : def.name,
+                "HLOD hierarchy was not found");
+        }
 
         std::vector<std::size_t> order;
         order.reserve(def.lodArrays.size());
@@ -1409,25 +2199,46 @@ void ParseMeshes(const W3DChunk& roots, BuildContext& ctx, bool supplemental) {
 } // namespace
 
 SceneBuildResult BuildRenderScene(
-    const W3DChunk& root,
+    const W3DChunk& primaryRoots,
     const SceneBuildOptions& options,
-    const W3DChunk* supplementalRoot)
+    const W3DChunk* skeletonSupplementalRoots,
+    const W3DChunk* animationLibraryRoots)
 {
     BuildContext ctx{};
     ctx.options = options;
     ctx.InitializeExternalTextures();
     ctx.result.scene.profile = options.profile;
+    const std::vector<std::shared_ptr<ChunkItem>> hierarchyRoots =
+        CollectAllRoots(primaryRoots, skeletonSupplementalRoots, nullptr);
+    ParseMeshes(primaryRoots, ctx, false);
+    ParseHierarchies(hierarchyRoots, ctx);
 
-    ParseMeshes(root, ctx, false);
-    if (supplementalRoot && !supplementalRoot->empty()) {
-        ParseMeshes(*supplementalRoot, ctx, true);
+    std::vector<ParsedAnimationDefinition> animations = ParseAnimationDefinitions(primaryRoots, ctx, false);
+    if (skeletonSupplementalRoots && !skeletonSupplementalRoots->empty()) {
+        std::vector<ParsedAnimationDefinition> moreAnimations =
+            ParseAnimationDefinitions(*skeletonSupplementalRoots, ctx, false);
+        animations.insert(
+            animations.end(),
+            std::make_move_iterator(moreAnimations.begin()),
+            std::make_move_iterator(moreAnimations.end()));
     }
-    ParseHierarchies(root, ctx);
+    if (animationLibraryRoots && !animationLibraryRoots->empty()) {
+        std::vector<ParsedAnimationDefinition> libraryAnimations =
+            ParseAnimationDefinitions(*animationLibraryRoots, ctx, true);
+        animations.insert(
+            animations.end(),
+            std::make_move_iterator(libraryAnimations.begin()),
+            std::make_move_iterator(libraryAnimations.end()));
+    }
+    AssignAnimationsToHierarchies(ctx, animations);
 
-    const auto hlodDefs = ParseHLodDefinitions(root, ctx);
+    const auto hmodelDefs = ParseHModelDefinitions(primaryRoots, ctx);
+    BuildNodesFromHModelDefinitions(ctx, hmodelDefs);
+
+    const auto hlodDefs = ParseHLodDefinitions(primaryRoots, ctx);
     BuildLodGroupsFromHLodDefinitions(ctx, hlodDefs);
 
-    const auto lodModelDefs = ParseLodModelDefinitions(root, ctx);
+    const auto lodModelDefs = ParseLodModelDefinitions(primaryRoots, ctx);
     BuildLodGroupsFromLodModelDefinitions(ctx, lodModelDefs);
 
     BuildLooseNodes(ctx);
