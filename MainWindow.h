@@ -44,6 +44,11 @@ private slots:
     void saveFile();
     void saveFileAs();
     void onChunkEdited();
+    void onAnimationHeaderRenamed(
+        const QString& oldAnimationName,
+        const QString& newAnimationName,
+        const QString& oldHierarchyName,
+        const QString& newHierarchyName);
     void onMeshRenamed(const QString& oldMeshName,
         const QString& newMeshName,
         const QString& oldContainerName,

@@ -98,14 +98,22 @@ public:
 
 signals:
     void chunkEdited();
+    void headerRenamed(
+        const QString& oldAnimationName,
+        const QString& newAnimationName,
+        const QString& oldHierarchyName,
+        const QString& newHierarchyName);
 
 private slots:
     void applyChanges();
 
 private:
     std::weak_ptr<ChunkItem> chunk;
+    QLineEdit* animationNameEdit = nullptr;
     QLineEdit* hierarchyNameEdit = nullptr;
     QPushButton* applyButton = nullptr;
+    QString loadedAnimationName;
+    QString loadedHierarchyName;
 };
 
 class TransformNodeEditorWidget : public QWidget {
