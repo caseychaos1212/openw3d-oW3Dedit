@@ -24,6 +24,7 @@
 #include <QWheelEvent>
 
 #include "D3D11RenderBackend.h"
+#include "../../backend/render/AnimationPose.h"
 
 #include "../../thirdparty/imgui/imgui.h"
 #include "../../thirdparty/imgui/backends/imgui_impl_dx11.h"
@@ -66,6 +67,57 @@ Mat4 Mat4FromFloatArray(const float in[16]) {
     Mat4 out{};
     std::memcpy(out.m, in, sizeof(float) * 16);
     return out;
+}
+
+bool ProjectWorldPointToScreen(
+    const Mat4& viewProjection,
+    const Vec3& worldPos,
+    float viewportWidth,
+    float viewportHeight,
+    ImVec2& outScreen,
+    float* outDepth = nullptr)
+{
+    const float clipX =
+        worldPos.x * viewProjection.m[0]
+        + worldPos.y * viewProjection.m[4]
+        + worldPos.z * viewProjection.m[8]
+        + viewProjection.m[12];
+    const float clipY =
+        worldPos.x * viewProjection.m[1]
+        + worldPos.y * viewProjection.m[5]
+        + worldPos.z * viewProjection.m[9]
+        + viewProjection.m[13];
+    const float clipZ =
+        worldPos.x * viewProjection.m[2]
+        + worldPos.y * viewProjection.m[6]
+        + worldPos.z * viewProjection.m[10]
+        + viewProjection.m[14];
+    const float clipW =
+        worldPos.x * viewProjection.m[3]
+        + worldPos.y * viewProjection.m[7]
+        + worldPos.z * viewProjection.m[11]
+        + viewProjection.m[15];
+
+    if (clipW <= 1.0e-5f) {
+        return false;
+    }
+
+    const float ndcX = clipX / clipW;
+    const float ndcY = clipY / clipW;
+    const float ndcZ = clipZ / clipW;
+    if (!std::isfinite(ndcX) || !std::isfinite(ndcY) || !std::isfinite(ndcZ)) {
+        return false;
+    }
+    if (ndcZ < -0.25f || ndcZ > 1.25f) {
+        return false;
+    }
+
+    outScreen.x = (ndcX * 0.5f + 0.5f) * viewportWidth;
+    outScreen.y = (1.0f - (ndcY * 0.5f + 0.5f)) * viewportHeight;
+    if (outDepth) {
+        *outDepth = ndcZ;
+    }
+    return true;
 }
 
 Mat4 OrthonormalizeRigidTransform(const Mat4& m) {
@@ -270,23 +322,36 @@ RenderViewportWidget::~RenderViewportWidget() {
     }
 }
 
+QSize RenderViewportWidget::sizeHint() const {
+    return { 640, 360 };
+}
+
+QSize RenderViewportWidget::minimumSizeHint() const {
+    return { 320, 180 };
+}
+
 void RenderViewportWidget::SetSceneResult(const SceneBuildResult& sceneResult) {
     m_sceneResult = sceneResult;
     m_sceneDirty = true;
 
     ClearPivotOverrides();
     m_hiddenInstances.clear();
-    m_selectedInstance.reset();
     m_selectedVisibleIndex = -1;
+    m_selectedPivotRepresentativeVisibleIndex = -1;
 
     if (m_backend) {
-        m_backend->SetSelectedInstance(std::nullopt);
+        m_backend->SetSelectedInstance(m_selectedInstance);
         m_backend->SetTransformOverrides({});
         m_backend->SetHiddenInstances({});
     }
 
+    if (IsAnimationEditModeActive()
+        && !m_selectedPivot.has_value()
+        && !m_selectedInstance.has_value()) {
+        m_autoSelectEditablePivotPending = true;
+    }
+
     EmitWarnings();
-    EmitSelectionStatus(QStringLiteral("Selection: none"));
 }
 
 void RenderViewportWidget::SetRenderSettings(const RenderSettings& settings) {
@@ -303,6 +368,39 @@ void RenderViewportWidget::SetAnimationPlayback(const AnimationPlaybackState& pl
     }
 }
 
+void RenderViewportWidget::SetAnimationEditDraft(
+    const std::optional<RenderAnimationEditDraft>& draft)
+{
+    m_animationEditDraft = draft;
+    if (m_backendInitialized && m_backend) {
+        m_backend->SetAnimationEditDraft(m_animationEditDraft);
+    }
+}
+
+void RenderViewportWidget::SetAnimationEditingState(
+    bool editKeysEnabled,
+    bool clipEditable,
+    const QString& readOnlyReason)
+{
+    const bool changed =
+        m_animationEditKeysEnabled != editKeysEnabled
+        || m_animationClipEditable != clipEditable
+        || m_animationClipReadOnlyReason != readOnlyReason;
+    m_animationEditKeysEnabled = editKeysEnabled;
+    m_animationClipEditable = clipEditable;
+    m_animationClipReadOnlyReason = readOnlyReason;
+
+    if (changed) {
+        m_gizmoWasUsing = false;
+        ClearPivotOverrides();
+        if (IsAnimationEditModeActive()
+            && !m_selectedPivot.has_value()
+            && !m_selectedInstance.has_value()) {
+            m_autoSelectEditablePivotPending = true;
+        }
+    }
+}
+
 void RenderViewportWidget::FocusScene() {
     const Vec3 center = ComputeSceneCenter();
     const float radius = ComputeSceneRadius(center);
@@ -314,77 +412,304 @@ void RenderViewportWidget::FocusScene() {
     SyncCameraInspectorStateFromCamera();
 }
 
+const RenderAnimationClip* RenderViewportWidget::CurrentActiveAnimationClip() const {
+    const int activeIndex = m_animationPlayback.activeAnimationIndex;
+    if (activeIndex < 0 || activeIndex >= static_cast<int>(m_sceneResult.scene.animations.size())) {
+        return nullptr;
+    }
+    return &m_sceneResult.scene.animations[static_cast<std::size_t>(activeIndex)];
+}
+
+const RenderAnimationClip* RenderViewportWidget::ActiveClipForHierarchy(
+    int hierarchyIndex,
+    float* outAnimationFrame) const
+{
+    if (outAnimationFrame) {
+        *outAnimationFrame = 0.0f;
+    }
+    if (hierarchyIndex < 0
+        || hierarchyIndex >= static_cast<int>(m_sceneResult.scene.hierarchies.size())) {
+        return nullptr;
+    }
+
+    float animationFrame = 0.0f;
+    const RenderAnimationClip* clip = ResolveActiveAnimationClipForHierarchy(
+        m_sceneResult.scene,
+        m_sceneResult.scene.hierarchies[static_cast<std::size_t>(hierarchyIndex)],
+        m_animationPlayback,
+        m_animationPlayback.timeSeconds,
+        animationFrame);
+    if (outAnimationFrame) {
+        *outAnimationFrame = animationFrame;
+    }
+    return clip;
+}
+
+int RenderViewportWidget::CurrentAnimationFrameIndex() const {
+    const RenderAnimationClip* clip = CurrentActiveAnimationClip();
+    if (!clip || clip->numFrames == 0u || clip->frameRate <= 0.0f) {
+        return 0;
+    }
+
+    const int maxFrame = std::max(0, static_cast<int>(clip->numFrames) - 1);
+    const float frameFloat = m_animationPlayback.timeSeconds * clip->frameRate;
+    return std::clamp(static_cast<int>(std::round(frameFloat)), 0, maxFrame);
+}
+
+bool RenderViewportWidget::IsAnimationEditModeActive() const {
+    return m_animationEditKeysEnabled
+        && m_animationClipEditable
+        && CurrentActiveAnimationClip() != nullptr;
+}
+
+RenderViewportWidget::PivotEditability RenderViewportWidget::EvaluatePivotEditability(
+    int hierarchyIndex,
+    int pivotIndex,
+    const ::ChunkItem* pivotsChunk) const
+{
+    PivotEditability out{};
+
+    if (hierarchyIndex < 0
+        || hierarchyIndex >= static_cast<int>(m_sceneResult.scene.hierarchies.size())) {
+        out.reason = tr("The selected target is not bound to a valid hierarchy.");
+        return out;
+    }
+
+    const auto& hierarchy = m_sceneResult.scene.hierarchies[static_cast<std::size_t>(hierarchyIndex)];
+    if (pivotIndex < 0 || pivotIndex >= static_cast<int>(hierarchy.pivots.size())) {
+        out.reason = tr("The selected target is not bound to a valid pivot.");
+        return out;
+    }
+
+    if (m_animationEditKeysEnabled) {
+        if (!m_animationClipEditable) {
+            out.reason = m_animationClipReadOnlyReason.isEmpty()
+                ? tr("The active animation clip is read-only.")
+                : m_animationClipReadOnlyReason;
+            return out;
+        }
+
+        float animationFrame = 0.0f;
+        if (!ActiveClipForHierarchy(hierarchyIndex, &animationFrame)) {
+            out.reason = tr("The active animation clip does not target this hierarchy.");
+            return out;
+        }
+
+        out.editable = true;
+        return out;
+    }
+
+    if (!pivotsChunk) {
+        out.reason = tr("The selected render item does not have an editable skeleton pivot.");
+        return out;
+    }
+
+    out.editable = true;
+    return out;
+}
+
+Mat4 RenderViewportWidget::ComputeUnderlyingLocalTransform(int hierarchyIndex, int pivotIndex) const {
+    if (hierarchyIndex < 0
+        || hierarchyIndex >= static_cast<int>(m_sceneResult.scene.hierarchies.size())) {
+        return Mat4::Identity();
+    }
+
+    const auto& hierarchy = m_sceneResult.scene.hierarchies[static_cast<std::size_t>(hierarchyIndex)];
+    if (pivotIndex < 0 || pivotIndex >= static_cast<int>(hierarchy.pivots.size())) {
+        return Mat4::Identity();
+    }
+
+    float animationFrame = 0.0f;
+    const RenderAnimationClip* activeClip = ActiveClipForHierarchy(hierarchyIndex, &animationFrame);
+    const RenderAnimationEditDraft* activeDraft =
+        ResolveAnimationEditDraftForClip(m_animationEditDraft, activeClip);
+    return OrthonormalizeRigidTransform(ComposeAnimatedPivotLocalTransform(
+        hierarchy,
+        pivotIndex,
+        activeClip,
+        animationFrame,
+        activeDraft));
+}
+
+Mat4 RenderViewportWidget::ComputeDisplayedLocalTransform(int hierarchyIndex, int pivotIndex) const {
+    Mat4 local = ComputeUnderlyingLocalTransform(hierarchyIndex, pivotIndex);
+
+    PivotKey key{};
+    key.hierarchyIndex = hierarchyIndex;
+    key.pivotIndex = pivotIndex;
+    if (const auto overrideIt = m_pivotLocalOverrides.find(key);
+        overrideIt != m_pivotLocalOverrides.end()) {
+        local = overrideIt->second;
+    }
+
+    return OrthonormalizeRigidTransform(local);
+}
+
+void RenderViewportWidget::MaybePauseAnimationForEditing() {
+    if (!IsAnimationEditModeActive() || !m_animationPlayback.playing) {
+        return;
+    }
+
+    m_animationPlayback.playing = false;
+    emit animationPlaybackPauseRequested();
+}
+
+void RenderViewportWidget::CommitDisplayedLocalTransform(
+    const PivotKey& key,
+    const Mat4& displayedLocal)
+{
+    if (key.hierarchyIndex < 0
+        || key.hierarchyIndex >= static_cast<int>(m_sceneResult.scene.hierarchies.size())) {
+        return;
+    }
+
+    const auto& hierarchy = m_sceneResult.scene.hierarchies[static_cast<std::size_t>(key.hierarchyIndex)];
+    if (key.pivotIndex < 0 || key.pivotIndex >= static_cast<int>(hierarchy.pivots.size())) {
+        return;
+    }
+
+    MaybePauseAnimationForEditing();
+
+    const Mat4 local = OrthonormalizeRigidTransform(displayedLocal);
+
+    if (IsAnimationEditModeActive()) {
+        const Mat4 baseLocal = hierarchy.pivots[static_cast<std::size_t>(key.pivotIndex)].localTransform;
+        const Mat4 animationLocal = OrthonormalizeRigidTransform(Multiply(Inverse(baseLocal), local));
+        const Quaternion q = QuaternionFromMatrix(animationLocal);
+
+        emit animationKeyframeCommitRequested(
+            key.hierarchyIndex,
+            key.pivotIndex,
+            CurrentAnimationFrameIndex(),
+            animationLocal.m[12],
+            animationLocal.m[13],
+            animationLocal.m[14],
+            q.x,
+            q.y,
+            q.z,
+            q.w);
+        ClearPivotOverrides();
+        return;
+    }
+
+    const ::ChunkItem* pivotsChunk = hierarchy.sourcePivotsChunk;
+    if (!pivotsChunk) {
+        return;
+    }
+
+    Mat4 baseCommitLocal = local;
+    float animationFrame = 0.0f;
+    if (const RenderAnimationClip* activeClip = ActiveClipForHierarchy(key.hierarchyIndex, &animationFrame);
+        activeClip && key.pivotIndex < static_cast<int>(activeClip->pivots.size())) {
+        const Mat4 animationLocal = BuildPivotAnimationLocalTransform(activeClip, key.pivotIndex, animationFrame);
+        baseCommitLocal = OrthonormalizeRigidTransform(Multiply(local, Inverse(animationLocal)));
+    }
+
+    const Quaternion q = QuaternionFromMatrix(baseCommitLocal);
+    emit pivotTransformCommitRequested(
+        const_cast<::ChunkItem*>(pivotsChunk),
+        key.pivotIndex,
+        baseCommitLocal.m[12],
+        baseCommitLocal.m[13],
+        baseCommitLocal.m[14],
+        q.x,
+        q.y,
+        q.z,
+        q.w);
+
+    ClearPivotOverrides();
+}
+
+int RenderViewportWidget::FindRepresentativeVisibleInstance(const PivotKey& key) const {
+    for (int i = 0; i < static_cast<int>(m_visibleInstances.size()); ++i) {
+        const auto& instance = m_visibleInstances[static_cast<std::size_t>(i)];
+        if (instance.hierarchyIndex == key.hierarchyIndex && instance.pivotIndex == key.pivotIndex) {
+            return i;
+        }
+    }
+    return -1;
+}
+
 bool RenderViewportWidget::TryGetSelectedEditablePivot(
-    const VisibleInstance*& outSelected,
+    PivotKey& outKey,
+    const ::ChunkItem*& outPivotsChunk,
+    int& outRepresentativeVisibleIndex,
     Mat4& outLocal,
+    PivotEditability& outEditability,
     QString* outError) const
 {
-    outSelected = nullptr;
+    outPivotsChunk = nullptr;
+    outRepresentativeVisibleIndex = -1;
     outLocal = Mat4::Identity();
+    outEditability = {};
 
-    if (m_selectedVisibleIndex < 0
-        || m_selectedVisibleIndex >= static_cast<int>(m_visibleInstances.size())) {
+    if (!m_selectedPivot.has_value()) {
         if (outError) {
             *outError = tr("Select a render mesh or pivot first.");
         }
         return false;
     }
 
-    const auto& selected = m_visibleInstances[static_cast<std::size_t>(m_selectedVisibleIndex)];
-    if (!selected.editable) {
-        if (outError) {
-            *outError = tr("The selected render item is read-only.");
-        }
-        return false;
-    }
-    if (!selected.pivotsChunk) {
-        if (outError) {
-            *outError = tr("The selected render item does not have an editable skeleton pivot.");
-        }
-        return false;
-    }
-    if (selected.hierarchyIndex < 0
-        || selected.hierarchyIndex >= static_cast<int>(m_sceneResult.scene.hierarchies.size())) {
+    outKey = *m_selectedPivot;
+    outPivotsChunk = m_selectedPivotsChunk;
+    outRepresentativeVisibleIndex = m_selectedPivotRepresentativeVisibleIndex;
+
+    if (outKey.hierarchyIndex < 0
+        || outKey.hierarchyIndex >= static_cast<int>(m_sceneResult.scene.hierarchies.size())) {
         if (outError) {
             *outError = tr("The selected render item is not bound to a valid hierarchy.");
         }
         return false;
     }
 
-    const auto& hierarchy = m_sceneResult.scene.hierarchies[static_cast<std::size_t>(selected.hierarchyIndex)];
-    if (selected.pivotIndex < 0
-        || selected.pivotIndex >= static_cast<int>(hierarchy.pivots.size())) {
+    const auto& hierarchy = m_sceneResult.scene.hierarchies[static_cast<std::size_t>(outKey.hierarchyIndex)];
+    if (outKey.pivotIndex < 0
+        || outKey.pivotIndex >= static_cast<int>(hierarchy.pivots.size())) {
         if (outError) {
             *outError = tr("The selected render item is not bound to a valid pivot.");
         }
         return false;
     }
 
-    PivotKey key{};
-    key.hierarchyIndex = selected.hierarchyIndex;
-    key.pivotIndex = selected.pivotIndex;
-    const auto overrideIt = m_pivotLocalOverrides.find(key);
-    if (overrideIt != m_pivotLocalOverrides.end()) {
-        outLocal = OrthonormalizeRigidTransform(overrideIt->second);
-    }
-    else {
-        outLocal = OrthonormalizeRigidTransform(
-            hierarchy.pivots[static_cast<std::size_t>(selected.pivotIndex)].localTransform);
+    outLocal = ComputeDisplayedLocalTransform(outKey.hierarchyIndex, outKey.pivotIndex);
+    outEditability = EvaluatePivotEditability(
+        outKey.hierarchyIndex,
+        outKey.pivotIndex,
+        outPivotsChunk);
+
+    if (!outEditability.editable && outError) {
+        *outError = outEditability.reason;
     }
 
-    outSelected = &selected;
     return true;
 }
 
 void RenderViewportWidget::OpenManualPivotRotationDialog() {
-    const VisibleInstance* selected = nullptr;
+    PivotKey key{};
+    const ::ChunkItem* pivotsChunk = nullptr;
+    int representativeVisibleIndex = -1;
     Mat4 local = Mat4::Identity();
+    PivotEditability editability{};
     QString errorText;
-    if (!TryGetSelectedEditablePivot(selected, local, &errorText)) {
+    if (!TryGetSelectedEditablePivot(
+        key,
+        pivotsChunk,
+        representativeVisibleIndex,
+        local,
+        editability,
+        &errorText)) {
         QMessageBox::information(
             this,
             tr("No Editable Pivot"),
             errorText.isEmpty() ? tr("Select a render mesh or pivot first.") : errorText);
+        return;
+    }
+
+    if (!editability.editable) {
+        QMessageBox::information(
+            this,
+            tr("Read-Only Selection"),
+            editability.reason.isEmpty() ? tr("The selected render item is read-only.") : editability.reason);
         return;
     }
 
@@ -434,30 +759,22 @@ void RenderViewportWidget::OpenManualPivotRotationDialog() {
         static_cast<float>(zSpin->value())
     };
     const Quaternion newRotation = QuaternionFromEulerDegrees(newEulerDegrees);
-
-    emit pivotTransformCommitRequested(
-        const_cast<::ChunkItem*>(selected->pivotsChunk),
-        selected->pivotIndex,
-        local.m[12],
-        local.m[13],
-        local.m[14],
+    const Mat4 committedLocal = TransformFromTranslationRotation(
+        { local.m[12], local.m[13], local.m[14] },
         newRotation.x,
         newRotation.y,
         newRotation.z,
         newRotation.w);
 
-    ClearPivotOverrides();
+    CommitDisplayedLocalTransform(key, committedLocal);
 }
 
-void RenderViewportWidget::SyncTransformInspectorState(const VisibleInstance* selected, const Mat4& local) {
-    if (!selected || selected->hierarchyIndex < 0 || selected->pivotIndex < 0) {
+void RenderViewportWidget::SyncTransformInspectorState(const PivotKey& key, const Mat4& local) {
+    if (key.hierarchyIndex < 0 || key.pivotIndex < 0) {
         m_transformInspectorHasSelection = false;
         return;
     }
 
-    PivotKey key{};
-    key.hierarchyIndex = selected->hierarchyIndex;
-    key.pivotIndex = selected->pivotIndex;
     if (!m_transformInspectorHasSelection || !(m_transformInspectorPivot == key)) {
         m_transformInspectorHasSelection = true;
         m_transformInspectorPivot = key;
@@ -468,10 +785,19 @@ void RenderViewportWidget::SyncTransformInspectorState(const VisibleInstance* se
 }
 
 void RenderViewportWidget::ApplyTransformInspectorEdits() {
-    const VisibleInstance* selected = nullptr;
+    PivotKey key{};
+    const ::ChunkItem* pivotsChunk = nullptr;
+    int representativeVisibleIndex = -1;
     Mat4 local = Mat4::Identity();
+    PivotEditability editability{};
     QString errorText;
-    if (!TryGetSelectedEditablePivot(selected, local, &errorText)) {
+    if (!TryGetSelectedEditablePivot(
+        key,
+        pivotsChunk,
+        representativeVisibleIndex,
+        local,
+        editability,
+        &errorText)) {
         QMessageBox::information(
             this,
             tr("No Editable Pivot"),
@@ -479,19 +805,84 @@ void RenderViewportWidget::ApplyTransformInspectorEdits() {
         return;
     }
 
+    if (!editability.editable) {
+        QMessageBox::information(
+            this,
+            tr("Read-Only Selection"),
+            editability.reason.isEmpty() ? tr("The selected render item is read-only.") : editability.reason);
+        return;
+    }
+
     const Quaternion newRotation = QuaternionFromEulerDegrees(m_transformInspectorRotationDegrees);
-    emit pivotTransformCommitRequested(
-        const_cast<::ChunkItem*>(selected->pivotsChunk),
-        selected->pivotIndex,
-        m_transformInspectorTranslation.x,
-        m_transformInspectorTranslation.y,
-        m_transformInspectorTranslation.z,
+    Mat4 committedLocal = TransformFromTranslationRotation(
+        m_transformInspectorTranslation,
         newRotation.x,
         newRotation.y,
         newRotation.z,
         newRotation.w);
+    CommitDisplayedLocalTransform(key, committedLocal);
+}
 
-    ClearPivotOverrides();
+void RenderViewportWidget::PreviewTransformInspectorEdits() {
+    PivotKey key{};
+    const ::ChunkItem* pivotsChunk = nullptr;
+    int representativeVisibleIndex = -1;
+    Mat4 local = Mat4::Identity();
+    PivotEditability editability{};
+    if (!TryGetSelectedEditablePivot(
+        key,
+        pivotsChunk,
+        representativeVisibleIndex,
+        local,
+        editability,
+        nullptr)
+        || !editability.editable) {
+        return;
+    }
+
+    (void)pivotsChunk;
+    (void)representativeVisibleIndex;
+    MaybePauseAnimationForEditing();
+    const Quaternion newRotation = QuaternionFromEulerDegrees(m_transformInspectorRotationDegrees);
+    m_pivotLocalOverrides[key] = TransformFromTranslationRotation(
+        m_transformInspectorTranslation,
+        newRotation.x,
+        newRotation.y,
+        newRotation.z,
+        newRotation.w);
+    RebuildBackendOverrides();
+}
+
+void RenderViewportWidget::ResetTransformInspectorToOriginal() {
+    PivotKey key{};
+    const ::ChunkItem* pivotsChunk = nullptr;
+    int representativeVisibleIndex = -1;
+    Mat4 local = Mat4::Identity();
+    PivotEditability editability{};
+    if (!TryGetSelectedEditablePivot(
+        key,
+        pivotsChunk,
+        representativeVisibleIndex,
+        local,
+        editability,
+        nullptr)) {
+        return;
+    }
+
+    (void)pivotsChunk;
+    (void)representativeVisibleIndex;
+    m_pivotLocalOverrides.erase(key);
+    const Mat4 originalLocal = ComputeUnderlyingLocalTransform(key.hierarchyIndex, key.pivotIndex);
+    m_transformInspectorHasSelection = true;
+    m_transformInspectorPivot = key;
+    m_transformInspectorTranslation = {
+        originalLocal.m[12],
+        originalLocal.m[13],
+        originalLocal.m[14]
+    };
+    m_transformInspectorRotationDegrees =
+        EulerDegreesFromQuaternion(QuaternionFromMatrix(originalLocal));
+    RebuildBackendOverrides();
 }
 
 void RenderViewportWidget::SyncCameraInspectorStateFromCamera() {
@@ -741,6 +1132,7 @@ void RenderViewportWidget::EnsureBackendInitialized() {
     m_backendInitialized = true;
     m_backend->SetRenderSettings(m_settings);
     m_backend->SetAnimationPlayback(m_animationPlayback);
+    m_backend->SetAnimationEditDraft(m_animationEditDraft);
     m_backend->SetCamera(m_camera);
     m_sceneDirty = true;
     m_deltaTimer.restart();
@@ -879,6 +1271,16 @@ void RenderViewportWidget::EmitWarnings() {
 void RenderViewportWidget::BuildVisibleInstances(const Vec3& cameraPos) {
     m_visibleInstances.clear();
 
+    auto populateInstanceEditability = [&](VisibleInstance& instance) {
+        const PivotEditability editability =
+            EvaluatePivotEditability(
+                instance.hierarchyIndex,
+                instance.pivotIndex,
+                instance.pivotsChunk);
+        instance.editable = editability.editable;
+        instance.readOnlyReason = editability.reason;
+    };
+
     const auto hierarchyWorld = BuildHierarchyWorldTransforms();
     auto getWorldForBinding = [&](int hierarchyIndex, int pivotIndex, const Mat4& fallback) -> Mat4 {
         if (hierarchyIndex < 0 || hierarchyIndex >= static_cast<int>(hierarchyWorld.size())) {
@@ -948,17 +1350,7 @@ void RenderViewportWidget::BuildVisibleInstances(const Vec3& cameraPos) {
                 instance.pivotsChunk = hierarchy.sourcePivotsChunk;
             }
 
-            if (instance.meshFromSupplemental) {
-                instance.editable = false;
-                instance.readOnlyReason = QStringLiteral("supplemental mesh (read-only)");
-            }
-            else if (!instance.pivotsChunk || instance.pivotIndex < 0) {
-                instance.editable = false;
-                instance.readOnlyReason = QStringLiteral("no writable pivot binding");
-            }
-            else {
-                instance.editable = true;
-            }
+            populateInstanceEditability(instance);
 
             m_visibleInstances.push_back(instance);
         }
@@ -993,20 +1385,12 @@ void RenderViewportWidget::BuildVisibleInstances(const Vec3& cameraPos) {
             instance.pivotsChunk = hierarchy.sourcePivotsChunk;
         }
 
-        if (instance.meshFromSupplemental) {
-            instance.editable = false;
-            instance.readOnlyReason = QStringLiteral("supplemental mesh (read-only)");
-        }
-        else if (!instance.pivotsChunk || instance.pivotIndex < 0) {
-            instance.editable = false;
-            instance.readOnlyReason = QStringLiteral("no writable pivot binding");
-        }
-        else {
-            instance.editable = true;
-        }
+        populateInstanceEditability(instance);
 
         m_visibleInstances.push_back(instance);
     }
+
+    AutoSelectFirstEditablePivotIfNeeded();
 }
 
 void RenderViewportWidget::RebuildBackendOverrides() {
@@ -1130,6 +1514,9 @@ void RenderViewportWidget::DrawSceneBrowserOverlay() {
     ImGui::BeginChild("##SceneBrowserList", ImVec2(0.0f, 0.0f), false);
 
     int requestedSelection = -1;
+    std::optional<PivotKey> requestedPivot;
+    const ::ChunkItem* requestedPivotsChunk = nullptr;
+    int requestedRepresentativeVisibleIndex = -1;
 
     auto hierarchyNameFor = [&](int hierarchyIndex) -> QString {
         if (hierarchyIndex >= 0
@@ -1221,6 +1608,15 @@ void RenderViewportWidget::DrawSceneBrowserOverlay() {
             ImGui::PopStyleVar();
         }
         ImGui::PopID();
+    };
+
+    auto requestPivotSelection = [&](int hierarchyIndex, int pivotIndex, const ::ChunkItem* pivotsChunk) {
+        PivotKey key{};
+        key.hierarchyIndex = hierarchyIndex;
+        key.pivotIndex = pivotIndex;
+        requestedPivot = key;
+        requestedPivotsChunk = pivotsChunk;
+        requestedRepresentativeVisibleIndex = FindRepresentativeVisibleInstance(key);
     };
 
     std::vector<int> looseInstances;
@@ -1331,18 +1727,48 @@ void RenderViewportWidget::DrawSceneBrowserOverlay() {
 
                 const auto& instances = pivotInstances[static_cast<std::size_t>(pivotIndex)];
                 const auto& children = pivotChildren[static_cast<std::size_t>(pivotIndex)];
+                PivotKey key{};
+                key.hierarchyIndex = hierarchyIndex;
+                key.pivotIndex = pivotIndex;
+                const PivotEditability editability =
+                    EvaluatePivotEditability(
+                        hierarchyIndex,
+                        pivotIndex,
+                        hierarchy.sourcePivotsChunk);
 
                 const QString pivotLabelText = QStringLiteral("%1 (%2)")
                     .arg(pivotNameFor(hierarchyIndex, pivotIndex))
-                    .arg(static_cast<int>(instances.size()));
+                    .arg(static_cast<int>(instances.size()))
+                    + (editability.editable ? QString() : QStringLiteral(" [RO]"));
                 const QByteArray pivotLabel = pivotLabelText.toUtf8();
 
                 ImGui::PushID(pivotIndex);
-                ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags_DefaultOpen;
+                ImGuiTreeNodeFlags flags =
+                    ImGuiTreeNodeFlags_DefaultOpen
+                    | ImGuiTreeNodeFlags_OpenOnArrow
+                    | ImGuiTreeNodeFlags_OpenOnDoubleClick
+                    | ImGuiTreeNodeFlags_SpanAvailWidth;
                 if (instances.empty() && children.empty()) {
                     flags |= ImGuiTreeNodeFlags_Leaf;
                 }
-                if (ImGui::TreeNodeEx("##PivotNode", flags, "%s", pivotLabel.constData())) {
+                if (m_selectedPivot.has_value() && *m_selectedPivot == key) {
+                    flags |= ImGuiTreeNodeFlags_Selected;
+                }
+                if (!editability.editable) {
+                    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.86f, 0.74f, 0.55f, 1.0f));
+                }
+                const bool open = ImGui::TreeNodeEx("##PivotNode", flags, "%s", pivotLabel.constData());
+                if (ImGui::IsItemClicked() && !ImGui::IsItemToggledOpen()) {
+                    requestPivotSelection(hierarchyIndex, pivotIndex, hierarchy.sourcePivotsChunk);
+                }
+                if (ImGui::IsItemHovered() && !editability.reason.isEmpty()) {
+                    const QByteArray reason = editability.reason.toUtf8();
+                    ImGui::SetTooltip("%s", reason.constData());
+                }
+                if (!editability.editable) {
+                    ImGui::PopStyleColor();
+                }
+                if (open) {
                     for (const int visibleIndex : instances) {
                         drawInstanceItem(visibleIndex);
                     }
@@ -1374,13 +1800,105 @@ void RenderViewportWidget::DrawSceneBrowserOverlay() {
     ImGui::EndChild();
     ImGui::End();
 
-    if (visibilityChanged
-        && m_selectedVisibleIndex >= 0
-        && m_selectedVisibleIndex < static_cast<int>(m_visibleInstances.size())) {
-        SetSelectedVisibleInstance(m_selectedVisibleIndex, false);
+    if (visibilityChanged) {
+        if (m_selectedPivot.has_value()) {
+            SetSelectedPivot(
+                *m_selectedPivot,
+                m_selectedPivotsChunk,
+                FindRepresentativeVisibleInstance(*m_selectedPivot),
+                false);
+        }
+        else if (m_selectedVisibleIndex >= 0
+            && m_selectedVisibleIndex < static_cast<int>(m_visibleInstances.size())) {
+            SetSelectedVisibleInstance(m_selectedVisibleIndex, false);
+        }
     }
     if (requestedSelection >= 0) {
         SetSelectedVisibleInstance(requestedSelection, true);
+    }
+    else if (requestedPivot.has_value()) {
+        SetSelectedPivot(
+            *requestedPivot,
+            requestedPivotsChunk,
+            requestedRepresentativeVisibleIndex,
+            true);
+    }
+}
+
+void RenderViewportWidget::DrawPivotMarkersOverlay(
+    const std::vector<std::vector<Mat4>>& hierarchyWorld,
+    const Mat4& viewProjection)
+{
+    if (hierarchyWorld.empty()) {
+        return;
+    }
+
+    struct PivotMarker {
+        ImVec2 screen{};
+        float depth = 0.0f;
+        bool selected = false;
+        bool editable = false;
+    };
+
+    std::vector<PivotMarker> markers;
+    for (int hierarchyIndex = 0; hierarchyIndex < static_cast<int>(hierarchyWorld.size()); ++hierarchyIndex) {
+        if (hierarchyIndex < 0
+            || hierarchyIndex >= static_cast<int>(m_sceneResult.scene.hierarchies.size())) {
+            continue;
+        }
+
+        const auto& hierarchy = m_sceneResult.scene.hierarchies[static_cast<std::size_t>(hierarchyIndex)];
+        const auto& worlds = hierarchyWorld[static_cast<std::size_t>(hierarchyIndex)];
+        for (int pivotIndex = 0; pivotIndex < static_cast<int>(worlds.size()); ++pivotIndex) {
+            const Vec3 worldPos =
+                TransformPoint(worlds[static_cast<std::size_t>(pivotIndex)], { 0.0f, 0.0f, 0.0f });
+
+            ImVec2 screen{};
+            float depth = 0.0f;
+            if (!ProjectWorldPointToScreen(
+                viewProjection,
+                worldPos,
+                static_cast<float>(std::max(1, width())),
+                static_cast<float>(std::max(1, height())),
+                screen,
+                &depth))
+            {
+                continue;
+            }
+
+            const PivotKey key{ hierarchyIndex, pivotIndex };
+            const PivotEditability editability =
+                EvaluatePivotEditability(hierarchyIndex, pivotIndex, hierarchy.sourcePivotsChunk);
+            markers.push_back({
+                screen,
+                depth,
+                m_selectedPivot.has_value() && *m_selectedPivot == key,
+                editability.editable
+                });
+        }
+    }
+
+    if (markers.empty()) {
+        return;
+    }
+
+    std::sort(
+        markers.begin(),
+        markers.end(),
+        [](const PivotMarker& a, const PivotMarker& b) {
+            return a.depth > b.depth;
+        });
+
+    ImDrawList* drawList = ImGui::GetBackgroundDrawList();
+    for (const PivotMarker& marker : markers) {
+        const ImU32 fillColor = marker.selected
+            ? IM_COL32(255, 214, 102, 220)
+            : (marker.editable
+                ? IM_COL32(96, 208, 255, 190)
+                : IM_COL32(186, 156, 116, 170));
+        const float radius = marker.selected ? 6.0f : 4.0f;
+        drawList->AddCircleFilled(marker.screen, radius, fillColor, 10);
+        drawList->AddCircle(marker.screen, radius + 1.5f, IM_COL32(12, 16, 24, 235), 10, 2.0f);
     }
 }
 
@@ -1497,38 +2015,32 @@ void RenderViewportWidget::DrawTransformInspectorOverlay() {
     ImGui::Separator();
     ImGui::TextUnformatted("Mesh/Pivot Target");
 
-    const VisibleInstance* selected = nullptr;
+    PivotKey selectedKey{};
+    int representativeVisibleIndex = -1;
     Mat4 currentLocal = Mat4::Identity();
-    bool hasReadableLocal = false;
-    if (m_selectedVisibleIndex >= 0
-        && m_selectedVisibleIndex < static_cast<int>(m_visibleInstances.size())) {
-        selected = &m_visibleInstances[static_cast<std::size_t>(m_selectedVisibleIndex)];
-        if (selected->hierarchyIndex >= 0
-            && selected->hierarchyIndex < static_cast<int>(m_sceneResult.scene.hierarchies.size())) {
-            const auto& hierarchy =
-                m_sceneResult.scene.hierarchies[static_cast<std::size_t>(selected->hierarchyIndex)];
-            if (selected->pivotIndex >= 0
-                && selected->pivotIndex < static_cast<int>(hierarchy.pivots.size())) {
-                PivotKey key{};
-                key.hierarchyIndex = selected->hierarchyIndex;
-                key.pivotIndex = selected->pivotIndex;
-                const auto overrideIt = m_pivotLocalOverrides.find(key);
-                currentLocal = (overrideIt != m_pivotLocalOverrides.end())
-                    ? OrthonormalizeRigidTransform(overrideIt->second)
-                    : OrthonormalizeRigidTransform(
-                        hierarchy.pivots[static_cast<std::size_t>(selected->pivotIndex)].localTransform);
-                hasReadableLocal = true;
-            }
-        }
-    }
-
-    if (!selected) {
+    PivotEditability editability{};
+    QString selectionError;
+    const ::ChunkItem* selectedPivotsChunk = nullptr;
+    if (!TryGetSelectedEditablePivot(
+        selectedKey,
+        selectedPivotsChunk,
+        representativeVisibleIndex,
+        currentLocal,
+        editability,
+        &selectionError)) {
         m_transformInspectorHasSelection = false;
         ImGui::TextUnformatted("No render target selected.");
-        ImGui::TextUnformatted("Click a mesh in the viewport or in Scene Browser.");
+        ImGui::TextUnformatted("Click a mesh or pivot in the viewport or Scene Browser.");
         ImGui::End();
         return;
     }
+
+    const VisibleInstance* representative =
+        (representativeVisibleIndex >= 0
+            && representativeVisibleIndex < static_cast<int>(m_visibleInstances.size()))
+        ? &m_visibleInstances[static_cast<std::size_t>(representativeVisibleIndex)]
+        : nullptr;
+    (void)selectedPivotsChunk;
 
     auto meshNameFor = [&](const VisibleInstance& instance) -> QString {
         if (instance.meshIndex >= 0 && instance.meshIndex < static_cast<int>(m_sceneResult.scene.meshes.size())) {
@@ -1567,18 +2079,29 @@ void RenderViewportWidget::DrawTransformInspectorOverlay() {
         return QStringLiteral("Pivot %1").arg(pivotIndex);
     };
 
-    const QString meshName = meshNameFor(*selected);
-    const QString hierarchyName = hierarchyNameFor(selected->hierarchyIndex);
-    const QString pivotName = pivotNameFor(selected->hierarchyIndex, selected->pivotIndex);
+    const QString meshName = representative
+        ? meshNameFor(*representative)
+        : tr("(no bound mesh row)");
+    const QString hierarchyName = hierarchyNameFor(selectedKey.hierarchyIndex);
+    const QString pivotName = pivotNameFor(selectedKey.hierarchyIndex, selectedKey.pivotIndex);
     ImGui::TextWrapped("Target Mesh: %s", meshName.toUtf8().constData());
     ImGui::TextWrapped("Hierarchy: %s", hierarchyName.toUtf8().constData());
-    ImGui::TextWrapped("Pivot: %s (%d)", pivotName.toUtf8().constData(), selected->pivotIndex);
-    ImGui::TextUnformatted(selected->editable ? "Target: editable" : "Target: read-only");
-    if (!selected->readOnlyReason.isEmpty()) {
-        ImGui::TextWrapped("Reason: %s", selected->readOnlyReason.toUtf8().constData());
+    ImGui::TextWrapped("Pivot: %s (%d)", pivotName.toUtf8().constData(), selectedKey.pivotIndex);
+    ImGui::TextUnformatted(editability.editable ? "Target: editable" : "Target: read-only");
+    if (!editability.reason.isEmpty()) {
+        ImGui::TextWrapped("Reason: %s", editability.reason.toUtf8().constData());
     }
-    if (selected->hiddenByUser) {
+    if (representative && representative->hiddenByUser) {
         ImGui::TextUnformatted("Viewport state: hidden");
+    }
+    if (IsAnimationEditModeActive()) {
+        ImGui::Text("Edit Mode: clip keys at frame %d", CurrentAnimationFrameIndex());
+    }
+    else if (m_animationEditKeysEnabled) {
+        ImGui::TextUnformatted("Edit Mode: requested, but current clip is read-only.");
+    }
+    else {
+        ImGui::TextUnformatted("Edit Mode: base pivot transforms.");
     }
 
     ImGui::Separator();
@@ -1590,24 +2113,20 @@ void RenderViewportWidget::DrawTransformInspectorOverlay() {
         m_gizmoMode = GizmoMode::Rotate;
     }
 
-    if (!hasReadableLocal) {
-        m_transformInspectorHasSelection = false;
-        ImGui::Separator();
-        ImGui::TextUnformatted("No readable local transform for this target.");
-        ImGui::End();
-        return;
-    }
-
     const auto& hierarchy =
-        m_sceneResult.scene.hierarchies[static_cast<std::size_t>(selected->hierarchyIndex)];
-    const bool rootPivot = selected->pivotIndex >= 0
-        && selected->pivotIndex < static_cast<int>(hierarchy.pivots.size())
-        && hierarchy.pivots[static_cast<std::size_t>(selected->pivotIndex)].parentIndex < 0;
-    SyncTransformInspectorState(selected, currentLocal);
+        m_sceneResult.scene.hierarchies[static_cast<std::size_t>(selectedKey.hierarchyIndex)];
+    const bool rootPivot = selectedKey.pivotIndex >= 0
+        && selectedKey.pivotIndex < static_cast<int>(hierarchy.pivots.size())
+        && hierarchy.pivots[static_cast<std::size_t>(selectedKey.pivotIndex)].parentIndex < 0;
+    SyncTransformInspectorState(selectedKey, currentLocal);
 
     const Vec3 currentTranslation{ currentLocal.m[12], currentLocal.m[13], currentLocal.m[14] };
     const Vec3 currentRotationDegrees =
         EulerDegreesFromQuaternion(QuaternionFromMatrix(currentLocal));
+    if (m_gizmoUsing) {
+        m_transformInspectorTranslation = currentTranslation;
+        m_transformInspectorRotationDegrees = currentRotationDegrees;
+    }
 
     ImGui::TextUnformatted(
         (m_gizmoMode == GizmoMode::Rotate)
@@ -1635,30 +2154,69 @@ void RenderViewportWidget::DrawTransformInspectorOverlay() {
         m_transformInspectorRotationDegrees.y,
         m_transformInspectorRotationDegrees.z
     };
-    if (!selected->editable) {
+    bool manualEditChanged = false;
+    if (!editability.editable) {
         ImGui::BeginDisabled();
     }
-    ImGui::InputFloat3("Position", editTranslation, "%.3f");
-    ImGui::InputFloat3("Rotation (deg)", editRotation, "%.2f");
-    if (!selected->editable) {
+    ImGui::TextUnformatted("Position");
+    manualEditChanged |= ImGui::InputFloat("Pos X", &editTranslation[0], 0.01f, 0.10f, "%.3f");
+    manualEditChanged |= ImGui::InputFloat("Pos Y", &editTranslation[1], 0.01f, 0.10f, "%.3f");
+    manualEditChanged |= ImGui::InputFloat("Pos Z", &editTranslation[2], 0.01f, 0.10f, "%.3f");
+    ImGui::TextUnformatted("Rotation (deg)");
+    manualEditChanged |= ImGui::InputFloat("Rot X", &editRotation[0], 0.25f, 5.0f, "%.2f");
+    manualEditChanged |= ImGui::InputFloat("Rot Y", &editRotation[1], 0.25f, 5.0f, "%.2f");
+    manualEditChanged |= ImGui::InputFloat("Rot Z", &editRotation[2], 0.25f, 5.0f, "%.2f");
+    if (!editability.editable) {
         ImGui::EndDisabled();
     }
     m_transformInspectorTranslation = { editTranslation[0], editTranslation[1], editTranslation[2] };
     m_transformInspectorRotationDegrees = { editRotation[0], editRotation[1], editRotation[2] };
+    if (manualEditChanged) {
+        PreviewTransformInspectorEdits();
+    }
 
     if (ImGui::Button("Use Current Transform")) {
         m_transformInspectorTranslation = currentTranslation;
         m_transformInspectorRotationDegrees = currentRotationDegrees;
+        PreviewTransformInspectorEdits();
     }
     ImGui::SameLine();
-    if (!selected->editable) {
+    if (!editability.editable) {
+        ImGui::BeginDisabled();
+    }
+    if (ImGui::Button("Reset to Original")) {
+        ResetTransformInspectorToOriginal();
+    }
+    if (!editability.editable) {
+        ImGui::EndDisabled();
+    }
+    ImGui::SameLine();
+    if (!editability.editable) {
         ImGui::BeginDisabled();
     }
     if (ImGui::Button("Apply")) {
         ApplyTransformInspectorEdits();
     }
-    if (!selected->editable) {
+    if (!editability.editable) {
         ImGui::EndDisabled();
+    }
+
+    if (IsAnimationEditModeActive()) {
+        ImGui::SameLine();
+        if (!editability.editable) {
+            ImGui::BeginDisabled();
+        }
+        if (ImGui::Button("Delete Current Key")) {
+            MaybePauseAnimationForEditing();
+            emit animationKeyframeDeleteRequested(
+                selectedKey.hierarchyIndex,
+                selectedKey.pivotIndex,
+                CurrentAnimationFrameIndex());
+            ClearPivotOverrides();
+        }
+        if (!editability.editable) {
+            ImGui::EndDisabled();
+        }
     }
 
     ImGui::End();
@@ -1704,16 +2262,33 @@ bool RenderViewportWidget::HandleGizmos(const Mat4& view, const Mat4& projection
         }
     }
 
-    if (m_selectedVisibleIndex >= 0
-        && m_selectedVisibleIndex < static_cast<int>(m_visibleInstances.size())) {
-        const auto& selected = m_visibleInstances[static_cast<std::size_t>(m_selectedVisibleIndex)];
-        if (!m_hiddenInstances.contains(selected.key)
-            && selected.editable
-            && selected.hierarchyIndex >= 0
-            && selected.pivotIndex >= 0
-            && selected.hierarchyIndex < static_cast<int>(m_sceneResult.scene.hierarchies.size())) {
+    const Mat4 currentView = Mat4FromFloatArray(viewMatrix);
+    const auto worlds = BuildHierarchyWorldTransforms();
+    DrawPivotMarkersOverlay(worlds, Multiply(currentView, projection));
+
+    PivotKey key{};
+    const ::ChunkItem* pivotsChunk = nullptr;
+    int representativeVisibleIndex = -1;
+    Mat4 currentLocal = Mat4::Identity();
+    PivotEditability editability{};
+    if (TryGetSelectedEditablePivot(
+        key,
+        pivotsChunk,
+        representativeVisibleIndex,
+        currentLocal,
+        editability,
+        nullptr)
+        && editability.editable
+        && key.hierarchyIndex >= 0
+        && key.hierarchyIndex < static_cast<int>(m_sceneResult.scene.hierarchies.size())) {
+        (void)pivotsChunk;
+        if (key.pivotIndex >= 0
+            && key.hierarchyIndex < static_cast<int>(worlds.size())
+            && key.pivotIndex < static_cast<int>(worlds[static_cast<std::size_t>(key.hierarchyIndex)].size())) {
             float modelMatrix[16];
-            Mat4ToFloatArray(selected.world, modelMatrix);
+            Mat4ToFloatArray(
+                worlds[static_cast<std::size_t>(key.hierarchyIndex)][static_cast<std::size_t>(key.pivotIndex)],
+                modelMatrix);
 
             const Qt::KeyboardModifiers mods = QApplication::keyboardModifiers();
             const bool snap = (mods & Qt::ControlModifier) != 0;
@@ -1724,10 +2299,10 @@ bool RenderViewportWidget::HandleGizmos(const Mat4& view, const Mat4& projection
                 operation = ImGuizmo::ROTATE;
                 mode = ImGuizmo::LOCAL;
                 const auto& hierarchy =
-                    m_sceneResult.scene.hierarchies[static_cast<std::size_t>(selected.hierarchyIndex)];
-                if (selected.pivotIndex >= 0
-                    && selected.pivotIndex < static_cast<int>(hierarchy.pivots.size())
-                    && hierarchy.pivots[static_cast<std::size_t>(selected.pivotIndex)].parentIndex < 0) {
+                    m_sceneResult.scene.hierarchies[static_cast<std::size_t>(key.hierarchyIndex)];
+                if (key.pivotIndex >= 0
+                    && key.pivotIndex < static_cast<int>(hierarchy.pivots.size())
+                    && hierarchy.pivots[static_cast<std::size_t>(key.pivotIndex)].parentIndex < 0) {
                     mode = ImGuizmo::WORLD;
                 }
                 snapValues[0] = 15.0f;
@@ -1748,15 +2323,18 @@ bool RenderViewportWidget::HandleGizmos(const Mat4& view, const Mat4& projection
             m_gizmoUsing = ImGuizmo::IsUsing();
 
             if (m_gizmoUsing) {
-                const auto worlds = BuildHierarchyWorldTransforms();
+                if (!m_gizmoWasUsing) {
+                    MaybePauseAnimationForEditing();
+                }
                 Mat4 parentWorld = Mat4::Identity();
-                const auto& hierarchy = m_sceneResult.scene.hierarchies[static_cast<std::size_t>(selected.hierarchyIndex)];
-                if (selected.pivotIndex >= 0
-                    && selected.pivotIndex < static_cast<int>(hierarchy.pivots.size())) {
-                    const int parentIndex = hierarchy.pivots[static_cast<std::size_t>(selected.pivotIndex)].parentIndex;
+                const auto& hierarchy = m_sceneResult.scene.hierarchies[static_cast<std::size_t>(key.hierarchyIndex)];
+                if (key.pivotIndex >= 0
+                    && key.pivotIndex < static_cast<int>(hierarchy.pivots.size())) {
+                    const int parentIndex = hierarchy.pivots[static_cast<std::size_t>(key.pivotIndex)].parentIndex;
                     if (parentIndex >= 0
-                        && parentIndex < static_cast<int>(worlds[static_cast<std::size_t>(selected.hierarchyIndex)].size())) {
-                        parentWorld = worlds[static_cast<std::size_t>(selected.hierarchyIndex)][static_cast<std::size_t>(parentIndex)];
+                        && parentIndex < static_cast<int>(worlds[static_cast<std::size_t>(key.hierarchyIndex)].size())) {
+                        parentWorld =
+                            worlds[static_cast<std::size_t>(key.hierarchyIndex)][static_cast<std::size_t>(parentIndex)];
                     }
                 }
 
@@ -1764,9 +2342,6 @@ bool RenderViewportWidget::HandleGizmos(const Mat4& view, const Mat4& projection
                 const Mat4 newLocal = OrthonormalizeRigidTransform(
                     Multiply(Inverse(parentWorld), manipulatedWorld));
 
-                PivotKey key{};
-                key.hierarchyIndex = selected.hierarchyIndex;
-                key.pivotIndex = selected.pivotIndex;
                 m_pivotLocalOverrides[key] = newLocal;
                 changed = true;
             }
@@ -1783,21 +2358,12 @@ bool RenderViewportWidget::HandleGizmos(const Mat4& view, const Mat4& projection
 }
 
 void RenderViewportWidget::CommitPivotOverrideIfNeeded() {
-    if (m_selectedVisibleIndex < 0
-        || m_selectedVisibleIndex >= static_cast<int>(m_visibleInstances.size())) {
+    if (!m_selectedPivot.has_value()) {
         ClearPivotOverrides();
         return;
     }
 
-    const auto selected = m_visibleInstances[static_cast<std::size_t>(m_selectedVisibleIndex)];
-    if (!selected.editable || !selected.pivotsChunk || selected.pivotIndex < 0) {
-        ClearPivotOverrides();
-        return;
-    }
-
-    PivotKey key{};
-    key.hierarchyIndex = selected.hierarchyIndex;
-    key.pivotIndex = selected.pivotIndex;
+    const PivotKey key = *m_selectedPivot;
     const auto it = m_pivotLocalOverrides.find(key);
     if (it == m_pivotLocalOverrides.end()) {
         ClearPivotOverrides();
@@ -1805,25 +2371,8 @@ void RenderViewportWidget::CommitPivotOverrideIfNeeded() {
     }
 
     const Mat4 local = OrthonormalizeRigidTransform(it->second);
-    const Quaternion q = QuaternionFromMatrix(local);
-    const float tx = local.m[12];
-    const float ty = local.m[13];
-    const float tz = local.m[14];
-
-    void* pivotsChunkPtr = const_cast<::ChunkItem*>(selected.pivotsChunk);
-    const int pivotIndex = selected.pivotIndex;
-
-    QTimer::singleShot(0, this, [this, pivotsChunkPtr, pivotIndex, tx, ty, tz, q]() {
-        emit pivotTransformCommitRequested(
-            pivotsChunkPtr,
-            pivotIndex,
-            tx,
-            ty,
-            tz,
-            q.x,
-            q.y,
-            q.z,
-            q.w);
+    QTimer::singleShot(0, this, [this, key, local]() {
+        CommitDisplayedLocalTransform(key, local);
     });
 
     ClearPivotOverrides();
@@ -1838,6 +2387,29 @@ void RenderViewportWidget::ClearPivotOverrides() {
 }
 
 void RenderViewportWidget::SyncSelectedInstanceToVisibleList() {
+    if (m_selectedPivot.has_value()) {
+        const PivotKey key = *m_selectedPivot;
+        if (key.hierarchyIndex < 0
+            || key.hierarchyIndex >= static_cast<int>(m_sceneResult.scene.hierarchies.size())) {
+            m_selectedPivot.reset();
+            m_selectedPivotsChunk = nullptr;
+            m_selectedPivotRepresentativeVisibleIndex = -1;
+            m_selectedVisibleIndex = -1;
+            m_selectedInstance.reset();
+            EmitSelectionStatus(QStringLiteral("Selection: none"));
+            return;
+        }
+
+        const ::ChunkItem* pivotsChunk =
+            m_sceneResult.scene.hierarchies[static_cast<std::size_t>(key.hierarchyIndex)].sourcePivotsChunk;
+        SetSelectedPivot(
+            key,
+            pivotsChunk,
+            FindRepresentativeVisibleInstance(key),
+            false);
+        return;
+    }
+
     m_selectedVisibleIndex = -1;
     if (!m_selectedInstance.has_value()) {
         return;
@@ -1845,7 +2417,7 @@ void RenderViewportWidget::SyncSelectedInstanceToVisibleList() {
 
     for (int i = 0; i < static_cast<int>(m_visibleInstances.size()); ++i) {
         if (m_visibleInstances[static_cast<std::size_t>(i)].key == *m_selectedInstance) {
-            m_selectedVisibleIndex = i;
+            SetSelectedVisibleInstance(i, false);
             break;
         }
     }
@@ -1855,6 +2427,9 @@ void RenderViewportWidget::SetSelectedVisibleInstance(int index, bool emitChunkS
     if (index < 0 || index >= static_cast<int>(m_visibleInstances.size())) {
         m_selectedVisibleIndex = -1;
         m_selectedInstance.reset();
+        m_selectedPivot.reset();
+        m_selectedPivotsChunk = nullptr;
+        m_selectedPivotRepresentativeVisibleIndex = -1;
         m_gizmoWasUsing = false;
         ClearPivotOverrides();
         EmitSelectionStatus(QStringLiteral("Selection: none"));
@@ -1866,57 +2441,157 @@ void RenderViewportWidget::SetSelectedVisibleInstance(int index, bool emitChunkS
         ClearPivotOverrides();
     }
 
-    m_selectedVisibleIndex = index;
     const auto& selected = m_visibleInstances[static_cast<std::size_t>(index)];
-    m_selectedInstance = selected.key;
-    const bool hiddenByUser = m_hiddenInstances.contains(selected.key);
-    const QString meshName =
-        (selected.meshIndex >= 0 && selected.meshIndex < static_cast<int>(m_sceneResult.scene.meshes.size()))
-        ? QString::fromStdString(m_sceneResult.scene.meshes[static_cast<std::size_t>(selected.meshIndex)].fullName)
-        : QStringLiteral("Mesh %1").arg(selected.meshIndex);
-    QString hierarchyName = QStringLiteral("Hierarchy %1").arg(selected.hierarchyIndex);
-    QString pivotName = QStringLiteral("Pivot %1").arg(selected.pivotIndex);
     if (selected.hierarchyIndex >= 0
-        && selected.hierarchyIndex < static_cast<int>(m_sceneResult.scene.hierarchies.size())) {
-        const auto& hierarchy =
-            m_sceneResult.scene.hierarchies[static_cast<std::size_t>(selected.hierarchyIndex)];
-        if (!hierarchy.name.empty()) {
-            hierarchyName = QString::fromStdString(hierarchy.name);
-        }
-        if (selected.pivotIndex >= 0
-            && selected.pivotIndex < static_cast<int>(hierarchy.pivots.size())
-            && !hierarchy.pivots[static_cast<std::size_t>(selected.pivotIndex)].name.empty()) {
-            pivotName = QString::fromStdString(
-                hierarchy.pivots[static_cast<std::size_t>(selected.pivotIndex)].name);
-        }
+        && selected.hierarchyIndex < static_cast<int>(m_sceneResult.scene.hierarchies.size())
+        && selected.pivotIndex >= 0
+        && selected.pivotIndex < static_cast<int>(
+            m_sceneResult.scene.hierarchies[static_cast<std::size_t>(selected.hierarchyIndex)].pivots.size())) {
+        PivotKey key{};
+        key.hierarchyIndex = selected.hierarchyIndex;
+        key.pivotIndex = selected.pivotIndex;
+        SetSelectedPivot(key, selected.pivotsChunk, index, emitChunkSignal);
+        return;
     }
+
+    m_selectedVisibleIndex = index;
+    m_selectedInstance = selected.key;
+    m_selectedPivot.reset();
+    m_selectedPivotsChunk = nullptr;
+    m_selectedPivotRepresentativeVisibleIndex = -1;
 
     if (emitChunkSignal && selected.meshChunk) {
         emit sceneChunkActivated(const_cast<::ChunkItem*>(selected.meshChunk));
     }
 
-    if (selected.editable) {
-        EmitSelectionStatus(
-            QStringLiteral("Selection: %1 | %2 | %3 (%4) | editable%5")
-                .arg(meshName.isEmpty() ? QStringLiteral("Unnamed Mesh") : meshName)
-                .arg(hierarchyName)
-                .arg(pivotName)
-                .arg(selected.pivotIndex)
-                .arg(hiddenByUser ? QStringLiteral(", hidden") : QString()));
+    const bool hiddenByUser = m_hiddenInstances.contains(selected.key);
+    const QString meshName =
+        (selected.meshIndex >= 0 && selected.meshIndex < static_cast<int>(m_sceneResult.scene.meshes.size()))
+        ? QString::fromStdString(m_sceneResult.scene.meshes[static_cast<std::size_t>(selected.meshIndex)].fullName)
+        : QStringLiteral("Mesh %1").arg(selected.meshIndex);
+    const QString status = selected.editable
+        ? QStringLiteral("Selection: %1 | editable%2")
+            .arg(meshName.isEmpty() ? QStringLiteral("Unnamed Mesh") : meshName)
+            .arg(hiddenByUser ? QStringLiteral(", hidden") : QString())
+        : QStringLiteral("Selection: %1 | read-only (%2)%3")
+            .arg(meshName.isEmpty() ? QStringLiteral("Unnamed Mesh") : meshName)
+            .arg(selected.readOnlyReason)
+            .arg(hiddenByUser ? QStringLiteral(", hidden") : QString());
+    EmitSelectionStatus(status);
+}
+
+void RenderViewportWidget::SetSelectedPivot(
+    const PivotKey& key,
+    const ::ChunkItem* pivotsChunk,
+    int representativeVisibleIndex,
+    bool emitChunkSignal)
+{
+    const bool pivotChanged = !m_selectedPivot.has_value() || *m_selectedPivot != key;
+    if (pivotChanged) {
+        m_gizmoWasUsing = false;
+        ClearPivotOverrides();
+    }
+
+    m_selectedPivot = key;
+    m_selectedPivotsChunk = pivotsChunk;
+    m_selectedPivotRepresentativeVisibleIndex =
+        (representativeVisibleIndex >= 0 && representativeVisibleIndex < static_cast<int>(m_visibleInstances.size()))
+        ? representativeVisibleIndex
+        : -1;
+    m_selectedVisibleIndex = m_selectedPivotRepresentativeVisibleIndex;
+
+    const VisibleInstance* representative =
+        (m_selectedPivotRepresentativeVisibleIndex >= 0)
+        ? &m_visibleInstances[static_cast<std::size_t>(m_selectedPivotRepresentativeVisibleIndex)]
+        : nullptr;
+    if (representative) {
+        m_selectedInstance = representative->key;
     }
     else {
-        const QString baseStatus = QStringLiteral("Selection: %1 | %2 | %3 (%4) | read-only (%5)")
+        m_selectedInstance.reset();
+    }
+
+    if (emitChunkSignal) {
+        if (representative && representative->meshChunk) {
+            emit sceneChunkActivated(const_cast<::ChunkItem*>(representative->meshChunk));
+        }
+        else if (pivotsChunk) {
+            emit sceneChunkActivated(const_cast<::ChunkItem*>(pivotsChunk));
+        }
+    }
+
+    QString hierarchyName = QStringLiteral("Hierarchy %1").arg(key.hierarchyIndex);
+    QString pivotName = QStringLiteral("Pivot %1").arg(key.pivotIndex);
+    if (key.hierarchyIndex >= 0
+        && key.hierarchyIndex < static_cast<int>(m_sceneResult.scene.hierarchies.size())) {
+        const auto& hierarchy =
+            m_sceneResult.scene.hierarchies[static_cast<std::size_t>(key.hierarchyIndex)];
+        if (!hierarchy.name.empty()) {
+            hierarchyName = QString::fromStdString(hierarchy.name);
+        }
+        if (key.pivotIndex >= 0
+            && key.pivotIndex < static_cast<int>(hierarchy.pivots.size())
+            && !hierarchy.pivots[static_cast<std::size_t>(key.pivotIndex)].name.empty()) {
+            pivotName =
+                QString::fromStdString(hierarchy.pivots[static_cast<std::size_t>(key.pivotIndex)].name);
+        }
+    }
+
+    const PivotEditability editability =
+        EvaluatePivotEditability(key.hierarchyIndex, key.pivotIndex, pivotsChunk);
+    const bool hiddenByUser = representative && m_hiddenInstances.contains(representative->key);
+    const QString meshName = representative
+        ? ((representative->meshIndex >= 0
+            && representative->meshIndex < static_cast<int>(m_sceneResult.scene.meshes.size()))
+            ? QString::fromStdString(
+                m_sceneResult.scene.meshes[static_cast<std::size_t>(representative->meshIndex)].fullName)
+            : QStringLiteral("Mesh %1").arg(representative->meshIndex))
+        : QStringLiteral("(pivot only)");
+
+    const QString baseStatus = representative
+        ? QStringLiteral("Selection: %1 | %2 | %3 (%4)")
             .arg(meshName.isEmpty() ? QStringLiteral("Unnamed Mesh") : meshName)
             .arg(hierarchyName)
             .arg(pivotName)
-            .arg(selected.pivotIndex)
-            .arg(selected.readOnlyReason);
-        EmitSelectionStatus(hiddenByUser ? (baseStatus + QStringLiteral(", hidden")) : baseStatus);
-    }
+            .arg(key.pivotIndex)
+        : QStringLiteral("Selection: %1 | %2 (%3)")
+            .arg(hierarchyName)
+            .arg(pivotName)
+            .arg(key.pivotIndex);
+    const QString status = editability.editable
+        ? baseStatus + QStringLiteral(" | editable")
+        : baseStatus + QStringLiteral(" | read-only (%1)").arg(editability.reason);
+    EmitSelectionStatus(hiddenByUser ? (status + QStringLiteral(", hidden")) : status);
 }
 
 void RenderViewportWidget::EmitSelectionStatus(const QString& text) {
     emit selectionStatusChanged(text);
+}
+
+void RenderViewportWidget::AutoSelectFirstEditablePivotIfNeeded() {
+    if (!m_autoSelectEditablePivotPending) {
+        return;
+    }
+    m_autoSelectEditablePivotPending = false;
+
+    if (m_selectedPivot.has_value() || m_selectedInstance.has_value()) {
+        return;
+    }
+
+    for (int i = 0; i < static_cast<int>(m_visibleInstances.size()); ++i) {
+        const auto& instance = m_visibleInstances[static_cast<std::size_t>(i)];
+        if (instance.hierarchyIndex < 0
+            || instance.pivotIndex < 0
+            || !instance.editable) {
+            continue;
+        }
+
+        PivotKey key{};
+        key.hierarchyIndex = instance.hierarchyIndex;
+        key.pivotIndex = instance.pivotIndex;
+        SetSelectedPivot(key, instance.pivotsChunk, i, false);
+        return;
+    }
 }
 
 Vec3 RenderViewportWidget::ComputeSceneCenter() const {
@@ -2023,56 +2698,21 @@ bool RenderViewportWidget::RayIntersectsTriangle(
 }
 
 std::vector<std::vector<Mat4>> RenderViewportWidget::BuildHierarchyWorldTransforms() const {
-    std::vector<std::vector<Mat4>> hierarchyWorld;
-    hierarchyWorld.resize(m_sceneResult.scene.hierarchies.size());
-
-    for (std::size_t h = 0; h < m_sceneResult.scene.hierarchies.size(); ++h) {
-        const auto& hierarchy = m_sceneResult.scene.hierarchies[h];
-        auto& worlds = hierarchyWorld[h];
-        worlds.resize(hierarchy.pivots.size(), Mat4::Identity());
-
-        std::vector<uint8_t> state(hierarchy.pivots.size(), 0);
-        std::function<void(int)> buildPivot = [&](int pivotIndex) {
-            if (pivotIndex < 0 || pivotIndex >= static_cast<int>(hierarchy.pivots.size())) {
-                return;
-            }
-            if (state[pivotIndex] == 2) {
-                return;
-            }
-            if (state[pivotIndex] == 1) {
-                worlds[static_cast<std::size_t>(pivotIndex)] = hierarchy.pivots[static_cast<std::size_t>(pivotIndex)].localTransform;
-                state[pivotIndex] = 2;
-                return;
-            }
-
-            state[pivotIndex] = 1;
-            Mat4 local = hierarchy.pivots[static_cast<std::size_t>(pivotIndex)].localTransform;
-
+    return BuildDisplayHierarchyWorldTransforms(
+        m_sceneResult.scene,
+        m_animationPlayback,
+        m_animationPlayback.timeSeconds,
+        m_animationEditDraft,
+        [this](int hierarchyIndex, int pivotIndex, const Mat4&) -> std::optional<Mat4> {
             PivotKey key{};
-            key.hierarchyIndex = static_cast<int>(h);
+            key.hierarchyIndex = hierarchyIndex;
             key.pivotIndex = pivotIndex;
-            if (const auto it = m_pivotLocalOverrides.find(key); it != m_pivotLocalOverrides.end()) {
-                local = it->second;
+            if (const auto it = m_pivotLocalOverrides.find(key);
+                it != m_pivotLocalOverrides.end()) {
+                return OrthonormalizeRigidTransform(it->second);
             }
-
-            const int parentIndex = hierarchy.pivots[static_cast<std::size_t>(pivotIndex)].parentIndex;
-            if (parentIndex >= 0 && parentIndex < static_cast<int>(hierarchy.pivots.size())) {
-                buildPivot(parentIndex);
-                worlds[static_cast<std::size_t>(pivotIndex)] =
-                    Multiply(worlds[static_cast<std::size_t>(parentIndex)], local);
-            }
-            else {
-                worlds[static_cast<std::size_t>(pivotIndex)] = local;
-            }
-            state[pivotIndex] = 2;
-        };
-
-        for (int i = 0; i < static_cast<int>(hierarchy.pivots.size()); ++i) {
-            buildPivot(i);
-        }
-    }
-
-    return hierarchyWorld;
+            return std::nullopt;
+        });
 }
 
 } // namespace OW3D::Render

@@ -31,6 +31,7 @@ public:
     void SetCamera(const CameraState& camera) override;
     void SetRenderSettings(const RenderSettings& settings) override;
     void SetAnimationPlayback(const AnimationPlaybackState& playback) override;
+    void SetAnimationEditDraft(const std::optional<RenderAnimationEditDraft>& draft) override;
     void SetSelectedInstance(const std::optional<RenderInstanceKey>& selected) override;
     void SetTransformOverrides(
         const std::unordered_map<RenderInstanceKey, Mat4, RenderInstanceKeyHash>& overrides) override;
@@ -145,6 +146,7 @@ private:
     CameraState m_camera{};
     RenderSettings m_settings{};
     AnimationPlaybackState m_animationPlayback{};
+    std::optional<RenderAnimationEditDraft> m_animationEditDraft;
     FrameStats m_lastFrameStats{};
     std::optional<RenderInstanceKey> m_selectedInstance;
     std::unordered_map<RenderInstanceKey, Mat4, RenderInstanceKeyHash> m_transformOverrides;

@@ -18,6 +18,8 @@
 #include <QFileInfo>
 #include <QImage>
 
+#include "../../backend/render/AnimationPose.h"
+
 #pragma comment(lib, "d3d11.lib")
 #pragma comment(lib, "dxgi.lib")
 #pragma comment(lib, "d3dcompiler.lib")
@@ -91,234 +93,6 @@ Vec3 TransformDirection(const Mat4& m, const Vec3& v) {
         v.x * m.m[1] + v.y * m.m[5] + v.z * m.m[9],
         v.x * m.m[2] + v.y * m.m[6] + v.z * m.m[10]
     };
-}
-
-Mat4 TTSkinIdentity() {
-    return Mat4::Identity();
-}
-
-Mat4 TTSkinQuaternionToMatrix(float x, float y, float z, float w) {
-    Mat4 out = Mat4::Identity();
-    out.m[0] = 1.0f - 2.0f * (y * y + z * z);
-    out.m[1] = 2.0f * (x * y - z * w);
-    out.m[2] = 2.0f * (z * x + y * w);
-
-    out.m[4] = 2.0f * (x * y + z * w);
-    out.m[5] = 1.0f - 2.0f * (z * z + x * x);
-    out.m[6] = 2.0f * (y * z - x * w);
-
-    out.m[8] = 2.0f * (z * x - y * w);
-    out.m[9] = 2.0f * (y * z + x * w);
-    out.m[10] = 1.0f - 2.0f * (y * y + x * x);
-    return out;
-}
-
-Mat4 TTSkinTransformFromTranslationRotation(const Vec3& translation, const Vec4& rotation) {
-    Mat4 out = TTSkinQuaternionToMatrix(rotation.x, rotation.y, rotation.z, rotation.w);
-    out.m[3] = translation.x;
-    out.m[7] = translation.y;
-    out.m[11] = translation.z;
-    return out;
-}
-
-Mat4 TTSkinMultiply(const Mat4& a, const Mat4& b) {
-    Mat4 out{};
-    for (int r = 0; r < 4; ++r) {
-        for (int c = 0; c < 4; ++c) {
-            out.m[r * 4 + c] =
-                a.m[r * 4 + 0] * b.m[0 * 4 + c] +
-                a.m[r * 4 + 1] * b.m[1 * 4 + c] +
-                a.m[r * 4 + 2] * b.m[2 * 4 + c] +
-                a.m[r * 4 + 3] * b.m[3 * 4 + c];
-        }
-    }
-    return out;
-}
-
-Vec3 TTSkinTransformPoint(const Mat4& m, const Vec3& p) {
-    return {
-        m.m[0] * p.x + m.m[1] * p.y + m.m[2] * p.z + m.m[3],
-        m.m[4] * p.x + m.m[5] * p.y + m.m[6] * p.z + m.m[7],
-        m.m[8] * p.x + m.m[9] * p.y + m.m[10] * p.z + m.m[11]
-    };
-}
-
-Vec3 TTSkinTransformDirection(const Mat4& m, const Vec3& v) {
-    return {
-        m.m[0] * v.x + m.m[1] * v.y + m.m[2] * v.z,
-        m.m[4] * v.x + m.m[5] * v.y + m.m[6] * v.z,
-        m.m[8] * v.x + m.m[9] * v.y + m.m[10] * v.z
-    };
-}
-
-float DotQuat(const Vec4& a, const Vec4& b) {
-    return a.x * b.x + a.y * b.y + a.z * b.z + a.w * b.w;
-}
-
-Vec4 NormalizeQuat(Vec4 q) {
-    const float len = std::sqrt(DotQuat(q, q));
-    if (len <= 1.0e-6f) {
-        return { 0.0f, 0.0f, 0.0f, 1.0f };
-    }
-    const float invLen = 1.0f / len;
-    q.x *= invLen;
-    q.y *= invLen;
-    q.z *= invLen;
-    q.w *= invLen;
-    return q;
-}
-
-Vec4 SlerpQuat(Vec4 a, Vec4 b, float t) {
-    a = NormalizeQuat(a);
-    b = NormalizeQuat(b);
-
-    float cosTheta = DotQuat(a, b);
-    if (cosTheta < 0.0f) {
-        cosTheta = -cosTheta;
-        b.x = -b.x;
-        b.y = -b.y;
-        b.z = -b.z;
-        b.w = -b.w;
-    }
-
-    if (cosTheta > 0.9995f) {
-        Vec4 out{
-            a.x + (b.x - a.x) * t,
-            a.y + (b.y - a.y) * t,
-            a.z + (b.z - a.z) * t,
-            a.w + (b.w - a.w) * t
-        };
-        return NormalizeQuat(out);
-    }
-
-    const float theta = std::acos(std::clamp(cosTheta, -1.0f, 1.0f));
-    const float sinTheta = std::sin(theta);
-    if (sinTheta <= 1.0e-6f) {
-        return a;
-    }
-
-    const float weightA = std::sin((1.0f - t) * theta) / sinTheta;
-    const float weightB = std::sin(t * theta) / sinTheta;
-    return {
-        a.x * weightA + b.x * weightB,
-        a.y * weightA + b.y * weightB,
-        a.z * weightA + b.z * weightB,
-        a.w * weightA + b.w * weightB
-    };
-}
-
-float SampleFloatTrack(const std::vector<RenderFloatKeyframe>& track, float frame) {
-    if (track.empty()) {
-        return 0.0f;
-    }
-    if (track.size() == 1 || frame <= track.front().frame) {
-        return track.front().value;
-    }
-
-    for (std::size_t i = 0; i + 1u < track.size(); ++i) {
-        const auto& current = track[i];
-        const auto& next = track[i + 1u];
-        if (frame > next.frame) {
-            continue;
-        }
-        if (current.hold || next.frame <= current.frame) {
-            return current.value;
-        }
-        const float t = std::clamp(
-            (frame - current.frame) / std::max(1.0e-6f, next.frame - current.frame),
-            0.0f,
-            1.0f);
-        return current.value + (next.value - current.value) * t;
-    }
-
-    return track.back().value;
-}
-
-Vec4 SampleQuatTrack(const std::vector<RenderQuatKeyframe>& track, float frame) {
-    if (track.empty()) {
-        return { 0.0f, 0.0f, 0.0f, 1.0f };
-    }
-    if (track.size() == 1 || frame <= track.front().frame) {
-        return NormalizeQuat(track.front().value);
-    }
-
-    for (std::size_t i = 0; i + 1u < track.size(); ++i) {
-        const auto& current = track[i];
-        const auto& next = track[i + 1u];
-        if (frame > next.frame) {
-            continue;
-        }
-        if (current.hold || next.frame <= current.frame) {
-            return NormalizeQuat(current.value);
-        }
-        const float t = std::clamp(
-            (frame - current.frame) / std::max(1.0e-6f, next.frame - current.frame),
-            0.0f,
-            1.0f);
-        return NormalizeQuat(SlerpQuat(current.value, next.value, t));
-    }
-
-    return NormalizeQuat(track.back().value);
-}
-
-float WrapAnimationFrame(const RenderAnimationClip& clip, float timeSeconds) {
-    if (clip.numFrames == 0u || clip.frameRate <= 0.0f) {
-        return 0.0f;
-    }
-
-    const float totalFrames = static_cast<float>(clip.numFrames);
-    if (totalFrames <= 1.0f) {
-        return 0.0f;
-    }
-
-    float frame = std::fmod(timeSeconds * clip.frameRate, totalFrames);
-    if (frame < 0.0f) {
-        frame += totalFrames;
-    }
-    return frame;
-}
-
-const RenderAnimationClip* ResolveActiveClipForHierarchy(
-    const RenderScene& scene,
-    const RenderHierarchy& hierarchy,
-    const AnimationPlaybackState& playback,
-    float timeSeconds,
-    float& outAnimationFrame)
-{
-    outAnimationFrame = 0.0f;
-    if (playback.activeAnimationIndex < 0
-        || playback.activeAnimationIndex >= static_cast<int>(scene.animations.size())) {
-        return nullptr;
-    }
-    if (std::find(
-        hierarchy.compatibleAnimationIndices.begin(),
-        hierarchy.compatibleAnimationIndices.end(),
-        playback.activeAnimationIndex) == hierarchy.compatibleAnimationIndices.end()) {
-        return nullptr;
-    }
-
-    const RenderAnimationClip& clip = scene.animations[static_cast<std::size_t>(playback.activeAnimationIndex)];
-    if (!clip.supportedForPlayback) {
-        return nullptr;
-    }
-
-    if (clip.numFrames == 0u || clip.frameRate <= 0.0f) {
-        outAnimationFrame = 0.0f;
-        return &clip;
-    }
-
-    const float rawFrame = timeSeconds * clip.frameRate;
-    if (playback.loop) {
-        outAnimationFrame = WrapAnimationFrame(clip, timeSeconds);
-    }
-    else {
-        outAnimationFrame = std::clamp(
-            rawFrame,
-            0.0f,
-            std::max(0.0f, static_cast<float>(clip.numFrames) - 1.0f));
-    }
-
-    return &clip;
 }
 
 bool BuildSrvFromDdsData(
@@ -639,6 +413,12 @@ void D3D11RenderBackend::SetAnimationPlayback(const AnimationPlaybackState& play
         static_cast<int>(m_scene.animations.size()) - 1);
     m_animationPlayback.timeSeconds = std::max(0.0f, m_animationPlayback.timeSeconds);
     m_animationPlayback.speed = std::max(0.01f, m_animationPlayback.speed);
+}
+
+void D3D11RenderBackend::SetAnimationEditDraft(
+    const std::optional<RenderAnimationEditDraft>& draft)
+{
+    m_animationEditDraft = draft;
 }
 
 void D3D11RenderBackend::SetSelectedInstance(const std::optional<RenderInstanceKey>& selected) {
@@ -1385,152 +1165,21 @@ bool D3D11RenderBackend::BuildGpuTexture(const RenderTexture& texture, GpuTextur
 std::vector<std::vector<Mat4>> D3D11RenderBackend::BuildAnimatedHierarchyWorldTransforms(
     float timeSeconds) const
 {
-    std::vector<std::vector<Mat4>> hierarchyWorld;
-    hierarchyWorld.resize(m_scene.hierarchies.size());
-
-    for (std::size_t h = 0; h < m_scene.hierarchies.size(); ++h) {
-        const auto& hierarchy = m_scene.hierarchies[h];
-        auto& worlds = hierarchyWorld[h];
-        worlds.resize(hierarchy.pivots.size(), Mat4::Identity());
-
-        float animationFrame = 0.0f;
-        const RenderAnimationClip* activeClip =
-            ResolveActiveClipForHierarchy(
-                m_scene,
-                hierarchy,
-                m_animationPlayback,
-                timeSeconds,
-                animationFrame);
-
-        std::vector<uint8_t> state(hierarchy.pivots.size(), 0);
-        std::function<void(int)> buildPivot = [&](int pivotIndex) {
-            if (pivotIndex < 0 || pivotIndex >= static_cast<int>(hierarchy.pivots.size())) {
-                return;
-            }
-            if (state[static_cast<std::size_t>(pivotIndex)] == 2) {
-                return;
-            }
-            if (state[static_cast<std::size_t>(pivotIndex)] == 1) {
-                worlds[static_cast<std::size_t>(pivotIndex)] =
-                    hierarchy.pivots[static_cast<std::size_t>(pivotIndex)].localTransform;
-                state[static_cast<std::size_t>(pivotIndex)] = 2;
-                return;
-            }
-
-            state[static_cast<std::size_t>(pivotIndex)] = 1;
-            Mat4 local = hierarchy.pivots[static_cast<std::size_t>(pivotIndex)].localTransform;
-
-            if (activeClip
-                && pivotIndex > 0
-                && pivotIndex < static_cast<int>(activeClip->pivots.size())) {
-                const auto& animPivot = activeClip->pivots[static_cast<std::size_t>(pivotIndex)];
-                const Vec3 translation = {
-                    SampleFloatTrack(animPivot.translationX, animationFrame),
-                    SampleFloatTrack(animPivot.translationY, animationFrame),
-                    SampleFloatTrack(animPivot.translationZ, animationFrame)
-                };
-                const Vec4 rotation = SampleQuatTrack(animPivot.rotation, animationFrame);
-                const Mat4 animationLocal = TransformFromTranslationRotation(
-                    translation,
-                    rotation.x,
-                    rotation.y,
-                    rotation.z,
-                    rotation.w);
-                local = Multiply(local, animationLocal);
-            }
-
-            const int parentIndex = hierarchy.pivots[static_cast<std::size_t>(pivotIndex)].parentIndex;
-            if (parentIndex >= 0 && parentIndex < static_cast<int>(hierarchy.pivots.size())) {
-                buildPivot(parentIndex);
-                worlds[static_cast<std::size_t>(pivotIndex)] =
-                    Multiply(worlds[static_cast<std::size_t>(parentIndex)], local);
-            }
-            else {
-                worlds[static_cast<std::size_t>(pivotIndex)] = local;
-            }
-            state[static_cast<std::size_t>(pivotIndex)] = 2;
-        };
-
-        for (int i = 0; i < static_cast<int>(hierarchy.pivots.size()); ++i) {
-            buildPivot(i);
-        }
-    }
-
-    return hierarchyWorld;
+    return OW3D::Render::BuildAnimatedHierarchyWorldTransforms(
+        m_scene,
+        m_animationPlayback,
+        timeSeconds,
+        m_animationEditDraft);
 }
 
 std::vector<std::vector<Mat4>> D3D11RenderBackend::BuildCpuSkinHierarchyWorldTransforms(
     float timeSeconds) const
 {
-    std::vector<std::vector<Mat4>> hierarchyWorld;
-    hierarchyWorld.resize(m_scene.hierarchies.size());
-
-    for (std::size_t h = 0; h < m_scene.hierarchies.size(); ++h) {
-        const auto& hierarchy = m_scene.hierarchies[h];
-        auto& worlds = hierarchyWorld[h];
-        worlds.resize(hierarchy.pivots.size(), TTSkinIdentity());
-
-        float animationFrame = 0.0f;
-        const RenderAnimationClip* activeClip =
-            ResolveActiveClipForHierarchy(
-                m_scene,
-                hierarchy,
-                m_animationPlayback,
-                timeSeconds,
-                animationFrame);
-
-        std::vector<uint8_t> state(hierarchy.pivots.size(), 0);
-        std::function<void(int)> buildPivot = [&](int pivotIndex) {
-            if (pivotIndex < 0 || pivotIndex >= static_cast<int>(hierarchy.pivots.size())) {
-                return;
-            }
-            if (state[static_cast<std::size_t>(pivotIndex)] == 2) {
-                return;
-            }
-            if (state[static_cast<std::size_t>(pivotIndex)] == 1) {
-                worlds[static_cast<std::size_t>(pivotIndex)] = TTSkinIdentity();
-                state[static_cast<std::size_t>(pivotIndex)] = 2;
-                return;
-            }
-
-            state[static_cast<std::size_t>(pivotIndex)] = 1;
-            const auto& pivot = hierarchy.pivots[static_cast<std::size_t>(pivotIndex)];
-            Mat4 local = (pivotIndex == 0)
-                ? TTSkinIdentity()
-                : TTSkinTransformFromTranslationRotation(pivot.baseTranslation, pivot.baseRotation);
-
-            if (activeClip
-                && pivotIndex > 0
-                && pivotIndex < static_cast<int>(activeClip->pivots.size())) {
-                const auto& animPivot = activeClip->pivots[static_cast<std::size_t>(pivotIndex)];
-                const Vec3 translation = {
-                    SampleFloatTrack(animPivot.translationX, animationFrame),
-                    SampleFloatTrack(animPivot.translationY, animationFrame),
-                    SampleFloatTrack(animPivot.translationZ, animationFrame)
-                };
-                const Vec4 rotation = SampleQuatTrack(animPivot.rotation, animationFrame);
-                const Mat4 animationLocal = TTSkinTransformFromTranslationRotation(translation, rotation);
-                local = TTSkinMultiply(local, animationLocal);
-            }
-
-            const int parentIndex = pivot.parentIndex;
-            if (parentIndex >= 0 && parentIndex < static_cast<int>(hierarchy.pivots.size())) {
-                buildPivot(parentIndex);
-                worlds[static_cast<std::size_t>(pivotIndex)] =
-                    TTSkinMultiply(worlds[static_cast<std::size_t>(parentIndex)], local);
-            }
-            else {
-                worlds[static_cast<std::size_t>(pivotIndex)] = local;
-            }
-            state[static_cast<std::size_t>(pivotIndex)] = 2;
-        };
-
-        for (int i = 0; i < static_cast<int>(hierarchy.pivots.size()); ++i) {
-            buildPivot(i);
-        }
-    }
-
-    return hierarchyWorld;
+    return OW3D::Render::BuildCpuSkinHierarchyWorldTransforms(
+        m_scene,
+        m_animationPlayback,
+        timeSeconds,
+        m_animationEditDraft);
 }
 
 bool D3D11RenderBackend::UpdateSkinnedMeshVertices(

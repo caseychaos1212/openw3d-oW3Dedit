@@ -411,25 +411,67 @@ std::string ResolveTexturePath(const std::string& textureName, const SceneBuildO
         return input.string();
     }
 
-    std::filesystem::path base = options.textureSearchDirectory.empty()
-        ? std::filesystem::current_path()
-        : std::filesystem::path(options.textureSearchDirectory);
+    std::vector<std::filesystem::path> searchRoots;
+    if (!options.textureSearchDirectory.empty()) {
+        searchRoots.emplace_back(options.textureSearchDirectory);
+    }
+    for (const auto& directory : options.additionalTextureSearchDirectories) {
+        if (directory.empty()) {
+            continue;
+        }
+        const std::filesystem::path candidate(directory);
+        if (std::find(searchRoots.begin(), searchRoots.end(), candidate) == searchRoots.end()) {
+            searchRoots.push_back(candidate);
+        }
+    }
+    if (searchRoots.empty()) {
+        searchRoots.push_back(std::filesystem::current_path());
+    }
 
-    if (input.has_extension()) {
-        const auto candidate = base / input;
+    auto tryCandidate = [](const std::filesystem::path& candidate) -> std::string {
         if (FileExists(candidate)) {
             return candidate.string();
+        }
+        return {};
+    };
+
+    auto tryRelativePath = [&](const std::filesystem::path& base, const std::filesystem::path& relative) -> std::string {
+        if (relative.empty()) {
+            return {};
+        }
+
+        if (const std::string resolved = tryCandidate(base / relative); !resolved.empty()) {
+            return resolved;
+        }
+
+        const std::filesystem::path fileName = relative.filename();
+        if (!fileName.empty() && fileName != relative) {
+            if (const std::string resolved = tryCandidate(base / fileName); !resolved.empty()) {
+                return resolved;
+            }
+        }
+
+        return {};
+    };
+
+    if (input.has_extension()) {
+        for (const auto& base : searchRoots) {
+            if (const std::string resolved = tryRelativePath(base, input); !resolved.empty()) {
+                return resolved;
+            }
         }
     }
     else {
         static const std::array<const char*, 6> kTextureExtensions = {
             ".dds", ".tga", ".png", ".jpg", ".jpeg", ".bmp"
         };
-        for (const char* ext : kTextureExtensions) {
-            auto candidate = base / input;
-            candidate += ext;
-            if (FileExists(candidate)) {
-                return candidate.string();
+        for (const auto& base : searchRoots) {
+            for (const char* ext : kTextureExtensions) {
+                auto relative = input;
+                relative += ext;
+                if (const std::string resolved = tryRelativePath(base, relative); !resolved.empty()) {
+                    return resolved;
+                }
             }
         }
     }
@@ -1453,7 +1495,10 @@ void ParseHierarchies(const W3DChunk& roots, BuildContext& ctx) {
 
         const int hierarchyIndex = static_cast<int>(ctx.result.scene.hierarchies.size());
         if (!hierarchy.name.empty()) {
-            ctx.hierarchyByName[NormalizeName(hierarchy.name)] = hierarchyIndex;
+            const std::string hierarchyKey = NormalizeName(hierarchy.name);
+            if (!ctx.hierarchyByName.contains(hierarchyKey)) {
+                ctx.hierarchyByName.emplace(hierarchyKey, hierarchyIndex);
+            }
         }
         ctx.result.scene.hierarchies.push_back(std::move(hierarchy));
     }
@@ -2145,12 +2190,19 @@ void BuildLodGroupsFromLodModelDefinitions(
 }
 
 void BuildLooseNodes(BuildContext& ctx) {
+    const bool hasPrimaryMeshes = std::any_of(
+        ctx.result.scene.meshes.begin(),
+        ctx.result.scene.meshes.end(),
+        [](const RenderMesh& mesh) {
+            return !mesh.sourceFromSupplemental;
+        });
+
     for (std::size_t i = 0; i < ctx.result.scene.meshes.size(); ++i) {
         const int meshIndex = static_cast<int>(i);
         if (ctx.referencedMeshes.contains(meshIndex)) {
             continue;
         }
-        if (ctx.supplementalMeshes.contains(meshIndex)) {
+        if (ctx.supplementalMeshes.contains(meshIndex) && hasPrimaryMeshes) {
             continue;
         }
 
@@ -2211,6 +2263,9 @@ SceneBuildResult BuildRenderScene(
     const std::vector<std::shared_ptr<ChunkItem>> hierarchyRoots =
         CollectAllRoots(primaryRoots, skeletonSupplementalRoots, nullptr);
     ParseMeshes(primaryRoots, ctx, false);
+    if (skeletonSupplementalRoots && !skeletonSupplementalRoots->empty()) {
+        ParseMeshes(*skeletonSupplementalRoots, ctx, true);
+    }
     ParseHierarchies(hierarchyRoots, ctx);
 
     std::vector<ParsedAnimationDefinition> animations = ParseAnimationDefinitions(primaryRoots, ctx, false);
@@ -2232,13 +2287,16 @@ SceneBuildResult BuildRenderScene(
     }
     AssignAnimationsToHierarchies(ctx, animations);
 
-    const auto hmodelDefs = ParseHModelDefinitions(primaryRoots, ctx);
+    const std::vector<std::shared_ptr<ChunkItem>> modelRoots =
+        CollectAllRoots(primaryRoots, skeletonSupplementalRoots, nullptr);
+
+    const auto hmodelDefs = ParseHModelDefinitions(modelRoots, ctx);
     BuildNodesFromHModelDefinitions(ctx, hmodelDefs);
 
-    const auto hlodDefs = ParseHLodDefinitions(primaryRoots, ctx);
+    const auto hlodDefs = ParseHLodDefinitions(modelRoots, ctx);
     BuildLodGroupsFromHLodDefinitions(ctx, hlodDefs);
 
-    const auto lodModelDefs = ParseLodModelDefinitions(primaryRoots, ctx);
+    const auto lodModelDefs = ParseLodModelDefinitions(modelRoots, ctx);
     BuildLodGroupsFromLodModelDefinitions(ctx, lodModelDefs);
 
     BuildLooseNodes(ctx);

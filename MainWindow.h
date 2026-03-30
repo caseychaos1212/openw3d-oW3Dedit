@@ -26,12 +26,14 @@ class QTimer;
 class QCheckBox;
 class QPlainTextEdit;
 class QGroupBox;
+class QComboBox;
 class QDoubleSpinBox;
 class QPushButton;
 class QSlider;
 class QSpinBox;
 class QTabWidget;
 class QLabel;
+class QTreeWidgetItem;
 class MeshEditorWidget;
 class StringEditorWidget;
 class HierarchyHeaderEditorWidget;
@@ -77,6 +79,7 @@ struct RenderSessionAsset {
     QString displayLabel;
     std::vector<std::shared_ptr<ChunkItem>> roots;
     QSet<QString> hierarchyNames;
+    int meshCount = 0;
     int animationCount = 0;
 };
 
@@ -96,6 +99,7 @@ public:
     MainWindow(QWidget* parent = nullptr);
 
 private slots:
+    void newFile();
     void openFile(const QString& path = QString());
     void ClearChunkTree();
     void handleTreeSelection();
@@ -127,16 +131,40 @@ private slots:
     void moveHierarchyBoneToEnd();
     void addRenderSkeletons();
     void addRenderAnimations();
+    void selectRenderTextureFolder();
+    void clearRenderTextureFolder();
     void removeSelectedRenderSessionAsset();
     void clearRenderAnimationLibraries();
     void handleRenderAnimationSelectionChanged();
+    void handleRenderAnimationEditKeysChanged(bool checked);
+    void handleRenderBlendSourceClipChanged(int index);
+    void handleRenderBlendTimingModeChanged(int index);
+    void handleRenderBlendPivotItemChanged(QTreeWidgetItem* item, int column);
+    void handleRenderBlendIncludeDescendantsChanged(bool checked);
+    void handleRenderBlendStartFrameChanged(int value);
+    void handleRenderBlendEndFrameChanged(int value);
+    void applyRenderAnimationPivotOverride();
     void toggleRenderAnimationPlayback();
     void stopRenderAnimationPlayback();
     void handleRenderAnimationLoopChanged(bool checked);
     void handleRenderAnimationSpeedChanged(double value);
     void handleRenderAnimationFrameSliderChanged(int value);
     void handleRenderAnimationPlaybackTimerTick();
+    void handleViewportAnimationKeyframeCommit(
+        int hierarchyIndex,
+        int pivotIndex,
+        int frameIndex,
+        float tx,
+        float ty,
+        float tz,
+        float qx,
+        float qy,
+        float qz,
+        float qw);
+    void handleViewportAnimationKeyframeDelete(int hierarchyIndex, int pivotIndex, int frameIndex);
+    void handleViewportAnimationPlaybackPauseRequested();
     void selectChunkInTree(void* chunkPtr);
+    void handleChunkSourceTabChanged(int index);
 
 protected:
     void closeEvent(QCloseEvent* event) override;
@@ -148,6 +176,7 @@ private:
     };
 
     void populateTree();
+    void rebuildChunkSourceTabs();
     JsonSerializationMode loadDefaultSerializationModeSetting() const;
     void saveDefaultSerializationModeSetting(JsonSerializationMode mode) const;
     bool promptSerializationMode(
@@ -163,13 +192,18 @@ private:
     void clearExternalRenderContext();
     void resetRenderAnimationPlayback();
     void syncRenderAnimationPlaybackToViewport();
+    void syncActiveRenderAnimationDraftToViewport();
+    void syncRenderAnimationEditingStateToViewport();
     void syncRenderAnimationUi();
     void refreshRenderAssetList();
     void refreshRenderAnimationList();
     void refreshRenderPlaybackControls();
     void refreshRenderPlaybackSelection();
+    void refreshRenderBlendControls();
+    void refreshRenderBlendStatus();
     void setRenderActiveAnimationIndex(int animationIndex, bool startPlaying, bool resetTime);
     int findRenderAnimationIndexByIdentity(const RenderAnimationClipIdentity& identity) const;
+    int findCompatibleRenderHierarchyIndexForAnimation(int animationIndex) const;
     bool tryLoadRenderSessionAsset(
         const QString& filePath,
         RenderSessionAssetRole role,
@@ -186,9 +220,23 @@ private:
         float qy,
         float qz,
         float qw);
+    OW3D::Render::RenderAnimationEditDraft* ensureRenderAnimationEditDraft(
+        const OW3D::Render::RenderAnimationClip& clip,
+        const std::shared_ptr<ChunkItem>& animationChunk);
+    const OW3D::Render::RenderAnimationEditDraft* findRenderAnimationEditDraftForClip(
+        const OW3D::Render::RenderAnimationClip& clip) const;
+    const OW3D::Render::RenderAnimationEditDraft* findActiveRenderAnimationEditDraft() const;
+    bool flushPendingRenderAnimationDrafts(QString* outError = nullptr);
     void undoRenderTransform();
     void redoRenderTransform();
+    const std::vector<std::shared_ptr<ChunkItem>>* chunkRootsForSourceKey(const QString& sourceKey) const;
+    std::shared_ptr<ChunkItem> findChunkInActiveSource(const void* targetPtr) const;
+    QString chunkSourceKeyForTree(const QTreeWidget* tree) const;
+    QString activeChunkSourceLabel() const;
+    bool activeChunkSourceEditable() const;
+    void syncActiveChunkSourceTree();
 
+    QTabWidget* chunkTreeTabs = nullptr;
     QTreeWidget* treeWidget = nullptr;
     QTableWidget* tableWidget = nullptr;
     QSplitter* splitter = nullptr;
@@ -217,7 +265,9 @@ private:
     TriangleSurfaceTypeEditorWidget* triangleSurfaceTypeEditor = nullptr;
     TextureInfoEditorWidget* textureInfoEditor = nullptr;
     QWidget* editorPlaceholder = nullptr;
+    QLabel* editorPlaceholderLabel = nullptr;
     QWidget* renderPane = nullptr;
+    QSplitter* renderSplitter = nullptr;
     OW3D::Render::RenderViewportWidget* renderViewport = nullptr;
     QCheckBox* renderFogToggle = nullptr;
     QCheckBox* renderLodToggle = nullptr;
@@ -239,13 +289,26 @@ private:
     QPushButton* renderPlayPauseButton = nullptr;
     QPushButton* renderStopButton = nullptr;
     QCheckBox* renderAnimationLoopToggle = nullptr;
+    QCheckBox* renderAnimationEditKeysToggle = nullptr;
     QDoubleSpinBox* renderAnimationSpeedSpin = nullptr;
     QSlider* renderAnimationFrameSlider = nullptr;
+    QLabel* renderAnimationFrameLabel = nullptr;
     QLabel* renderAnimationClipLabel = nullptr;
     QLabel* renderAnimationMetadataLabel = nullptr;
+    QLabel* renderAnimationEditStatusLabel = nullptr;
+    QGroupBox* renderAnimationBlendGroup = nullptr;
+    QComboBox* renderAnimationBlendSourceCombo = nullptr;
+    QComboBox* renderAnimationBlendTimingCombo = nullptr;
+    QTreeWidget* renderAnimationBlendPivotTree = nullptr;
+    QCheckBox* renderAnimationBlendIncludeDescendantsToggle = nullptr;
+    QSpinBox* renderAnimationBlendStartFrameSpin = nullptr;
+    QSpinBox* renderAnimationBlendEndFrameSpin = nullptr;
+    QPushButton* renderAnimationBlendApplyButton = nullptr;
+    QLabel* renderAnimationBlendStatusLabel = nullptr;
     QTimer* renderAnimationPlaybackTimer = nullptr;
     QElapsedTimer renderAnimationPlaybackElapsed;
     std::shared_ptr<ChunkItem> currentChunk;
+    QLabel* detailSourceLabel = nullptr;
     QString currentFilePath;
     bool dirty = false;
     QByteArray detailSplitterStateCache;
@@ -261,20 +324,60 @@ private:
     QSet<QString> currentExternalRenderAssetPaths;
     bool currentRenderTriedSkeletonAutoload = false;
     QString currentRenderSuppressedMissingHierarchyKey;
+    QString currentRenderSuppressedMissingMeshKey;
+    QString currentRenderTextureDirectory;
+    QString currentRenderSuppressedMissingTextureKey;
     OW3D::Render::SceneBuildResult currentRenderSceneResult;
     OW3D::Render::AnimationPlaybackState currentRenderAnimationPlayback;
+    std::unordered_map<const void*, OW3D::Render::RenderAnimationEditDraft> currentRenderAnimationDrafts;
     std::optional<RenderAnimationClipIdentity> currentRenderActiveClipIdentity;
+    bool currentRenderAnimationEditKeysEnabled = false;
     bool suppressRenderAnimationFrameSliderChange = false;
+    bool suppressRenderAnimationBlendUiSignals = false;
 
-    struct RenderTransformUndoEntry {
-        void* pivotsChunkPtr = nullptr;
-        int pivotIndex = -1;
-        std::vector<uint8_t> beforePivot;
-        std::vector<uint8_t> afterPivot;
+    struct RenderAnimationBlendState {
+        enum class TimingMode {
+            PreserveSourceRate,
+            FitSourceToRange
+        };
+
+        int overlayAnimationIndex = -1;
+        std::optional<RenderAnimationClipIdentity> overlayClipIdentity;
+        QString hierarchyKey;
+        QSet<int> pivotIndices;
+        TimingMode timingMode = TimingMode::PreserveSourceRate;
+        bool includeDescendants = true;
+        int startFrame = 0;
+        int endFrame = 0;
+        bool frameRangeInitialized = false;
     };
-    std::vector<RenderTransformUndoEntry> renderTransformUndoStack;
-    std::vector<RenderTransformUndoEntry> renderTransformRedoStack;
+    RenderAnimationBlendState currentRenderAnimationBlendState;
+
+    struct RenderEditUndoEntry {
+        enum class Kind {
+            ChunkTree,
+            AnimationDrafts
+        };
+
+        Kind kind = Kind::ChunkTree;
+        void* targetChunkPtr = nullptr;
+        std::shared_ptr<ChunkItem> beforeSnapshot;
+        std::shared_ptr<ChunkItem> afterSnapshot;
+        std::unordered_map<const void*, OW3D::Render::RenderAnimationEditDraft> beforeDrafts;
+        std::unordered_map<const void*, OW3D::Render::RenderAnimationEditDraft> afterDrafts;
+    };
+    std::vector<RenderEditUndoEntry> renderTransformUndoStack;
+    std::vector<RenderEditUndoEntry> renderTransformRedoStack;
     bool applyingRenderTransformUndoRedo = false;
+
+    struct ChunkSourceTab {
+        QString sourceKey;
+        QString label;
+        bool editable = false;
+        QTreeWidget* treeWidget = nullptr;
+    };
+    std::vector<ChunkSourceTab> chunkSourceTabs;
+
     void updateEditorForChunk(const std::shared_ptr<ChunkItem>& chunk);
     void updateRawHex(const std::shared_ptr<ChunkItem>& chunk);
     void setDirty(bool value);

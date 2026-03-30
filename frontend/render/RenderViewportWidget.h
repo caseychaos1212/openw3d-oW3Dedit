@@ -24,10 +24,14 @@ class RenderViewportWidget final : public QWidget {
 public:
     explicit RenderViewportWidget(QWidget* parent = nullptr);
     ~RenderViewportWidget() override;
+    QSize sizeHint() const override;
+    QSize minimumSizeHint() const override;
 
     void SetSceneResult(const SceneBuildResult& sceneResult);
     void SetRenderSettings(const RenderSettings& settings);
     void SetAnimationPlayback(const AnimationPlaybackState& playback);
+    void SetAnimationEditDraft(const std::optional<RenderAnimationEditDraft>& draft);
+    void SetAnimationEditingState(bool editKeysEnabled, bool clipEditable, const QString& readOnlyReason);
     void FocusScene();
     void OpenManualPivotRotationDialog();
 
@@ -48,6 +52,19 @@ signals:
         float qy,
         float qz,
         float qw);
+    void animationKeyframeCommitRequested(
+        int hierarchyIndex,
+        int pivotIndex,
+        int frameIndex,
+        float tx,
+        float ty,
+        float tz,
+        float qx,
+        float qy,
+        float qz,
+        float qw);
+    void animationKeyframeDeleteRequested(int hierarchyIndex, int pivotIndex, int frameIndex);
+    void animationPlaybackPauseRequested();
 
 protected:
     QPaintEngine* paintEngine() const override;
@@ -101,6 +118,11 @@ private:
         QString readOnlyReason;
     };
 
+    struct PivotEditability {
+        bool editable = false;
+        QString reason;
+    };
+
     void EnsureBackendInitialized();
     void ShutdownImGui();
     void TickFrame();
@@ -110,17 +132,41 @@ private:
     void PerformPick(const QPoint& pos);
     bool HandleGizmos(const Mat4& view, const Mat4& projection);
     void DrawSceneBrowserOverlay();
+    void DrawPivotMarkersOverlay(const std::vector<std::vector<Mat4>>& hierarchyWorld, const Mat4& viewProjection);
     void DrawTransformInspectorOverlay();
     void CommitPivotOverrideIfNeeded();
+    void CommitDisplayedLocalTransform(const PivotKey& key, const Mat4& displayedLocal);
     void ClearPivotOverrides();
-    bool TryGetSelectedEditablePivot(const VisibleInstance*& outSelected, Mat4& outLocal, QString* outError = nullptr) const;
+    bool TryGetSelectedEditablePivot(
+        PivotKey& outKey,
+        const ::ChunkItem*& outPivotsChunk,
+        int& outRepresentativeVisibleIndex,
+        Mat4& outLocal,
+        PivotEditability& outEditability,
+        QString* outError = nullptr) const;
     void SyncCameraInspectorStateFromCamera();
     void ApplyCameraInspectorEdits();
-    void SyncTransformInspectorState(const VisibleInstance* selected, const Mat4& local);
+    void SyncTransformInspectorState(const PivotKey& key, const Mat4& local);
     void ApplyTransformInspectorEdits();
     void SyncSelectedInstanceToVisibleList();
     void SetSelectedVisibleInstance(int index, bool emitChunkSignal);
+    void SetSelectedPivot(const PivotKey& key, const ::ChunkItem* pivotsChunk, int representativeVisibleIndex, bool emitChunkSignal);
     void EmitSelectionStatus(const QString& text);
+    void AutoSelectFirstEditablePivotIfNeeded();
+    PivotEditability EvaluatePivotEditability(
+        int hierarchyIndex,
+        int pivotIndex,
+        const ::ChunkItem* pivotsChunk) const;
+    const RenderAnimationClip* CurrentActiveAnimationClip() const;
+    const RenderAnimationClip* ActiveClipForHierarchy(int hierarchyIndex, float* outAnimationFrame = nullptr) const;
+    int CurrentAnimationFrameIndex() const;
+    int FindRepresentativeVisibleInstance(const PivotKey& key) const;
+    Mat4 ComputeUnderlyingLocalTransform(int hierarchyIndex, int pivotIndex) const;
+    Mat4 ComputeDisplayedLocalTransform(int hierarchyIndex, int pivotIndex) const;
+    void PreviewTransformInspectorEdits();
+    void ResetTransformInspectorToOriginal();
+    bool IsAnimationEditModeActive() const;
+    void MaybePauseAnimationForEditing();
 
     Vec3 ComputeSceneCenter() const;
     float ComputeSceneRadius(const Vec3& center) const;
@@ -143,6 +189,10 @@ private:
     CameraState m_camera{};
     RenderSettings m_settings{};
     AnimationPlaybackState m_animationPlayback{};
+    std::optional<RenderAnimationEditDraft> m_animationEditDraft;
+    bool m_animationEditKeysEnabled = false;
+    bool m_animationClipEditable = false;
+    QString m_animationClipReadOnlyReason;
 
     QElapsedTimer m_statsTimer;
     QElapsedTimer m_deltaTimer;
@@ -167,6 +217,10 @@ private:
     std::vector<VisibleInstance> m_visibleInstances;
     std::optional<RenderInstanceKey> m_selectedInstance;
     int m_selectedVisibleIndex = -1;
+    std::optional<PivotKey> m_selectedPivot;
+    const ::ChunkItem* m_selectedPivotsChunk = nullptr;
+    int m_selectedPivotRepresentativeVisibleIndex = -1;
+    bool m_autoSelectEditablePivotPending = false;
 
     std::unordered_map<PivotKey, Mat4, PivotKeyHash> m_pivotLocalOverrides;
     std::unordered_map<RenderInstanceKey, Mat4, RenderInstanceKeyHash> m_backendWorldOverrides;

@@ -37,14 +37,6 @@ struct FrameStats {
     uint32_t triangles = 0;
 };
 
-struct AnimationPlaybackState {
-    int activeAnimationIndex = -1;
-    float timeSeconds = 0.0f;
-    bool playing = false;
-    bool loop = true;
-    float speed = 1.0f;
-};
-
 enum class RenderInstanceKind : uint8_t {
     LodEntry,
     LooseNode
@@ -78,6 +70,7 @@ public:
     virtual void SetCamera(const CameraState& camera) = 0;
     virtual void SetRenderSettings(const RenderSettings& settings) = 0;
     virtual void SetAnimationPlayback(const AnimationPlaybackState& playback) = 0;
+    virtual void SetAnimationEditDraft(const std::optional<RenderAnimationEditDraft>& draft) = 0;
     virtual void SetSelectedInstance(const std::optional<RenderInstanceKey>& selected) = 0;
     virtual void SetTransformOverrides(
         const std::unordered_map<RenderInstanceKey, Mat4, RenderInstanceKeyHash>& overrides) = 0;

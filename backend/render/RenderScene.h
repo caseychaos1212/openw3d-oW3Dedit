@@ -33,9 +33,18 @@ struct SceneBuildWarning {
     std::string message;
 };
 
+struct AnimationPlaybackState {
+    int activeAnimationIndex = -1;
+    float timeSeconds = 0.0f;
+    bool playing = false;
+    bool loop = true;
+    float speed = 1.0f;
+};
+
 struct SceneBuildOptions {
     ParityProfile profile = ParityProfile::W3DViewD3D11Baseline;
     std::string textureSearchDirectory;
+    std::vector<std::string> additionalTextureSearchDirectories;
     std::vector<std::string> externalTextureNames;
     std::vector<uint32_t> externalTextureHashes;
     std::unordered_map<const ChunkItem*, std::string> rootSourceLabels;
@@ -131,6 +140,13 @@ struct RenderPivotAnimation {
     std::vector<RenderQuatKeyframe> rotation;
 };
 
+struct RenderDensePivotAnimationSamples {
+    std::vector<float> translationX;
+    std::vector<float> translationY;
+    std::vector<float> translationZ;
+    std::vector<Vec4> rotation;
+};
+
 struct RenderAnimationClip {
     std::string fullName;
     std::string hierarchyName;
@@ -142,6 +158,12 @@ struct RenderAnimationClip {
     bool sourceFromAnimationLibrary = false;
     const ::ChunkItem* sourceAnimationChunk = nullptr;
     std::vector<RenderPivotAnimation> pivots;
+};
+
+struct RenderAnimationEditDraft {
+    const ::ChunkItem* sourceAnimationChunk = nullptr;
+    uint32_t numFrames = 0;
+    std::unordered_map<int, RenderDensePivotAnimationSamples> pivotSamples;
 };
 
 struct RenderLodEntry {
