@@ -473,7 +473,7 @@ void D3D11RenderBackend::RenderFrame(const std::function<void()>& overlayCallbac
     const Mat4 projection = PerspectiveFovLH(DegToRad(m_camera.fovDeg), aspect, m_camera.nearPlane, m_camera.farPlane);
 
     CBufferFrame frameData{};
-    frameData.viewProj = Multiply(view, projection);
+    frameData.viewProj = Multiply(projection, view);
     frameData.cameraWorldPos = { cameraPos.x, cameraPos.y, cameraPos.z, 1.0f };
     frameData.ambient = { m_scene.ambientLight.x, m_scene.ambientLight.y, m_scene.ambientLight.z, 1.0f };
     frameData.directionalLightDir = {
@@ -521,7 +521,7 @@ void D3D11RenderBackend::RenderFrame(const std::function<void()>& overlayCallbac
         if (pivotIndex < 0 || pivotIndex >= static_cast<int>(worlds.size())) {
             return fallback;
         }
-        return worlds[pivotIndex];
+        return Multiply(worlds[pivotIndex], fallback);
     };
 
     for (std::size_t lodGroupIndex = 0; lodGroupIndex < m_scene.lodGroups.size(); ++lodGroupIndex) {
@@ -559,7 +559,10 @@ void D3D11RenderBackend::RenderFrame(const std::function<void()>& overlayCallbac
 
             Mat4 world = gpuMesh.skinned
                 ? Mat4::Identity()
-                : getWorldForBinding(entry.hierarchyIndex, entry.pivotIndex, Mat4::Identity());
+                : getWorldForBinding(
+                    entry.hierarchyIndex,
+                    entry.pivotIndex,
+                    entry.localTransform);
             if (const auto overrideIt = m_transformOverrides.find(key); overrideIt != m_transformOverrides.end()) {
                 world = overrideIt->second;
             }

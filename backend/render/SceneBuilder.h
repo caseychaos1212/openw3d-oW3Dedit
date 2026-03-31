@@ -14,6 +14,7 @@ SceneBuildResult BuildRenderScene(
     const W3DChunk& primaryRoots,
     const SceneBuildOptions& options,
     const W3DChunk* skeletonSupplementalRoots = nullptr,
-    const W3DChunk* animationLibraryRoots = nullptr);
+    const W3DChunk* animationLibraryRoots = nullptr,
+    const W3DChunk* referenceOnlyRoots = nullptr);
 
 } // namespace OW3D::Render

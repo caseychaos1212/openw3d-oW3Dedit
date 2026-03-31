@@ -56,6 +56,10 @@ constexpr uint32_t kChunkCompressedAnimationHeader = 0x0281;
 constexpr uint32_t kChunkCompressedAnimationChannel = 0x0282;
 constexpr uint32_t kChunkCompressedAnimationBitChannel = 0x0283;
 constexpr uint32_t kChunkCompressedAnimationAdaptiveDeltaChannel = 0x0284;
+constexpr uint32_t kChunkAggregate = 0x0600;
+constexpr uint32_t kChunkAggregateHeader = 0x0601;
+constexpr uint32_t kChunkAggregateInfo = 0x0602;
+constexpr uint32_t kChunkAggregateClassInfo = 0x0604;
 constexpr uint32_t kChunkHModel = 0x0300;
 constexpr uint32_t kChunkHModelHeader = 0x0301;
 constexpr uint32_t kChunkHModelNode = 0x0302;
@@ -765,12 +769,14 @@ struct HlodLodArray {
 struct HlodDefinition {
     std::string name;
     std::string hierarchyName;
+    bool sourceFromReferenceOnly = false;
     const ChunkItem* sourceChunk = nullptr;
     std::vector<HlodLodArray> lodArrays;
 };
 
 struct LodModelDefinition {
     std::string name;
+    bool sourceFromReferenceOnly = false;
     struct EntryRef {
         W3dLODStruct payload{};
         const ChunkItem* sourceChunk = nullptr;
@@ -781,6 +787,7 @@ struct LodModelDefinition {
 struct HModelDefinition {
     std::string name;
     std::string hierarchyName;
+    bool sourceFromReferenceOnly = false;
     struct NodeRef {
         std::string renderObjName;
         int pivotIndex = -1;
@@ -796,6 +803,35 @@ struct ParsedAnimationDefinition {
     const ChunkItem* sourceHeaderChunk = nullptr;
 };
 
+struct AggregateDefinition {
+    std::string name;
+    std::string baseModelName;
+    bool forceSubObjectLod = false;
+    bool sourceFromReferenceOnly = false;
+    struct SubObjectRef {
+        std::string renderObjName;
+        std::string boneName;
+        const ChunkItem* sourceChunk = nullptr;
+    };
+    std::vector<SubObjectRef> subObjects;
+    const ChunkItem* sourceChunk = nullptr;
+};
+
+struct ModelDefinitionLookup {
+    std::unordered_map<std::string, std::size_t> hmodelByName;
+    std::unordered_map<std::string, std::size_t> hmodelByHierarchyName;
+    std::unordered_map<std::string, std::size_t> hlodByName;
+    std::unordered_map<std::string, std::size_t> hlodByHierarchyName;
+    std::unordered_map<std::string, std::size_t> lodModelByName;
+    std::unordered_map<std::string, std::size_t> aggregateByName;
+};
+
+struct LockedLodRangeSlot {
+    float minDistance = 0.0f;
+    float maxDistance = std::numeric_limits<float>::max();
+    float maxScreenSize = 0.0f;
+};
+
 struct BuildContext {
     SceneBuildOptions options{};
     SceneBuildResult result{};
@@ -807,6 +843,7 @@ struct BuildContext {
     std::unordered_set<std::string> warnedMissingHierarchies;
     std::unordered_set<int> referencedMeshes;
     std::unordered_set<int> supplementalMeshes;
+    std::unordered_set<int> referenceOnlyMeshes;
     std::unordered_set<std::string> externalTextureByPath;
     std::unordered_set<std::string> externalTextureByBaseName;
     std::unordered_set<uint32_t> externalTextureHashes;
@@ -1790,7 +1827,11 @@ std::vector<ParsedAnimationDefinition> ParseAnimationDefinitions(
     return out;
 }
 
-std::vector<HModelDefinition> ParseHModelDefinitions(const W3DChunk& roots, BuildContext& ctx) {
+std::vector<HModelDefinition> ParseHModelDefinitions(
+    const W3DChunk& roots,
+    BuildContext& ctx,
+    bool sourceFromReferenceOnly)
+{
     std::vector<std::shared_ptr<ChunkItem>> hmodelChunks;
     for (const auto& root : roots) {
         CollectChunksByIdRecursive(root, kChunkHModel, hmodelChunks);
@@ -1815,6 +1856,7 @@ std::vector<HModelDefinition> ParseHModelDefinitions(const W3DChunk& roots, Buil
         HModelDefinition def{};
         def.name = ReadFixedString(header->Name, W3D_NAME_LEN);
         def.hierarchyName = ReadFixedString(header->HierarchyName, W3D_NAME_LEN);
+        def.sourceFromReferenceOnly = sourceFromReferenceOnly;
         def.sourceChunk = hmodelChunk.get();
 
         for (const auto& child : hmodelChunk->children) {
@@ -1875,11 +1917,176 @@ void AssignAnimationsToHierarchies(
     }
 }
 
+int ResolvePivotIndexByName(const RenderHierarchy& hierarchy, const std::string& pivotName)
+{
+    const std::string key = NormalizeName(pivotName);
+    if (key.empty()) {
+        return -1;
+    }
+
+    for (int pivotIndex = 0; pivotIndex < static_cast<int>(hierarchy.pivots.size()); ++pivotIndex) {
+        if (NormalizeName(hierarchy.pivots[static_cast<std::size_t>(pivotIndex)].name) == key) {
+            return pivotIndex;
+        }
+    }
+    return -1;
+}
+
+const HModelDefinition* FindHModelByName(
+    const std::vector<HModelDefinition>& defs,
+    const ModelDefinitionLookup& lookup,
+    const std::string& name,
+    bool allowHierarchyFallback)
+{
+    const std::string key = NormalizeName(name);
+    if (key.empty()) {
+        return nullptr;
+    }
+
+    if (const auto it = lookup.hmodelByName.find(key); it != lookup.hmodelByName.end()) {
+        return &defs[it->second];
+    }
+    if (allowHierarchyFallback) {
+        if (const auto it = lookup.hmodelByHierarchyName.find(key); it != lookup.hmodelByHierarchyName.end()) {
+            return &defs[it->second];
+        }
+    }
+    return nullptr;
+}
+
+const HlodDefinition* FindHLodByName(
+    const std::vector<HlodDefinition>& defs,
+    const ModelDefinitionLookup& lookup,
+    const std::string& name,
+    bool allowHierarchyFallback)
+{
+    const std::string key = NormalizeName(name);
+    if (key.empty()) {
+        return nullptr;
+    }
+
+    if (const auto it = lookup.hlodByName.find(key); it != lookup.hlodByName.end()) {
+        return &defs[it->second];
+    }
+    if (allowHierarchyFallback) {
+        if (const auto it = lookup.hlodByHierarchyName.find(key); it != lookup.hlodByHierarchyName.end()) {
+            return &defs[it->second];
+        }
+    }
+    return nullptr;
+}
+
+const LodModelDefinition* FindLodModelByName(
+    const std::vector<LodModelDefinition>& defs,
+    const ModelDefinitionLookup& lookup,
+    const std::string& name)
+{
+    const std::string key = NormalizeName(name);
+    if (key.empty()) {
+        return nullptr;
+    }
+
+    if (const auto it = lookup.lodModelByName.find(key); it != lookup.lodModelByName.end()) {
+        return &defs[it->second];
+    }
+    return nullptr;
+}
+
+const AggregateDefinition* FindAggregateByName(
+    const std::vector<AggregateDefinition>& defs,
+    const ModelDefinitionLookup& lookup,
+    const std::string& name)
+{
+    const std::string key = NormalizeName(name);
+    if (key.empty()) {
+        return nullptr;
+    }
+
+    if (const auto it = lookup.aggregateByName.find(key); it != lookup.aggregateByName.end()) {
+        return &defs[it->second];
+    }
+    return nullptr;
+}
+
+void AddMeshNodeInstance(
+    BuildContext& ctx,
+    const std::string& nodeName,
+    int meshIndex,
+    int hierarchyIndex,
+    int pivotIndex,
+    const ChunkItem* sourceChunk,
+    const Mat4& localTransform)
+{
+    RenderNode node{};
+    node.name = nodeName;
+    node.meshIndex = meshIndex;
+    node.hierarchyIndex = hierarchyIndex;
+    node.pivotIndex = pivotIndex;
+    node.localTransform = localTransform;
+    node.sourceBindingChunk = sourceChunk;
+    ctx.referencedMeshes.insert(meshIndex);
+    ctx.result.scene.looseNodes.push_back(std::move(node));
+}
+
+void AppendNodesFromHModelDefinition(
+    BuildContext& ctx,
+    const HModelDefinition& def,
+    int hierarchyIndex)
+{
+    for (const auto& source : def.nodes) {
+        const auto meshIt = ctx.meshByName.find(NormalizeName(source.renderObjName));
+        if (meshIt == ctx.meshByName.end()) {
+            ctx.result.warnings.push_back({
+                SceneBuildWarningCode::InvalidIndex,
+                BuildChunkPath(source.sourceChunk),
+                "Referenced HModel mesh not found: " + source.renderObjName
+                });
+            continue;
+        }
+
+        int pivotIndex = -1;
+        const RenderMesh& mesh =
+            ctx.result.scene.meshes[static_cast<std::size_t>(meshIt->second)];
+        if (!mesh.skinned) {
+            pivotIndex = source.pivotIndex;
+            if (hierarchyIndex >= 0
+                && hierarchyIndex < static_cast<int>(ctx.result.scene.hierarchies.size())) {
+                const auto& pivots =
+                    ctx.result.scene.hierarchies[static_cast<std::size_t>(hierarchyIndex)].pivots;
+                if (pivotIndex < 0 || pivotIndex >= static_cast<int>(pivots.size())) {
+                    ctx.result.warnings.push_back({
+                        SceneBuildWarningCode::InvalidIndex,
+                        BuildChunkPath(source.sourceChunk),
+                        "HModel pivot index is out of range for hierarchy: " + std::to_string(pivotIndex)
+                        });
+                    pivotIndex = -1;
+                }
+            }
+            else {
+                pivotIndex = -1;
+            }
+        }
+
+        AddMeshNodeInstance(
+            ctx,
+            source.renderObjName,
+            meshIt->second,
+            hierarchyIndex,
+            pivotIndex,
+            source.sourceChunk,
+            Mat4::Identity());
+    }
+}
+
 void BuildNodesFromHModelDefinitions(
     BuildContext& ctx,
     const std::vector<HModelDefinition>& defs)
 {
     for (const auto& def : defs) {
+        if (def.sourceFromReferenceOnly) {
+            continue;
+        }
+
         const int hierarchyIndex = ResolveHierarchyIndex(ctx, def.hierarchyName, def.name);
         if (hierarchyIndex < 0) {
             ctx.WarnMissingHierarchy(
@@ -1888,56 +2095,15 @@ void BuildNodesFromHModelDefinitions(
                 "HModel hierarchy was not found");
         }
 
-        for (const auto& source : def.nodes) {
-            const auto meshIt = ctx.meshByName.find(NormalizeName(source.renderObjName));
-            if (meshIt == ctx.meshByName.end()) {
-                ctx.result.warnings.push_back({
-                    SceneBuildWarningCode::InvalidIndex,
-                    BuildChunkPath(source.sourceChunk),
-                    "Referenced HModel mesh not found: " + source.renderObjName
-                    });
-                continue;
-            }
-
-            RenderNode node{};
-            node.name = source.renderObjName;
-            node.meshIndex = meshIt->second;
-            node.hierarchyIndex = hierarchyIndex;
-            node.localTransform = Mat4::Identity();
-            node.sourceBindingChunk = source.sourceChunk;
-
-            const RenderMesh& mesh =
-                ctx.result.scene.meshes[static_cast<std::size_t>(node.meshIndex)];
-            if (mesh.skinned) {
-                node.pivotIndex = -1;
-            }
-            else {
-                node.pivotIndex = source.pivotIndex;
-                if (hierarchyIndex >= 0
-                    && hierarchyIndex < static_cast<int>(ctx.result.scene.hierarchies.size())) {
-                    const auto& pivots =
-                        ctx.result.scene.hierarchies[static_cast<std::size_t>(hierarchyIndex)].pivots;
-                    if (node.pivotIndex < 0 || node.pivotIndex >= static_cast<int>(pivots.size())) {
-                        ctx.result.warnings.push_back({
-                            SceneBuildWarningCode::InvalidIndex,
-                            BuildChunkPath(source.sourceChunk),
-                            "HModel pivot index is out of range for hierarchy: " + std::to_string(node.pivotIndex)
-                            });
-                        node.pivotIndex = -1;
-                    }
-                }
-                else {
-                    node.pivotIndex = -1;
-                }
-            }
-
-            ctx.referencedMeshes.insert(node.meshIndex);
-            ctx.result.scene.looseNodes.push_back(std::move(node));
-        }
+        AppendNodesFromHModelDefinition(ctx, def, hierarchyIndex);
     }
 }
 
-std::vector<HlodDefinition> ParseHLodDefinitions(const W3DChunk& roots, BuildContext& ctx) {
+std::vector<HlodDefinition> ParseHLodDefinitions(
+    const W3DChunk& roots,
+    BuildContext& ctx,
+    bool sourceFromReferenceOnly)
+{
     std::vector<std::shared_ptr<ChunkItem>> hlodChunks;
     for (const auto& root : roots) {
         CollectChunksByIdRecursive(root, kChunkHLod, hlodChunks);
@@ -1969,6 +2135,7 @@ std::vector<HlodDefinition> ParseHLodDefinitions(const W3DChunk& roots, BuildCon
         HlodDefinition def{};
         def.name = ReadFixedString(header->Name, W3D_NAME_LEN);
         def.hierarchyName = ReadFixedString(header->HierarchyName, W3D_NAME_LEN);
+        def.sourceFromReferenceOnly = sourceFromReferenceOnly;
         def.sourceChunk = headerChunk.get();
 
         const auto lodArrays = FindChildrenById(hlodChunk, kChunkHLodLodArray);
@@ -2012,7 +2179,11 @@ std::vector<HlodDefinition> ParseHLodDefinitions(const W3DChunk& roots, BuildCon
     return out;
 }
 
-std::vector<LodModelDefinition> ParseLodModelDefinitions(const W3DChunk& roots, BuildContext& ctx) {
+std::vector<LodModelDefinition> ParseLodModelDefinitions(
+    const W3DChunk& roots,
+    BuildContext& ctx,
+    bool sourceFromReferenceOnly)
+{
     std::vector<std::shared_ptr<ChunkItem>> lodModelChunks;
     for (const auto& root : roots) {
         CollectChunksByIdRecursive(root, kChunkLodModel, lodModelChunks);
@@ -2034,6 +2205,7 @@ std::vector<LodModelDefinition> ParseLodModelDefinitions(const W3DChunk& roots, 
 
         LodModelDefinition def{};
         def.name = ReadFixedString(header->Name, W3D_NAME_LEN);
+        def.sourceFromReferenceOnly = sourceFromReferenceOnly;
 
         const auto lodEntries = FindChildrenById(lodModelChunk, kChunkLodModelLod);
         for (const auto& lodEntryChunk : lodEntries) {
@@ -2057,6 +2229,120 @@ std::vector<LodModelDefinition> ParseLodModelDefinitions(const W3DChunk& roots, 
     return out;
 }
 
+std::vector<AggregateDefinition> ParseAggregateDefinitions(
+    const W3DChunk& roots,
+    BuildContext& ctx,
+    bool sourceFromReferenceOnly)
+{
+    std::vector<std::shared_ptr<ChunkItem>> aggregateChunks;
+    for (const auto& root : roots) {
+        CollectChunksByIdRecursive(root, kChunkAggregate, aggregateChunks);
+    }
+
+    std::vector<AggregateDefinition> out;
+    out.reserve(aggregateChunks.size());
+
+    for (const auto& aggregateChunk : aggregateChunks) {
+        if (!aggregateChunk) {
+            continue;
+        }
+
+        const auto headerChunk = FindFirstChildById(aggregateChunk, kChunkAggregateHeader);
+        const auto infoChunk = FindFirstChildById(aggregateChunk, kChunkAggregateInfo);
+        if (!headerChunk || !infoChunk) {
+            ctx.result.warnings.push_back({
+                SceneBuildWarningCode::MissingPayload,
+                BuildChunkPath(aggregateChunk.get()),
+                "Aggregate chunk is missing AGGREGATE_HEADER or AGGREGATE_INFO."
+                });
+            continue;
+        }
+
+        const auto header =
+            ParseStructWithWarning<W3dAggregateHeaderStruct>(headerChunk, ctx.result.warnings);
+        const auto info =
+            ParseStructWithWarning<W3dAggregateInfoStruct>(infoChunk, ctx.result.warnings);
+        if (!header || !info) {
+            continue;
+        }
+
+        AggregateDefinition def{};
+        def.name = ReadFixedString(header->Name, W3D_NAME_LEN);
+        def.baseModelName = ReadFixedString(info->BaseModelName, W3D_NAME_LEN * 2u);
+        def.sourceFromReferenceOnly = sourceFromReferenceOnly;
+        def.sourceChunk = aggregateChunk.get();
+
+        if (const auto classInfoChunk = FindFirstChildById(aggregateChunk, kChunkAggregateClassInfo)) {
+            if (const auto classInfo =
+                ParseStructWithWarning<W3dAggregateMiscInfo>(classInfoChunk, ctx.result.warnings))
+            {
+                def.forceSubObjectLod =
+                    (classInfo->Flags & static_cast<uint32_t>(W3D_AGGREGATE_FORCE_SUB_OBJ_LOD)) != 0u;
+            }
+        }
+
+        const std::size_t entrySize = sizeof(W3dAggregateSubobjectStruct);
+        const std::size_t headerSize = sizeof(W3dAggregateInfoStruct);
+        if (infoChunk->data.size() < headerSize) {
+            continue;
+        }
+        const std::size_t availableEntries = (infoChunk->data.size() - headerSize) / entrySize;
+        const std::size_t count = std::min<std::size_t>(
+            static_cast<std::size_t>(info->SubobjectCount),
+            availableEntries);
+        const auto* subObjects = reinterpret_cast<const W3dAggregateSubobjectStruct*>(
+            infoChunk->data.data() + headerSize);
+
+        def.subObjects.reserve(count);
+        for (std::size_t i = 0; i < count; ++i) {
+            AggregateDefinition::SubObjectRef subObject{};
+            subObject.renderObjName =
+                ReadFixedString(subObjects[i].SubobjectName, W3D_NAME_LEN * 2u);
+            subObject.boneName =
+                ReadFixedString(subObjects[i].BoneName, W3D_NAME_LEN * 2u);
+            subObject.sourceChunk = infoChunk.get();
+            def.subObjects.push_back(std::move(subObject));
+        }
+
+        out.push_back(std::move(def));
+    }
+
+    return out;
+}
+
+ModelDefinitionLookup BuildModelDefinitionLookup(
+    const std::vector<HModelDefinition>& hmodelDefs,
+    const std::vector<HlodDefinition>& hlodDefs,
+    const std::vector<LodModelDefinition>& lodModelDefs,
+    const std::vector<AggregateDefinition>& aggregateDefs)
+{
+    ModelDefinitionLookup lookup{};
+
+    auto addUnique = [](auto& map, const std::string& key, std::size_t index) {
+        if (key.empty()) {
+            return;
+        }
+        map.emplace(key, index);
+    };
+
+    for (std::size_t i = 0; i < hmodelDefs.size(); ++i) {
+        addUnique(lookup.hmodelByName, NormalizeName(hmodelDefs[i].name), i);
+        addUnique(lookup.hmodelByHierarchyName, NormalizeName(hmodelDefs[i].hierarchyName), i);
+    }
+    for (std::size_t i = 0; i < hlodDefs.size(); ++i) {
+        addUnique(lookup.hlodByName, NormalizeName(hlodDefs[i].name), i);
+        addUnique(lookup.hlodByHierarchyName, NormalizeName(hlodDefs[i].hierarchyName), i);
+    }
+    for (std::size_t i = 0; i < lodModelDefs.size(); ++i) {
+        addUnique(lookup.lodModelByName, NormalizeName(lodModelDefs[i].name), i);
+    }
+    for (std::size_t i = 0; i < aggregateDefs.size(); ++i) {
+        addUnique(lookup.aggregateByName, NormalizeName(aggregateDefs[i].name), i);
+    }
+
+    return lookup;
+}
+
 int ResolveHierarchyIndex(BuildContext& ctx, const std::string& hierarchyName, const std::string& fallbackName) {
     if (!hierarchyName.empty()) {
         const auto it = ctx.hierarchyByName.find(NormalizeName(hierarchyName));
@@ -2075,11 +2361,749 @@ int ResolveHierarchyIndex(BuildContext& ctx, const std::string& hierarchyName, c
     return -1;
 }
 
+std::vector<Mat4> BuildStaticHierarchyWorldTransforms(const RenderHierarchy& hierarchy) {
+    std::vector<Mat4> worlds(hierarchy.pivots.size(), Mat4::Identity());
+    std::vector<uint8_t> state(hierarchy.pivots.size(), 0u);
+
+    std::function<void(int)> buildPivot = [&](int pivotIndex) {
+        if (pivotIndex < 0 || pivotIndex >= static_cast<int>(hierarchy.pivots.size())) {
+            return;
+        }
+        if (state[static_cast<std::size_t>(pivotIndex)] == 2u) {
+            return;
+        }
+        if (state[static_cast<std::size_t>(pivotIndex)] == 1u) {
+            worlds[static_cast<std::size_t>(pivotIndex)] =
+                hierarchy.pivots[static_cast<std::size_t>(pivotIndex)].localTransform;
+            state[static_cast<std::size_t>(pivotIndex)] = 2u;
+            return;
+        }
+
+        state[static_cast<std::size_t>(pivotIndex)] = 1u;
+        const auto& pivot = hierarchy.pivots[static_cast<std::size_t>(pivotIndex)];
+        Mat4 world = pivot.localTransform;
+        if (pivot.parentIndex >= 0
+            && pivot.parentIndex < static_cast<int>(hierarchy.pivots.size()))
+        {
+            buildPivot(pivot.parentIndex);
+            world = Multiply(
+                worlds[static_cast<std::size_t>(pivot.parentIndex)],
+                pivot.localTransform);
+        }
+
+        worlds[static_cast<std::size_t>(pivotIndex)] = world;
+        state[static_cast<std::size_t>(pivotIndex)] = 2u;
+    };
+
+    for (int i = 0; i < static_cast<int>(hierarchy.pivots.size()); ++i) {
+        buildPivot(i);
+    }
+
+    return worlds;
+}
+
+std::optional<std::vector<Mat4>> ResolveStaticHierarchyWorldTransforms(
+    BuildContext& ctx,
+    const std::string& hierarchyName,
+    const std::string& fallbackName,
+    const ChunkItem* sourceChunk,
+    const std::string& missingHierarchyMessage)
+{
+    const int hierarchyIndex = ResolveHierarchyIndex(ctx, hierarchyName, fallbackName);
+    if (hierarchyIndex < 0
+        || hierarchyIndex >= static_cast<int>(ctx.result.scene.hierarchies.size()))
+    {
+        ctx.WarnMissingHierarchy(
+            sourceChunk,
+            !hierarchyName.empty() ? hierarchyName : fallbackName,
+            missingHierarchyMessage);
+        return std::nullopt;
+    }
+
+    return BuildStaticHierarchyWorldTransforms(
+        ctx.result.scene.hierarchies[static_cast<std::size_t>(hierarchyIndex)]);
+}
+
+struct AttachedHierarchyBinding {
+    int hierarchyIndex = -1;
+};
+
+std::optional<AttachedHierarchyBinding> CreateAttachedHierarchyBinding(
+    BuildContext& ctx,
+    const std::string& sourceHierarchyName,
+    const std::string& sourceFallbackName,
+    int attachmentHierarchyIndex,
+    int attachmentPivotIndex,
+    const ChunkItem* sourceChunk,
+    const ChunkItem* attachmentSourceChunk,
+    const std::string& missingHierarchyMessage)
+{
+    const int sourceHierarchyIndex =
+        ResolveHierarchyIndex(ctx, sourceHierarchyName, sourceFallbackName);
+    if (sourceHierarchyIndex < 0
+        || sourceHierarchyIndex >= static_cast<int>(ctx.result.scene.hierarchies.size()))
+    {
+        ctx.WarnMissingHierarchy(
+            sourceChunk,
+            !sourceHierarchyName.empty() ? sourceHierarchyName : sourceFallbackName,
+            missingHierarchyMessage);
+        return std::nullopt;
+    }
+
+    if (attachmentHierarchyIndex < 0
+        || attachmentHierarchyIndex >= static_cast<int>(ctx.result.scene.hierarchies.size()))
+    {
+        ctx.result.warnings.push_back({
+            SceneBuildWarningCode::InvalidIndex,
+            BuildChunkPath(attachmentSourceChunk),
+            "Aggregate attachment hierarchy index is out of range: "
+                + std::to_string(attachmentHierarchyIndex)
+            });
+        return std::nullopt;
+    }
+
+    const auto& sourceHierarchy =
+        ctx.result.scene.hierarchies[static_cast<std::size_t>(sourceHierarchyIndex)];
+    const auto& attachmentHierarchy =
+        ctx.result.scene.hierarchies[static_cast<std::size_t>(attachmentHierarchyIndex)];
+
+    const auto sourceWorlds = BuildStaticHierarchyWorldTransforms(sourceHierarchy);
+    const auto attachmentWorlds = BuildStaticHierarchyWorldTransforms(attachmentHierarchy);
+    if (attachmentPivotIndex < 0
+        || attachmentPivotIndex >= static_cast<int>(attachmentWorlds.size()))
+    {
+        ctx.result.warnings.push_back({
+            SceneBuildWarningCode::InvalidIndex,
+            BuildChunkPath(attachmentSourceChunk),
+            "Aggregate attachment pivot index is out of range: "
+                + std::to_string(attachmentPivotIndex)
+            });
+        return std::nullopt;
+    }
+
+    Mat4 attachmentRootTransform =
+        attachmentWorlds[static_cast<std::size_t>(attachmentPivotIndex)];
+
+    RenderHierarchy attachedHierarchy = sourceHierarchy;
+    attachedHierarchy.name =
+        (!sourceHierarchy.name.empty() ? sourceHierarchy.name : sourceFallbackName);
+    if (!sourceFallbackName.empty()) {
+        attachedHierarchy.name += " [attached " + sourceFallbackName;
+        attachedHierarchy.name += "]";
+    }
+    for (auto& pivot : attachedHierarchy.pivots) {
+        if (pivot.parentIndex < 0) {
+            pivot.localTransform = Multiply(attachmentRootTransform, pivot.localTransform);
+        }
+    }
+
+    AttachedHierarchyBinding binding{};
+    binding.hierarchyIndex = static_cast<int>(ctx.result.scene.hierarchies.size());
+    ctx.result.scene.hierarchies.push_back(std::move(attachedHierarchy));
+    return binding;
+}
+
+std::vector<LockedLodRangeSlot> BuildLockedLodRangeSlotsFromHlodDefinition(
+    const HlodDefinition& def)
+{
+    std::vector<LockedLodRangeSlot> slots;
+    slots.reserve(def.lodArrays.size());
+    if (def.lodArrays.empty()) {
+        return slots;
+    }
+
+    if (def.lodArrays.size() == 1u) {
+        LockedLodRangeSlot slot{};
+        slot.minDistance = 0.0f;
+        slot.maxDistance = std::numeric_limits<float>::max();
+        slot.maxScreenSize = def.lodArrays.front().maxScreenSize;
+        slots.push_back(slot);
+        return slots;
+    }
+
+    std::vector<float> distanceThresholds;
+    distanceThresholds.reserve(def.lodArrays.size());
+    for (std::size_t i = 0; i < def.lodArrays.size(); ++i) {
+        distanceThresholds.push_back(ScreenSizeToDistance(def.lodArrays[i].maxScreenSize, i));
+    }
+
+    for (std::size_t i = 0; i < def.lodArrays.size(); ++i) {
+        LockedLodRangeSlot slot{};
+        slot.maxScreenSize = def.lodArrays[i].maxScreenSize;
+
+        if (i == 0u) {
+            slot.minDistance = distanceThresholds[0];
+            slot.maxDistance = std::numeric_limits<float>::max();
+        }
+        else if (i + 1u == def.lodArrays.size()) {
+            slot.minDistance = 0.0f;
+            slot.maxDistance = distanceThresholds[i - 1u];
+        }
+        else {
+            slot.minDistance = distanceThresholds[i];
+            slot.maxDistance = distanceThresholds[i - 1u];
+        }
+
+        slots.push_back(slot);
+    }
+
+    return slots;
+}
+
+std::vector<LockedLodRangeSlot> BuildLockedLodRangeSlotsFromLodModelDefinition(
+    const LodModelDefinition& def)
+{
+    std::vector<LockedLodRangeSlot> slots;
+    slots.reserve(def.entries.size());
+    for (const auto& entry : def.entries) {
+        LockedLodRangeSlot slot{};
+        slot.minDistance = entry.payload.LODMin;
+        slot.maxDistance = entry.payload.LODMax;
+        slots.push_back(slot);
+    }
+    return slots;
+}
+
+void AppendLodEntriesFromHLodDefinition(
+    BuildContext& ctx,
+    const HlodDefinition& def,
+    RenderLodGroup& group)
+{
+    const std::vector<LockedLodRangeSlot> rangeSlots =
+        BuildLockedLodRangeSlotsFromHlodDefinition(def);
+    for (std::size_t rank = 0; rank < def.lodArrays.size(); ++rank) {
+        const auto& lod = def.lodArrays[rank];
+        const auto& slot = rangeSlots[rank];
+        for (const auto& subObject : lod.subObjects) {
+            RenderLodEntry entry{};
+            entry.name = ReadFixedString(subObject.payload.Name, 2 * W3D_NAME_LEN);
+            entry.hierarchyIndex = group.hierarchyIndex;
+            entry.pivotIndex = static_cast<int>(subObject.payload.BoneIndex);
+            entry.minDistance = slot.minDistance;
+            entry.maxDistance = slot.maxDistance;
+            entry.maxScreenSize = slot.maxScreenSize;
+            entry.sourceBindingChunk = subObject.sourceChunk;
+
+            const auto meshIt = ctx.meshByName.find(NormalizeName(entry.name));
+            if (meshIt == ctx.meshByName.end()) {
+                continue;
+            }
+
+            entry.meshIndex = meshIt->second;
+
+            if (group.hierarchyIndex >= 0
+                && group.hierarchyIndex < static_cast<int>(ctx.result.scene.hierarchies.size())) {
+                const auto& pivots = ctx.result.scene.hierarchies[group.hierarchyIndex].pivots;
+                if (entry.pivotIndex < 0 || entry.pivotIndex >= static_cast<int>(pivots.size())) {
+                    ctx.result.warnings.push_back({
+                        SceneBuildWarningCode::InvalidIndex,
+                        "HLOD/" + def.name,
+                        "Bone index is out of range for hierarchy: " + std::to_string(entry.pivotIndex)
+                        });
+                    entry.pivotIndex = -1;
+                }
+            }
+            else {
+                entry.pivotIndex = -1;
+            }
+
+            ctx.referencedMeshes.insert(entry.meshIndex);
+            group.entries.push_back(std::move(entry));
+        }
+    }
+}
+
+void AppendLodEntriesFromLodModelDefinition(
+    BuildContext& ctx,
+    const LodModelDefinition& def,
+    RenderLodGroup& group,
+    int hierarchyIndexOverride,
+    int pivotIndexOverride,
+    const std::vector<LockedLodRangeSlot>* lockedRanges = nullptr)
+{
+    if (lockedRanges && !lockedRanges->empty()) {
+        if (def.entries.empty()) {
+            return;
+        }
+
+        for (std::size_t rank = 0; rank < lockedRanges->size(); ++rank) {
+            const auto& slot = (*lockedRanges)[rank];
+            const auto& source =
+                def.entries[std::min(rank, def.entries.size() - 1)];
+
+            RenderLodEntry entry{};
+            entry.name = ReadFixedString(source.payload.RenderObjName, 2 * W3D_NAME_LEN);
+            entry.hierarchyIndex = hierarchyIndexOverride;
+            entry.pivotIndex = pivotIndexOverride;
+            entry.minDistance = slot.minDistance;
+            entry.maxDistance = slot.maxDistance;
+            entry.maxScreenSize = slot.maxScreenSize;
+            entry.sourceBindingChunk = source.sourceChunk;
+
+            const auto meshIt = ctx.meshByName.find(NormalizeName(entry.name));
+            if (meshIt == ctx.meshByName.end()) {
+                continue;
+            }
+
+            entry.meshIndex = meshIt->second;
+            ctx.referencedMeshes.insert(entry.meshIndex);
+            group.entries.push_back(std::move(entry));
+        }
+        return;
+    }
+
+    for (const auto& source : def.entries) {
+        RenderLodEntry entry{};
+        entry.name = ReadFixedString(source.payload.RenderObjName, 2 * W3D_NAME_LEN);
+        entry.hierarchyIndex = hierarchyIndexOverride;
+        entry.pivotIndex = pivotIndexOverride;
+        entry.minDistance = source.payload.LODMin;
+        entry.maxDistance = source.payload.LODMax;
+        entry.sourceBindingChunk = source.sourceChunk;
+
+        const auto meshIt = ctx.meshByName.find(NormalizeName(entry.name));
+        if (meshIt == ctx.meshByName.end()) {
+            continue;
+        }
+
+        entry.meshIndex = meshIt->second;
+        ctx.referencedMeshes.insert(entry.meshIndex);
+        group.entries.push_back(std::move(entry));
+    }
+}
+
+void AppendAttachedNodesFromHModelDefinition(
+    BuildContext& ctx,
+    const HModelDefinition& def,
+    int attachmentHierarchyIndex,
+    int attachmentPivotIndex,
+    const std::string& sourceAttachBoneName,
+    const ChunkItem* attachmentSourceChunk)
+{
+    const auto attachedHierarchy = CreateAttachedHierarchyBinding(
+        ctx,
+        def.hierarchyName,
+        def.name,
+        attachmentHierarchyIndex,
+        attachmentPivotIndex,
+        def.sourceChunk,
+        attachmentSourceChunk,
+        "Aggregate attached HModel hierarchy was not found");
+    if (!attachedHierarchy.has_value()) {
+        return;
+    }
+
+    for (const auto& source : def.nodes) {
+        const auto meshIt = ctx.meshByName.find(NormalizeName(source.renderObjName));
+        if (meshIt == ctx.meshByName.end()) {
+            ctx.result.warnings.push_back({
+                SceneBuildWarningCode::InvalidIndex,
+                BuildChunkPath(source.sourceChunk),
+                "Referenced HModel mesh not found: " + source.renderObjName
+                });
+            continue;
+        }
+
+        int pivotIndex = source.pivotIndex;
+        if (pivotIndex < 0) {
+            pivotIndex = -1;
+        }
+        else if (pivotIndex >= static_cast<int>(
+            ctx.result.scene.hierarchies[static_cast<std::size_t>(attachedHierarchy->hierarchyIndex)].pivots.size()))
+        {
+            ctx.result.warnings.push_back({
+                SceneBuildWarningCode::InvalidIndex,
+                BuildChunkPath(source.sourceChunk),
+                "Attached HModel pivot index is out of range for hierarchy: "
+                    + std::to_string(source.pivotIndex)
+                });
+            continue;
+        }
+
+        AddMeshNodeInstance(
+            ctx,
+            source.renderObjName,
+            meshIt->second,
+            attachedHierarchy->hierarchyIndex,
+            pivotIndex,
+            attachmentSourceChunk,
+            Mat4::Identity());
+    }
+}
+
+void AppendAttachedLodEntriesFromHLodDefinition(
+    BuildContext& ctx,
+    const HlodDefinition& def,
+    RenderLodGroup& group,
+    int attachmentHierarchyIndex,
+    int attachmentPivotIndex,
+    const std::string& sourceAttachBoneName,
+    const ChunkItem* attachmentSourceChunk,
+    const std::vector<LockedLodRangeSlot>* lockedRanges)
+{
+    const auto attachedHierarchy = CreateAttachedHierarchyBinding(
+        ctx,
+        def.hierarchyName,
+        def.name,
+        attachmentHierarchyIndex,
+        attachmentPivotIndex,
+        def.sourceChunk,
+        attachmentSourceChunk,
+        "Aggregate attached HLOD hierarchy was not found");
+    if (!attachedHierarchy.has_value()) {
+        return;
+    }
+    group.hierarchyIndex = attachedHierarchy->hierarchyIndex;
+
+    if (def.lodArrays.empty()) {
+        return;
+    }
+
+    const std::vector<LockedLodRangeSlot> defaultRanges =
+        BuildLockedLodRangeSlotsFromHlodDefinition(def);
+    const std::size_t slotCount = (lockedRanges && !lockedRanges->empty())
+        ? lockedRanges->size()
+        : def.lodArrays.size();
+    for (std::size_t rank = 0; rank < slotCount; ++rank) {
+        const std::size_t lodIndex = std::min(rank, def.lodArrays.size() - 1);
+        const auto& lod = def.lodArrays[lodIndex];
+        const auto& slot = (lockedRanges && !lockedRanges->empty())
+            ? (*lockedRanges)[std::min(rank, lockedRanges->size() - 1)]
+            : defaultRanges[lodIndex];
+
+        for (const auto& subObject : lod.subObjects) {
+            const int sourcePivotIndex = static_cast<int>(subObject.payload.BoneIndex);
+            if (sourcePivotIndex < 0
+                || sourcePivotIndex >= static_cast<int>(
+                    ctx.result.scene.hierarchies[static_cast<std::size_t>(attachedHierarchy->hierarchyIndex)].pivots.size()))
+            {
+                ctx.result.warnings.push_back({
+                    SceneBuildWarningCode::InvalidIndex,
+                    BuildChunkPath(subObject.sourceChunk),
+                    "Attached HLOD bone index is out of range for hierarchy: "
+                        + std::to_string(sourcePivotIndex)
+                    });
+                continue;
+            }
+
+            RenderLodEntry entry{};
+            entry.name = ReadFixedString(subObject.payload.Name, 2 * W3D_NAME_LEN);
+            entry.hierarchyIndex = attachedHierarchy->hierarchyIndex;
+            entry.pivotIndex = sourcePivotIndex;
+            entry.localTransform = Mat4::Identity();
+            entry.minDistance = slot.minDistance;
+            entry.maxDistance = slot.maxDistance;
+            entry.maxScreenSize = slot.maxScreenSize;
+            entry.sourceBindingChunk = attachmentSourceChunk;
+
+            const auto meshIt = ctx.meshByName.find(NormalizeName(entry.name));
+            if (meshIt == ctx.meshByName.end()) {
+                continue;
+            }
+
+            entry.meshIndex = meshIt->second;
+            ctx.referencedMeshes.insert(entry.meshIndex);
+            group.entries.push_back(std::move(entry));
+        }
+    }
+}
+
+int BuildAggregateInstance(
+    BuildContext& ctx,
+    const AggregateDefinition& def,
+    const std::vector<HModelDefinition>& hmodelDefs,
+    const std::vector<HlodDefinition>& hlodDefs,
+    const std::vector<LodModelDefinition>& lodModelDefs,
+    const std::vector<AggregateDefinition>& aggregateDefs,
+    const ModelDefinitionLookup& lookup,
+    std::vector<std::string>& aggregateStack)
+{
+    const std::string aggregateKey = NormalizeName(
+        !def.name.empty() ? def.name : BuildChunkPath(def.sourceChunk));
+    if (std::find(aggregateStack.begin(), aggregateStack.end(), aggregateKey) != aggregateStack.end()) {
+        ctx.result.warnings.push_back({
+            SceneBuildWarningCode::UnsupportedChunk,
+            BuildChunkPath(def.sourceChunk),
+            "Cyclic aggregate reference detected: " + def.name
+            });
+        return -1;
+    }
+
+    aggregateStack.push_back(aggregateKey);
+
+    int baseHierarchyIndex = -1;
+    bool baseResolved = false;
+    bool baseSupportsHierarchyBinding = false;
+    std::vector<LockedLodRangeSlot> lockedSubObjectLodRanges;
+
+    if (const AggregateDefinition* nestedAggregate =
+        FindAggregateByName(aggregateDefs, lookup, def.baseModelName))
+    {
+        baseSupportsHierarchyBinding = true;
+        baseHierarchyIndex = BuildAggregateInstance(
+            ctx,
+            *nestedAggregate,
+            hmodelDefs,
+            hlodDefs,
+            lodModelDefs,
+            aggregateDefs,
+            lookup,
+            aggregateStack);
+        baseResolved = true;
+    }
+    else if (const HModelDefinition* hmodel =
+        FindHModelByName(hmodelDefs, lookup, def.baseModelName, true))
+    {
+        baseSupportsHierarchyBinding = true;
+        baseHierarchyIndex = ResolveHierarchyIndex(ctx, hmodel->hierarchyName, hmodel->name);
+        if (baseHierarchyIndex < 0) {
+            ctx.WarnMissingHierarchy(
+                hmodel->sourceChunk,
+                !hmodel->hierarchyName.empty() ? hmodel->hierarchyName : hmodel->name,
+                "Aggregate base HModel hierarchy was not found");
+        }
+        AppendNodesFromHModelDefinition(ctx, *hmodel, baseHierarchyIndex);
+        baseResolved = true;
+    }
+    else if (const HlodDefinition* hlod =
+        FindHLodByName(hlodDefs, lookup, def.baseModelName, true))
+    {
+        baseSupportsHierarchyBinding = true;
+        RenderLodGroup group{};
+        group.name = def.name.empty() ? hlod->name : def.name;
+        group.hierarchyIndex = ResolveHierarchyIndex(ctx, hlod->hierarchyName, hlod->name);
+        if (group.hierarchyIndex < 0) {
+            ctx.WarnMissingHierarchy(
+                hlod->sourceChunk,
+                !hlod->hierarchyName.empty() ? hlod->hierarchyName : hlod->name,
+                "Aggregate base HLOD hierarchy was not found");
+        }
+        AppendLodEntriesFromHLodDefinition(ctx, *hlod, group);
+        baseHierarchyIndex = group.hierarchyIndex;
+        if (!group.entries.empty()) {
+            ctx.result.scene.lodGroups.push_back(std::move(group));
+        }
+        if (def.forceSubObjectLod) {
+            lockedSubObjectLodRanges = BuildLockedLodRangeSlotsFromHlodDefinition(*hlod);
+        }
+        baseResolved = true;
+    }
+    else if (const LodModelDefinition* lodModel =
+        FindLodModelByName(lodModelDefs, lookup, def.baseModelName))
+    {
+        RenderLodGroup group{};
+        group.name = def.name.empty() ? lodModel->name : def.name;
+        group.hierarchyIndex = -1;
+        AppendLodEntriesFromLodModelDefinition(ctx, *lodModel, group, -1, -1);
+        if (!group.entries.empty()) {
+            ctx.result.scene.lodGroups.push_back(std::move(group));
+        }
+        if (def.forceSubObjectLod) {
+            lockedSubObjectLodRanges = BuildLockedLodRangeSlotsFromLodModelDefinition(*lodModel);
+        }
+        baseResolved = true;
+    }
+    else if (const auto meshIt = ctx.meshByName.find(NormalizeName(def.baseModelName));
+        meshIt != ctx.meshByName.end())
+    {
+        AddMeshNodeInstance(
+            ctx,
+            def.baseModelName,
+            meshIt->second,
+            -1,
+            -1,
+            def.sourceChunk,
+            Mat4::Identity());
+        baseResolved = true;
+    }
+    else if (!def.baseModelName.empty()) {
+        ctx.result.warnings.push_back({
+            SceneBuildWarningCode::InvalidIndex,
+            BuildChunkPath(def.sourceChunk),
+            "Aggregate base model not found: " + def.baseModelName
+            });
+    }
+
+    if (baseHierarchyIndex < 0) {
+        if (baseResolved && !baseSupportsHierarchyBinding && !def.subObjects.empty()) {
+            ctx.result.warnings.push_back({
+                SceneBuildWarningCode::UnsupportedChunk,
+                BuildChunkPath(def.sourceChunk),
+                "Aggregate base model does not expose a hierarchy for subobject binding: " + def.baseModelName
+                });
+        }
+        aggregateStack.pop_back();
+        return baseHierarchyIndex;
+    }
+
+    const auto& hierarchy = ctx.result.scene.hierarchies[static_cast<std::size_t>(baseHierarchyIndex)];
+    const auto* lockedSubObjectLodRangeView =
+        (def.forceSubObjectLod && !lockedSubObjectLodRanges.empty())
+        ? &lockedSubObjectLodRanges
+        : nullptr;
+    bool warnedUnsupportedLockedSubObjectLod = false;
+    for (const auto& subObject : def.subObjects) {
+        const int pivotIndex = ResolvePivotIndexByName(hierarchy, subObject.boneName);
+        if (pivotIndex < 0) {
+            ctx.result.warnings.push_back({
+                SceneBuildWarningCode::InvalidIndex,
+                BuildChunkPath(subObject.sourceChunk),
+                "Aggregate bone not found on base hierarchy: " + subObject.boneName
+                });
+            continue;
+        }
+
+        if (const auto meshIt = ctx.meshByName.find(NormalizeName(subObject.renderObjName));
+            meshIt != ctx.meshByName.end())
+        {
+            AddMeshNodeInstance(
+                ctx,
+                subObject.renderObjName,
+                meshIt->second,
+                baseHierarchyIndex,
+                pivotIndex,
+                subObject.sourceChunk,
+                Mat4::Identity());
+            continue;
+        }
+
+        if (const LodModelDefinition* lodModel =
+            FindLodModelByName(lodModelDefs, lookup, subObject.renderObjName))
+        {
+            if (def.forceSubObjectLod
+                && lockedSubObjectLodRangeView == nullptr
+                && !warnedUnsupportedLockedSubObjectLod)
+            {
+                ctx.result.warnings.push_back({
+                    SceneBuildWarningCode::UnsupportedChunk,
+                    BuildChunkPath(def.sourceChunk),
+                    "Aggregate subobject LOD locking is not supported for this base model yet."
+                    });
+                warnedUnsupportedLockedSubObjectLod = true;
+            }
+
+            RenderLodGroup group{};
+            group.name = def.name.empty()
+                ? subObject.renderObjName
+                : (def.name + "." + subObject.renderObjName);
+            group.hierarchyIndex = baseHierarchyIndex;
+            AppendLodEntriesFromLodModelDefinition(
+                ctx,
+                *lodModel,
+                group,
+                baseHierarchyIndex,
+                pivotIndex,
+                lockedSubObjectLodRangeView);
+            if (!group.entries.empty()) {
+                ctx.result.scene.lodGroups.push_back(std::move(group));
+            }
+            continue;
+        }
+
+        if (FindAggregateByName(aggregateDefs, lookup, subObject.renderObjName)) {
+            ctx.result.warnings.push_back({
+                SceneBuildWarningCode::UnsupportedChunk,
+                BuildChunkPath(subObject.sourceChunk),
+                "Nested aggregate attachments are not supported yet: " + subObject.renderObjName
+                });
+            continue;
+        }
+
+        if (const HModelDefinition* hmodel =
+            FindHModelByName(hmodelDefs, lookup, subObject.renderObjName, false))
+        {
+            AppendAttachedNodesFromHModelDefinition(
+                ctx,
+                *hmodel,
+                baseHierarchyIndex,
+                pivotIndex,
+                subObject.boneName,
+                subObject.sourceChunk);
+            continue;
+        }
+
+        if (const HlodDefinition* hlod =
+            FindHLodByName(hlodDefs, lookup, subObject.renderObjName, false))
+        {
+            if (def.forceSubObjectLod
+                && lockedSubObjectLodRangeView == nullptr
+                && !warnedUnsupportedLockedSubObjectLod)
+            {
+                ctx.result.warnings.push_back({
+                    SceneBuildWarningCode::UnsupportedChunk,
+                    BuildChunkPath(def.sourceChunk),
+                    "Aggregate subobject LOD locking is not supported for this base model yet."
+                    });
+                warnedUnsupportedLockedSubObjectLod = true;
+            }
+
+            RenderLodGroup group{};
+            group.name = def.name.empty()
+                ? subObject.renderObjName
+                : (def.name + "." + subObject.renderObjName);
+            group.hierarchyIndex = baseHierarchyIndex;
+            AppendAttachedLodEntriesFromHLodDefinition(
+                ctx,
+                *hlod,
+                group,
+                baseHierarchyIndex,
+                pivotIndex,
+                subObject.boneName,
+                subObject.sourceChunk,
+                lockedSubObjectLodRangeView);
+            if (!group.entries.empty()) {
+                ctx.result.scene.lodGroups.push_back(std::move(group));
+            }
+            continue;
+        }
+
+        ctx.result.warnings.push_back({
+            SceneBuildWarningCode::InvalidIndex,
+            BuildChunkPath(subObject.sourceChunk),
+            "Aggregate subobject render object not found: " + subObject.renderObjName
+            });
+    }
+
+    aggregateStack.pop_back();
+    return baseHierarchyIndex;
+}
+
+void BuildAggregatesFromDefinitions(
+    BuildContext& ctx,
+    const std::vector<AggregateDefinition>& aggregateDefs,
+    const std::vector<HModelDefinition>& hmodelDefs,
+    const std::vector<HlodDefinition>& hlodDefs,
+    const std::vector<LodModelDefinition>& lodModelDefs,
+    const ModelDefinitionLookup& lookup)
+{
+    std::vector<std::string> aggregateStack;
+    aggregateStack.reserve(8);
+
+    for (const auto& def : aggregateDefs) {
+        if (def.sourceFromReferenceOnly) {
+            continue;
+        }
+        BuildAggregateInstance(
+            ctx,
+            def,
+            hmodelDefs,
+            hlodDefs,
+            lodModelDefs,
+            aggregateDefs,
+            lookup,
+            aggregateStack);
+    }
+}
+
 void BuildLodGroupsFromHLodDefinitions(
     BuildContext& ctx,
     const std::vector<HlodDefinition>& hlodDefs)
 {
     for (const auto& def : hlodDefs) {
+        if (def.sourceFromReferenceOnly) {
+            continue;
+        }
+
         RenderLodGroup group{};
         group.name = def.name;
         group.hierarchyIndex = ResolveHierarchyIndex(ctx, def.hierarchyName, def.name);
@@ -2089,64 +3113,7 @@ void BuildLodGroupsFromHLodDefinitions(
                 !def.hierarchyName.empty() ? def.hierarchyName : def.name,
                 "HLOD hierarchy was not found");
         }
-
-        std::vector<std::size_t> order;
-        order.reserve(def.lodArrays.size());
-        for (std::size_t i = 0; i < def.lodArrays.size(); ++i) {
-            order.push_back(i);
-        }
-        std::sort(order.begin(), order.end(), [&](std::size_t a, std::size_t b) {
-            return def.lodArrays[a].maxScreenSize > def.lodArrays[b].maxScreenSize;
-        });
-
-        float rangeMin = 0.0f;
-        for (std::size_t rank = 0; rank < order.size(); ++rank) {
-            const auto& lod = def.lodArrays[order[rank]];
-            const float nominalRange = ScreenSizeToDistance(lod.maxScreenSize, rank);
-            const float rangeMax = (rank + 1 < order.size())
-                ? std::max(rangeMin + 1.0f, nominalRange)
-                : std::numeric_limits<float>::max();
-
-            for (const auto& subObject : lod.subObjects) {
-                RenderLodEntry entry{};
-                entry.name = ReadFixedString(subObject.payload.Name, 2 * W3D_NAME_LEN);
-                entry.hierarchyIndex = group.hierarchyIndex;
-                entry.pivotIndex = static_cast<int>(subObject.payload.BoneIndex);
-                entry.minDistance = rangeMin;
-                entry.maxDistance = rangeMax;
-                entry.maxScreenSize = lod.maxScreenSize;
-                entry.sourceBindingChunk = subObject.sourceChunk;
-
-                const auto meshIt = ctx.meshByName.find(NormalizeName(entry.name));
-                if (meshIt == ctx.meshByName.end()) {
-                    // Match WW3D behavior: unresolved render-object refs are skipped.
-                    continue;
-                }
-
-                entry.meshIndex = meshIt->second;
-
-                if (group.hierarchyIndex >= 0
-                    && group.hierarchyIndex < static_cast<int>(ctx.result.scene.hierarchies.size())) {
-                    const auto& pivots = ctx.result.scene.hierarchies[group.hierarchyIndex].pivots;
-                    if (entry.pivotIndex < 0 || entry.pivotIndex >= static_cast<int>(pivots.size())) {
-                        ctx.result.warnings.push_back({
-                            SceneBuildWarningCode::InvalidIndex,
-                            "HLOD/" + def.name,
-                            "Bone index is out of range for hierarchy: " + std::to_string(entry.pivotIndex)
-                            });
-                        entry.pivotIndex = -1;
-                    }
-                }
-                else {
-                    entry.pivotIndex = -1;
-                }
-
-                ctx.referencedMeshes.insert(entry.meshIndex);
-                group.entries.push_back(std::move(entry));
-            }
-
-            rangeMin = rangeMax;
-        }
+        AppendLodEntriesFromHLodDefinition(ctx, def, group);
 
         if (!group.entries.empty()) {
             ctx.result.scene.lodGroups.push_back(std::move(group));
@@ -2159,29 +3126,14 @@ void BuildLodGroupsFromLodModelDefinitions(
     const std::vector<LodModelDefinition>& defs)
 {
     for (const auto& def : defs) {
+        if (def.sourceFromReferenceOnly) {
+            continue;
+        }
+
         RenderLodGroup group{};
         group.name = def.name;
         group.hierarchyIndex = -1;
-
-        for (const auto& source : def.entries) {
-            RenderLodEntry entry{};
-            entry.name = ReadFixedString(source.payload.RenderObjName, 2 * W3D_NAME_LEN);
-            entry.hierarchyIndex = -1;
-            entry.pivotIndex = -1;
-            entry.minDistance = source.payload.LODMin;
-            entry.maxDistance = source.payload.LODMax;
-            entry.sourceBindingChunk = source.sourceChunk;
-
-            const auto meshIt = ctx.meshByName.find(NormalizeName(entry.name));
-            if (meshIt == ctx.meshByName.end()) {
-                // Match WW3D behavior: unresolved render-object refs are skipped.
-                continue;
-            }
-
-            entry.meshIndex = meshIt->second;
-            ctx.referencedMeshes.insert(entry.meshIndex);
-            group.entries.push_back(std::move(entry));
-        }
+        AppendLodEntriesFromLodModelDefinition(ctx, def, group, -1, -1);
 
         if (!group.entries.empty()) {
             ctx.result.scene.lodGroups.push_back(std::move(group));
@@ -2202,6 +3154,9 @@ void BuildLooseNodes(BuildContext& ctx) {
         if (ctx.referencedMeshes.contains(meshIndex)) {
             continue;
         }
+        if (ctx.referenceOnlyMeshes.contains(meshIndex)) {
+            continue;
+        }
         if (ctx.supplementalMeshes.contains(meshIndex) && hasPrimaryMeshes) {
             continue;
         }
@@ -2217,7 +3172,12 @@ void BuildLooseNodes(BuildContext& ctx) {
     }
 }
 
-void ParseMeshes(const W3DChunk& roots, BuildContext& ctx, bool supplemental) {
+void ParseMeshes(
+    const W3DChunk& roots,
+    BuildContext& ctx,
+    bool supplemental,
+    bool referenceOnly)
+{
     std::vector<std::shared_ptr<ChunkItem>> meshChunks;
     for (const auto& root : roots) {
         CollectChunksByIdRecursive(root, kChunkMesh, meshChunks);
@@ -2239,10 +3199,15 @@ void ParseMeshes(const W3DChunk& roots, BuildContext& ctx, bool supplemental) {
         ctx.result.scene.meshes.push_back(*mesh);
 
         const std::size_t meshCountAfter = ctx.result.scene.meshes.size();
-        if (supplemental) {
-            for (std::size_t i = meshCountBefore; i < meshCountAfter; ++i) {
+        for (std::size_t i = meshCountBefore; i < meshCountAfter; ++i) {
+            if (supplemental || referenceOnly) {
                 ctx.result.scene.meshes[i].sourceFromSupplemental = true;
+            }
+            if (supplemental) {
                 ctx.supplementalMeshes.insert(static_cast<int>(i));
+            }
+            if (referenceOnly) {
+                ctx.referenceOnlyMeshes.insert(static_cast<int>(i));
             }
         }
     }
@@ -2254,17 +3219,21 @@ SceneBuildResult BuildRenderScene(
     const W3DChunk& primaryRoots,
     const SceneBuildOptions& options,
     const W3DChunk* skeletonSupplementalRoots,
-    const W3DChunk* animationLibraryRoots)
+    const W3DChunk* animationLibraryRoots,
+    const W3DChunk* referenceOnlyRoots)
 {
     BuildContext ctx{};
     ctx.options = options;
     ctx.InitializeExternalTextures();
     ctx.result.scene.profile = options.profile;
     const std::vector<std::shared_ptr<ChunkItem>> hierarchyRoots =
-        CollectAllRoots(primaryRoots, skeletonSupplementalRoots, nullptr);
-    ParseMeshes(primaryRoots, ctx, false);
+        CollectAllRoots(primaryRoots, skeletonSupplementalRoots, referenceOnlyRoots);
+    ParseMeshes(primaryRoots, ctx, false, false);
     if (skeletonSupplementalRoots && !skeletonSupplementalRoots->empty()) {
-        ParseMeshes(*skeletonSupplementalRoots, ctx, true);
+        ParseMeshes(*skeletonSupplementalRoots, ctx, true, false);
+    }
+    if (referenceOnlyRoots && !referenceOnlyRoots->empty()) {
+        ParseMeshes(*referenceOnlyRoots, ctx, false, true);
     }
     ParseHierarchies(hierarchyRoots, ctx);
 
@@ -2276,6 +3245,14 @@ SceneBuildResult BuildRenderScene(
             animations.end(),
             std::make_move_iterator(moreAnimations.begin()),
             std::make_move_iterator(moreAnimations.end()));
+    }
+    if (referenceOnlyRoots && !referenceOnlyRoots->empty()) {
+        std::vector<ParsedAnimationDefinition> referenceAnimations =
+            ParseAnimationDefinitions(*referenceOnlyRoots, ctx, false);
+        animations.insert(
+            animations.end(),
+            std::make_move_iterator(referenceAnimations.begin()),
+            std::make_move_iterator(referenceAnimations.end()));
     }
     if (animationLibraryRoots && !animationLibraryRoots->empty()) {
         std::vector<ParsedAnimationDefinition> libraryAnimations =
@@ -2290,22 +3267,72 @@ SceneBuildResult BuildRenderScene(
     const std::vector<std::shared_ptr<ChunkItem>> modelRoots =
         CollectAllRoots(primaryRoots, skeletonSupplementalRoots, nullptr);
 
-    const auto hmodelDefs = ParseHModelDefinitions(modelRoots, ctx);
+    auto hmodelDefs = ParseHModelDefinitions(modelRoots, ctx, false);
+    if (referenceOnlyRoots && !referenceOnlyRoots->empty()) {
+        std::vector<HModelDefinition> referenceHModels =
+            ParseHModelDefinitions(*referenceOnlyRoots, ctx, true);
+        hmodelDefs.insert(
+            hmodelDefs.end(),
+            std::make_move_iterator(referenceHModels.begin()),
+            std::make_move_iterator(referenceHModels.end()));
+    }
     BuildNodesFromHModelDefinitions(ctx, hmodelDefs);
 
-    const auto hlodDefs = ParseHLodDefinitions(modelRoots, ctx);
+    auto hlodDefs = ParseHLodDefinitions(modelRoots, ctx, false);
+    if (referenceOnlyRoots && !referenceOnlyRoots->empty()) {
+        std::vector<HlodDefinition> referenceHLods =
+            ParseHLodDefinitions(*referenceOnlyRoots, ctx, true);
+        hlodDefs.insert(
+            hlodDefs.end(),
+            std::make_move_iterator(referenceHLods.begin()),
+            std::make_move_iterator(referenceHLods.end()));
+    }
     BuildLodGroupsFromHLodDefinitions(ctx, hlodDefs);
 
-    const auto lodModelDefs = ParseLodModelDefinitions(modelRoots, ctx);
+    auto lodModelDefs = ParseLodModelDefinitions(modelRoots, ctx, false);
+    if (referenceOnlyRoots && !referenceOnlyRoots->empty()) {
+        std::vector<LodModelDefinition> referenceLodModels =
+            ParseLodModelDefinitions(*referenceOnlyRoots, ctx, true);
+        lodModelDefs.insert(
+            lodModelDefs.end(),
+            std::make_move_iterator(referenceLodModels.begin()),
+            std::make_move_iterator(referenceLodModels.end()));
+    }
     BuildLodGroupsFromLodModelDefinitions(ctx, lodModelDefs);
+
+    auto aggregateDefs = ParseAggregateDefinitions(primaryRoots, ctx, false);
+    if (skeletonSupplementalRoots && !skeletonSupplementalRoots->empty()) {
+        std::vector<AggregateDefinition> supplementalAggregates =
+            ParseAggregateDefinitions(*skeletonSupplementalRoots, ctx, false);
+        aggregateDefs.insert(
+            aggregateDefs.end(),
+            std::make_move_iterator(supplementalAggregates.begin()),
+            std::make_move_iterator(supplementalAggregates.end()));
+    }
+    if (referenceOnlyRoots && !referenceOnlyRoots->empty()) {
+        std::vector<AggregateDefinition> referenceAggregates =
+            ParseAggregateDefinitions(*referenceOnlyRoots, ctx, true);
+        aggregateDefs.insert(
+            aggregateDefs.end(),
+            std::make_move_iterator(referenceAggregates.begin()),
+            std::make_move_iterator(referenceAggregates.end()));
+    }
+
+    const ModelDefinitionLookup lookup =
+        BuildModelDefinitionLookup(hmodelDefs, hlodDefs, lodModelDefs, aggregateDefs);
+    BuildAggregatesFromDefinitions(ctx, aggregateDefs, hmodelDefs, hlodDefs, lodModelDefs, lookup);
 
     BuildLooseNodes(ctx);
 
-    if (ctx.result.scene.meshes.empty()) {
+    const bool hasRenderableInstances =
+        !ctx.result.scene.looseNodes.empty() || !ctx.result.scene.lodGroups.empty();
+    if (!hasRenderableInstances) {
         ctx.result.warnings.push_back({
             SceneBuildWarningCode::UnsupportedChunk,
             "root",
-            "No renderable mesh chunks were found in this file."
+            aggregateDefs.empty()
+                ? "No renderable mesh chunks were found in this file."
+                : "No renderable scene instances were assembled. Aggregate dependencies may be missing."
             });
     }
 

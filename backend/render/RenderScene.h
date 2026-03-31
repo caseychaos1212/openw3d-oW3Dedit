@@ -171,6 +171,7 @@ struct RenderLodEntry {
     int meshIndex = -1;
     int hierarchyIndex = -1;
     int pivotIndex = -1;
+    Mat4 localTransform = Mat4::Identity();
     float minDistance = 0.0f;
     float maxDistance = std::numeric_limits<float>::max();
     float maxScreenSize = 0.0f;

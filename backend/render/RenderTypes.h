@@ -24,7 +24,7 @@ struct Vec4 {
 };
 
 struct Mat4 {
-    // Row-major matrix.
+    // Column-major matrix with column-vector transform composition.
     float m[16] = {
         1.0f, 0.0f, 0.0f, 0.0f,
         0.0f, 1.0f, 0.0f, 0.0f,
@@ -76,13 +76,13 @@ inline Vec3 operator*(const Vec3& v, float s) {
 
 inline Mat4 Multiply(const Mat4& a, const Mat4& b) {
     Mat4 out{};
-    for (int r = 0; r < 4; ++r) {
-        for (int c = 0; c < 4; ++c) {
-            out.m[r * 4 + c] =
-                a.m[r * 4 + 0] * b.m[0 * 4 + c] +
-                a.m[r * 4 + 1] * b.m[1 * 4 + c] +
-                a.m[r * 4 + 2] * b.m[2 * 4 + c] +
-                a.m[r * 4 + 3] * b.m[3 * 4 + c];
+    for (int c = 0; c < 4; ++c) {
+        for (int r = 0; r < 4; ++r) {
+            out.m[c * 4 + r] =
+                a.m[0 * 4 + r] * b.m[c * 4 + 0] +
+                a.m[1 * 4 + r] * b.m[c * 4 + 1] +
+                a.m[2 * 4 + r] * b.m[c * 4 + 2] +
+                a.m[3 * 4 + r] * b.m[c * 4 + 3];
         }
     }
     return out;

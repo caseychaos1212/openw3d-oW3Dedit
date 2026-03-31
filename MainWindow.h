@@ -76,11 +76,19 @@ enum class RenderSessionAssetRole {
 struct RenderSessionAsset {
     RenderSessionAssetRole role = RenderSessionAssetRole::Skeleton;
     QString filePath;
+    QString sourceKey;
+    QString sourceDisplayPath;
     QString displayLabel;
     std::vector<std::shared_ptr<ChunkItem>> roots;
     QSet<QString> hierarchyNames;
     int meshCount = 0;
     int animationCount = 0;
+};
+
+struct AggregateRenderDependencyAsset {
+    QString sourceKey;
+    QString sourceLabel;
+    std::vector<std::shared_ptr<ChunkItem>> roots;
 };
 
 struct RenderAnimationClipIdentity {
@@ -118,6 +126,7 @@ private slots:
     void on_actionExportChunkList_triggered();
     void on_actionExportJsonBatch_triggered();
     void on_actionValidateRoundTripBatch_triggered();
+    void on_actionCopyPureHumanAnimationsBySkeleton_triggered();
     void exportJson();
     void importJson();
     void showHierarchyBrowser();
@@ -209,6 +218,11 @@ private:
         RenderSessionAssetRole role,
         RenderSessionAsset& outAsset,
         QString* outError = nullptr) const;
+    bool tryLoadRenderSessionArchiveAsset(
+        const QString& archivePath,
+        RenderSessionAssetRole role,
+        RenderSessionAsset& outAsset,
+        QString* outError = nullptr);
     void handleViewportChunkActivated(void* chunkPtr);
     void handleViewportPivotTransformCommit(
         void* pivotsChunkPtr,
@@ -275,6 +289,7 @@ private:
     QCheckBox* renderUvDebugToggle = nullptr;
     QCheckBox* renderLodLockToggle = nullptr;
     QCheckBox* renderCameraGizmoToggle = nullptr;
+    QCheckBox* renderPivotMarkersToggle = nullptr;
     QSpinBox* renderLodLevelSpin = nullptr;
     QLabel* renderStatsLabel = nullptr;
     QLabel* renderSelectionLabel = nullptr;
@@ -314,19 +329,24 @@ private:
     QByteArray detailSplitterStateCache;
     QString currentArchiveRenderPath;
     uint32_t currentArchiveRenderEntryId = 0;
+    QString currentArchiveRenderEntryPath;
     std::vector<ArchiveRenderEntryInfo> currentArchiveRenderEntries;
     std::vector<std::string> currentArchiveTextureEntries;
     std::vector<uint32_t> currentArchiveTextureEntryIds;
     std::unordered_map<uint32_t, ArchiveTextureSourceInfo> currentArchiveTextureSourcesById;
+    std::unordered_map<uint32_t, QSet<QString>> currentArchiveRenderEntryReferenceNamesById;
     std::vector<std::shared_ptr<ChunkItem>> currentArchiveSupplementalRoots;
     std::unordered_set<uint32_t> currentArchiveLoadedSupplementalEntryIds;
     std::vector<RenderSessionAsset> currentExternalRenderAssets;
     QSet<QString> currentExternalRenderAssetPaths;
+    std::vector<AggregateRenderDependencyAsset> currentAggregateRenderDependencyAssets;
     bool currentRenderTriedSkeletonAutoload = false;
     QString currentRenderSuppressedMissingHierarchyKey;
     QString currentRenderSuppressedMissingMeshKey;
     QString currentRenderTextureDirectory;
     QString currentRenderSuppressedMissingTextureKey;
+    QString currentRenderAggregateDependencyAttemptKey;
+    QString currentRenderHierarchyDependencyAttemptKey;
     OW3D::Render::SceneBuildResult currentRenderSceneResult;
     OW3D::Render::AnimationPlaybackState currentRenderAnimationPlayback;
     std::unordered_map<const void*, OW3D::Render::RenderAnimationEditDraft> currentRenderAnimationDrafts;

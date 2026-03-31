@@ -610,41 +610,34 @@ inline std::vector<std::vector<Mat4>> BuildCpuSkinHierarchyWorldTransforms(
             }
 
             state[static_cast<std::size_t>(pivotIndex)] = 1;
-            const auto& pivot = hierarchy.pivots[static_cast<std::size_t>(pivotIndex)];
-            Mat4 local = (pivotIndex == 0)
-                ? TTSkinIdentity()
-                : TTSkinTransformFromTranslationRotation(pivot.baseTranslation, pivot.baseRotation);
-
-            if ((activeClip && pivotIndex < static_cast<int>(activeClip->pivots.size()))
-                || FindAnimationEditDraftPivotSamples(activeDraft, pivotIndex)) {
-                const Vec3 translation =
-                    SamplePivotAnimationTranslation(activeClip, pivotIndex, animationFrame, activeDraft);
-                const Vec4 rotation =
-                    SamplePivotAnimationRotation(activeClip, pivotIndex, animationFrame, activeDraft);
-                local = TTSkinMultiply(
-                    local,
-                    TTSkinTransformFromTranslationRotation(translation, rotation));
-            }
+            Mat4 local = ComposeAnimatedPivotLocalTransform(
+                hierarchy,
+                pivotIndex,
+                activeClip,
+                animationFrame,
+                activeDraft);
 
             if (localOverride) {
                 if (const std::optional<Mat4> overrideLocal =
                     localOverride(
                         static_cast<int>(h),
                         pivotIndex,
-                        MatrixFromTTSkinSpace(local));
+                        local);
                     overrideLocal.has_value()) {
-                    local = MatrixToTTSkinSpace(*overrideLocal);
+                    local = *overrideLocal;
                 }
             }
 
+            const Mat4 ttLocal = MatrixToTTSkinSpace(local);
+            const auto& pivot = hierarchy.pivots[static_cast<std::size_t>(pivotIndex)];
             const int parentIndex = pivot.parentIndex;
             if (parentIndex >= 0 && parentIndex < static_cast<int>(hierarchy.pivots.size())) {
                 buildPivot(parentIndex);
                 worlds[static_cast<std::size_t>(pivotIndex)] =
-                    TTSkinMultiply(worlds[static_cast<std::size_t>(parentIndex)], local);
+                    TTSkinMultiply(worlds[static_cast<std::size_t>(parentIndex)], ttLocal);
             }
             else {
-                worlds[static_cast<std::size_t>(pivotIndex)] = local;
+                worlds[static_cast<std::size_t>(pivotIndex)] = ttLocal;
             }
             state[static_cast<std::size_t>(pivotIndex)] = 2;
         };

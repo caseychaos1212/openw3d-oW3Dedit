@@ -173,8 +173,218 @@ static int CollectMeshCountFromRoots(
     return static_cast<int>(meshChunks.size());
 }
 
+static void AddRenderReferenceNameVariants(
+    const QString& name,
+    QSet<QString>& outNames)
+{
+    const QString normalized = QDir::fromNativeSeparators(name).trimmed().toLower();
+    if (normalized.isEmpty()) {
+        return;
+    }
+
+    outNames.insert(normalized);
+
+    const QFileInfo info(normalized);
+    const QString fileName = info.fileName().trimmed().toLower();
+    if (!fileName.isEmpty()) {
+        outNames.insert(fileName);
+
+        const QString stem = info.completeBaseName().trimmed().toLower();
+        if (!stem.isEmpty()) {
+            outNames.insert(stem);
+        }
+    }
+
+    const int firstDot = normalized.indexOf(QLatin1Char('.'));
+    if (firstDot > 0) {
+        const QString prefix = normalized.left(firstDot).trimmed();
+        if (!prefix.isEmpty()) {
+            outNames.insert(prefix);
+        }
+    }
+}
+
+static void CollectRenderReferenceNamesRecursive(
+    const std::shared_ptr<ChunkItem>& node,
+    QSet<QString>& outNames)
+{
+    if (!node) {
+        return;
+    }
+
+    switch (node->id) {
+    case 0x0101: { // W3D_CHUNK_HIERARCHY_HEADER
+        auto parsed = ParseChunkStruct<W3dHierarchyStruct>(node);
+        if (const auto* header = std::get_if<W3dHierarchyStruct>(&parsed)) {
+            AddRenderReferenceNameVariants(
+                ReadFixedString(header->Name, W3D_NAME_LEN),
+                outNames);
+        }
+        break;
+    }
+    case 0x001F: { // W3D_CHUNK_MESH_HEADER3
+        auto parsed = ParseChunkStruct<W3dMeshHeader3Struct>(node);
+        if (const auto* header = std::get_if<W3dMeshHeader3Struct>(&parsed)) {
+            const QString meshName = ReadFixedString(header->MeshName, W3D_NAME_LEN);
+            const QString containerName = ReadFixedString(header->ContainerName, W3D_NAME_LEN);
+            AddRenderReferenceNameVariants(meshName, outNames);
+            AddRenderReferenceNameVariants(containerName, outNames);
+            if (!meshName.trimmed().isEmpty() && !containerName.trimmed().isEmpty()) {
+                AddRenderReferenceNameVariants(containerName + QLatin1Char('.') + meshName, outNames);
+            }
+        }
+        break;
+    }
+    case 0x0301: { // W3D_CHUNK_HMODEL_HEADER
+        auto parsed = ParseChunkStruct<W3dHModelHeaderStruct>(node);
+        if (const auto* header = std::get_if<W3dHModelHeaderStruct>(&parsed)) {
+            AddRenderReferenceNameVariants(
+                ReadFixedString(header->Name, W3D_NAME_LEN),
+                outNames);
+            AddRenderReferenceNameVariants(
+                ReadFixedString(header->HierarchyName, W3D_NAME_LEN),
+                outNames);
+        }
+        break;
+    }
+    case 0x0302: // W3D_CHUNK_HMODEL_NODE
+    case 0x0303: // W3D_CHUNK_HMODEL_COLLISION_NODE
+    case 0x0304: // W3D_CHUNK_HMODEL_SKIN_NODE
+    case 0x0306: { // W3D_CHUNK_HMODEL_SHADOW_NODE
+        auto parsed = ParseChunkStruct<W3dHModelNodeStruct>(node);
+        if (const auto* hmodelNode = std::get_if<W3dHModelNodeStruct>(&parsed)) {
+            AddRenderReferenceNameVariants(
+                ReadFixedString(hmodelNode->RenderObjName, W3D_NAME_LEN),
+                outNames);
+        }
+        break;
+    }
+    case 0x0401: { // W3D_CHUNK_LODMODEL_HEADER
+        auto parsed = ParseChunkStruct<W3dLODModelHeaderStruct>(node);
+        if (const auto* header = std::get_if<W3dLODModelHeaderStruct>(&parsed)) {
+            AddRenderReferenceNameVariants(
+                ReadFixedString(header->Name, W3D_NAME_LEN),
+                outNames);
+        }
+        break;
+    }
+    case 0x0402: { // W3D_CHUNK_LOD
+        auto parsed = ParseChunkStruct<W3dLODStruct>(node);
+        if (const auto* lod = std::get_if<W3dLODStruct>(&parsed)) {
+            AddRenderReferenceNameVariants(
+                ReadFixedString(lod->RenderObjName, 2 * W3D_NAME_LEN),
+                outNames);
+        }
+        break;
+    }
+    case 0x0601: { // W3D_CHUNK_AGGREGATE_HEADER
+        auto parsed = ParseChunkStruct<W3dAggregateHeaderStruct>(node);
+        if (const auto* header = std::get_if<W3dAggregateHeaderStruct>(&parsed)) {
+            AddRenderReferenceNameVariants(
+                ReadFixedString(header->Name, W3D_NAME_LEN),
+                outNames);
+        }
+        break;
+    }
+    case 0x0602: { // W3D_CHUNK_AGGREGATE_INFO
+        auto parsed = ParseChunkStruct<W3dAggregateInfoStruct>(node);
+        if (const auto* info = std::get_if<W3dAggregateInfoStruct>(&parsed)) {
+            AddRenderReferenceNameVariants(
+                ReadFixedString(info->BaseModelName, 2 * W3D_NAME_LEN),
+                outNames);
+
+            const std::size_t headerSize = sizeof(W3dAggregateInfoStruct);
+            const std::size_t entrySize = sizeof(W3dAggregateSubobjectStruct);
+            if (node->data.size() >= headerSize && entrySize > 0) {
+                const std::size_t availableEntries = (node->data.size() - headerSize) / entrySize;
+                const std::size_t count =
+                    std::min<std::size_t>(info->SubobjectCount, availableEntries);
+                const auto* subObjects =
+                    reinterpret_cast<const W3dAggregateSubobjectStruct*>(
+                        node->data.data() + static_cast<qsizetype>(headerSize));
+                for (std::size_t i = 0; i < count; ++i) {
+                    AddRenderReferenceNameVariants(
+                        ReadFixedString(subObjects[i].SubobjectName, 2 * W3D_NAME_LEN),
+                        outNames);
+                }
+            }
+        }
+        break;
+    }
+    case 0x0701: { // W3D_CHUNK_HLOD_HEADER
+        auto parsed = ParseChunkStruct<W3dHLodHeaderStruct>(node);
+        if (const auto* header = std::get_if<W3dHLodHeaderStruct>(&parsed)) {
+            AddRenderReferenceNameVariants(
+                ReadFixedString(header->Name, W3D_NAME_LEN),
+                outNames);
+            AddRenderReferenceNameVariants(
+                ReadFixedString(header->HierarchyName, W3D_NAME_LEN),
+                outNames);
+        }
+        break;
+    }
+    case 0x0704: { // W3D_CHUNK_HLOD_SUB_OBJECT
+        auto parsed = ParseChunkStruct<W3dHLodSubObjectStruct>(node);
+        if (const auto* subObject = std::get_if<W3dHLodSubObjectStruct>(&parsed)) {
+            AddRenderReferenceNameVariants(
+                ReadFixedString(subObject->Name, 2 * W3D_NAME_LEN),
+                outNames);
+        }
+        break;
+    }
+    default:
+        break;
+    }
+
+    for (const auto& child : node->children) {
+        CollectRenderReferenceNamesRecursive(child, outNames);
+    }
+}
+
+static QSet<QString> CollectRenderReferenceNamesFromRoots(
+    const std::vector<std::shared_ptr<ChunkItem>>& roots)
+{
+    QSet<QString> names;
+    for (const auto& root : roots) {
+        CollectRenderReferenceNamesRecursive(root, names);
+    }
+    return names;
+}
+
+static bool ReferenceNamesContainAnyMatchToken(
+    const QSet<QString>& referenceNames,
+    const QSet<QString>& matchTokens)
+{
+    for (const QString& name : referenceNames) {
+        if (matchTokens.contains(name)) {
+            return true;
+        }
+    }
+    return false;
+}
+
 static QString NormalizeAbsolutePathKey(const QString& filePath) {
     return QDir::cleanPath(QFileInfo(filePath).absoluteFilePath()).toLower();
+}
+
+static QString BuildArchiveEntrySourceKey(const QString& archivePath, uint32_t entryId) {
+    return NormalizeAbsolutePathKey(archivePath)
+        + QStringLiteral("::")
+        + QString::number(static_cast<qulonglong>(entryId));
+}
+
+static QString RenderSessionAssetSourceKey(const RenderSessionAsset& asset) {
+    if (!asset.sourceKey.isEmpty()) {
+        return asset.sourceKey;
+    }
+    return NormalizeAbsolutePathKey(asset.filePath);
+}
+
+static QString RenderSessionAssetSourceDisplayPath(const RenderSessionAsset& asset) {
+    if (!asset.sourceDisplayPath.isEmpty()) {
+        return asset.sourceDisplayPath;
+    }
+    return asset.filePath;
 }
 
 static const QString& PrimaryChunkSourceKey() {
@@ -398,6 +608,46 @@ static QStringList CollectMissingRenderHierarchyNames(
     return out;
 }
 
+static QString BuildArchiveEntryDisplayPath(
+    const QString& archivePath,
+    const QString& archiveEntryPath)
+{
+    const QString normalizedArchivePath =
+        QDir::cleanPath(QFileInfo(archivePath).absoluteFilePath());
+    const QString normalizedEntryPath =
+        QDir::fromNativeSeparators(archiveEntryPath).trimmed();
+
+    if (normalizedArchivePath.isEmpty()) {
+        return normalizedEntryPath;
+    }
+    if (normalizedEntryPath.isEmpty()) {
+        return QDir::toNativeSeparators(normalizedArchivePath);
+    }
+
+    return QDir::toNativeSeparators(normalizedArchivePath)
+        + QStringLiteral("::")
+        + QDir::toNativeSeparators(normalizedEntryPath);
+}
+
+static QString BuildPrimaryRenderSourceName(
+    const QString& currentFilePath,
+    const QString& currentArchiveRenderPath,
+    const QString& currentArchiveRenderEntryPath)
+{
+    if (!currentArchiveRenderPath.isEmpty()) {
+        const QString entryPath =
+            QDir::fromNativeSeparators(currentArchiveRenderEntryPath).trimmed();
+        if (!entryPath.isEmpty()) {
+            const QString fileName = QFileInfo(entryPath).fileName();
+            return fileName.isEmpty() ? entryPath : fileName;
+        }
+    }
+
+    return currentFilePath.isEmpty()
+        ? QObject::tr("Current Scene")
+        : QFileInfo(currentFilePath).fileName();
+}
+
 static QStringList CollectMissingRenderTextureNames(
     const OW3D::Render::SceneBuildResult& result)
 {
@@ -424,18 +674,116 @@ static QStringList CollectMissingRenderTextureNames(
     return out;
 }
 
+static QStringList CollectMissingAggregateRenderObjectNames(
+    const OW3D::Render::SceneBuildResult& result)
+{
+    static const QString kMissingAggregateBasePrefix =
+        QStringLiteral("Aggregate base model not found: ");
+    static const QString kMissingAggregateSubObjectPrefix =
+        QStringLiteral("Aggregate subobject render object not found: ");
+
+    QSet<QString> names;
+    for (const auto& warning : result.warnings) {
+        if (warning.code != OW3D::Render::SceneBuildWarningCode::InvalidIndex) {
+            continue;
+        }
+
+        const QString message = QString::fromStdString(warning.message).trimmed();
+        if (message.startsWith(kMissingAggregateBasePrefix, Qt::CaseInsensitive)) {
+            const QString name = message.mid(kMissingAggregateBasePrefix.size()).trimmed();
+            if (!name.isEmpty()) {
+                names.insert(name);
+            }
+            continue;
+        }
+        if (message.startsWith(kMissingAggregateSubObjectPrefix, Qt::CaseInsensitive)) {
+            const QString name = message.mid(kMissingAggregateSubObjectPrefix.size()).trimmed();
+            if (!name.isEmpty()) {
+                names.insert(name);
+            }
+        }
+    }
+
+    QStringList out = names.values();
+    std::sort(out.begin(), out.end(), [](const QString& a, const QString& b) {
+        return QString::compare(a, b, Qt::CaseInsensitive) < 0;
+    });
+    return out;
+}
+
+static bool HasKnownW3DExtension(const QString& fileName) {
+    return fileName.endsWith(QStringLiteral(".w3d"), Qt::CaseInsensitive)
+        || fileName.endsWith(QStringLiteral(".wlt"), Qt::CaseInsensitive);
+}
+
+static void AddAggregateDependencyMatchTokens(const QString& referenceName, QSet<QString>& outTokens) {
+    QString normalized = QDir::fromNativeSeparators(referenceName).trimmed().toLower();
+    if (normalized.isEmpty()) {
+        return;
+    }
+
+    outTokens.insert(normalized);
+
+    const QFileInfo info(normalized);
+    const QString fileName = info.fileName().trimmed().toLower();
+    if (!fileName.isEmpty()) {
+        outTokens.insert(fileName);
+        if (!fileName.contains(QLatin1Char('.')) || HasKnownW3DExtension(fileName)) {
+            const QString stem = info.completeBaseName().trimmed().toLower();
+            if (!stem.isEmpty()) {
+                outTokens.insert(stem);
+            }
+        }
+    }
+}
+
+static QSet<QString> BuildAggregateDependencyMatchTokens(const QStringList& referenceNames) {
+    QSet<QString> tokens;
+    for (const QString& name : referenceNames) {
+        AddAggregateDependencyMatchTokens(name, tokens);
+    }
+    return tokens;
+}
+
+static bool MatchesAggregateDependencyPath(const QString& candidatePath, const QSet<QString>& tokens) {
+    if (tokens.isEmpty()) {
+        return false;
+    }
+
+    const QString normalized = QDir::fromNativeSeparators(candidatePath).trimmed().toLower();
+    if (normalized.isEmpty()) {
+        return false;
+    }
+    if (tokens.contains(normalized)) {
+        return true;
+    }
+
+    const QFileInfo info(normalized);
+    const QString fileName = info.fileName().trimmed().toLower();
+    if (!fileName.isEmpty() && tokens.contains(fileName)) {
+        return true;
+    }
+
+    const QString stem = info.completeBaseName().trimmed().toLower();
+    return !stem.isEmpty() && tokens.contains(stem);
+}
+
 static bool SceneHasRenderableMeshData(const OW3D::Render::SceneBuildResult& result)
 {
-    return !result.scene.meshes.empty();
+    return !result.scene.looseNodes.empty()
+        || !result.scene.lodGroups.empty();
 }
 
 static QString BuildPrimaryRenderSourceLabel(
     const QString& currentFilePath,
+    const QString& currentArchiveRenderPath,
+    const QString& currentArchiveRenderEntryPath,
     const ChunkData* chunkData)
 {
-    QString baseLabel = currentFilePath.isEmpty()
-        ? QObject::tr("Current Scene")
-        : QFileInfo(currentFilePath).fileName();
+    const QString baseLabel = BuildPrimaryRenderSourceName(
+        currentFilePath,
+        currentArchiveRenderPath,
+        currentArchiveRenderEntryPath);
 
     QString suffix = QObject::tr("[primary]");
     if (chunkData) {
@@ -685,6 +1033,7 @@ struct MixArchiveInfo {
 struct LoadedArchiveRenderContext {
     QString archivePath;
     uint32_t selectedEntryId = 0;
+    QString selectedEntryPath;
     std::vector<ArchiveRenderEntryInfo> entries;
     std::vector<std::string> textureEntryNames;
     std::vector<uint32_t> textureEntryIds;
@@ -695,6 +1044,8 @@ static bool LoadChunkDataFromBytes(
     const QByteArray& bytes,
     ChunkData& outChunkData,
     QString& outError);
+
+static QString NormalizeArchiveEntryPath(QString entryName, uint32_t entryId);
 
 static bool ReadUInt16LE(const QByteArray& bytes, qsizetype offset, uint16_t& out) {
     if (offset < 0 || (offset + 2) > bytes.size()) {
@@ -1742,6 +2093,7 @@ static bool LoadW3DFromMixArchive(
     if (outRenderContext) {
         outRenderContext->archivePath = QFileInfo(mixPath).absoluteFilePath();
         outRenderContext->selectedEntryId = entry.id;
+        outRenderContext->selectedEntryPath = NormalizeArchiveEntryPath(entry.name, entry.id);
         outRenderContext->entries.reserve(archive.entries.size());
 
         for (std::size_t i = 0; i < archive.entries.size(); ++i) {
@@ -4968,6 +5320,8 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     renderLodLevelSpin->setEnabled(false);
     renderCameraGizmoToggle = new QCheckBox(tr("Camera Gizmo"), renderControls);
     renderCameraGizmoToggle->setChecked(true);
+    renderPivotMarkersToggle = new QCheckBox(tr("Pivot Markers"), renderControls);
+    renderPivotMarkersToggle->setChecked(true);
     auto* lodBiasLabel = new QLabel(tr("LOD Bias"), renderControls);
     renderLodBiasSpin = new QDoubleSpinBox(renderControls);
     renderLodBiasSpin->setDecimals(2);
@@ -4981,6 +5335,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     renderControlsLayout->addWidget(lodLevelLabel);
     renderControlsLayout->addWidget(renderLodLevelSpin);
     renderControlsLayout->addWidget(renderCameraGizmoToggle);
+    renderControlsLayout->addWidget(renderPivotMarkersToggle);
     renderControlsLayout->addWidget(lodBiasLabel);
     renderControlsLayout->addWidget(renderLodBiasSpin);
     renderControlsLayout->addStretch(1);
@@ -5246,6 +5601,9 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     connect(renderCameraGizmoToggle, &QCheckBox::toggled, this, [this](bool) {
         applyRenderSettingsToViewport();
         });
+    connect(renderPivotMarkersToggle, &QCheckBox::toggled, this, [this](bool) {
+        applyRenderSettingsToViewport();
+        });
     connect(renderLodBiasSpin, qOverload<double>(&QDoubleSpinBox::valueChanged), this, [this](double) {
         applyRenderSettingsToViewport();
         });
@@ -5453,6 +5811,11 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     batchMenu->addAction(validateRoundTripBatchAct);
     connect(validateRoundTripBatchAct, &QAction::triggered,
         this, &MainWindow::on_actionValidateRoundTripBatch_triggered);
+    auto copyPureHumanAnimationsAct =
+        new QAction(tr("Copy Pure Human Animations by Skeleton..."), this);
+    batchMenu->addAction(copyPureHumanAnimationsAct);
+    connect(copyPureHumanAnimationsAct, &QAction::triggered,
+        this, &MainWindow::on_actionCopyPureHumanAnimationsBySkeleton_triggered);
 
     {
         QSettings settings;
@@ -5543,6 +5906,7 @@ void MainWindow::openFile(const QString& path) {
     if (isArchiveFile) {
         currentArchiveRenderPath = archiveRenderContext.archivePath;
         currentArchiveRenderEntryId = archiveRenderContext.selectedEntryId;
+        currentArchiveRenderEntryPath = archiveRenderContext.selectedEntryPath;
         currentArchiveRenderEntries = std::move(archiveRenderContext.entries);
         currentArchiveTextureEntries = std::move(archiveRenderContext.textureEntryNames);
         currentArchiveTextureEntryIds = std::move(archiveRenderContext.textureEntryIds);
@@ -5582,7 +5946,7 @@ const std::vector<std::shared_ptr<ChunkItem>>* MainWindow::chunkRootsForSourceKe
     }
 
     for (const auto& asset : currentExternalRenderAssets) {
-        if (NormalizeAbsolutePathKey(asset.filePath) == sourceKey) {
+        if (RenderSessionAssetSourceKey(asset) == sourceKey) {
             return &asset.roots;
         }
     }
@@ -5682,12 +6046,16 @@ void MainWindow::rebuildChunkSourceTabs() {
     };
 
     if (chunkData && (!currentFilePath.isEmpty() || !chunkData->getChunks().empty())) {
-        const QString primaryLabel = BuildPrimaryRenderSourceLabel(currentFilePath, chunkData.get());
+        const QString primaryLabel = BuildPrimaryRenderSourceLabel(
+            currentFilePath,
+            currentArchiveRenderPath,
+            currentArchiveRenderEntryPath,
+            chunkData.get());
         addSourceTab(PrimaryChunkSourceKey(), primaryLabel, true);
     }
     for (const auto& asset : currentExternalRenderAssets) {
         addSourceTab(
-            NormalizeAbsolutePathKey(asset.filePath),
+            RenderSessionAssetSourceKey(asset),
             tr("%1 | %2").arg(asset.displayLabel, RenderSessionAssetRoleLabel(asset)),
             false);
     }
@@ -7280,10 +7648,12 @@ void MainWindow::updateRawHex(const std::shared_ptr<ChunkItem>& chunk) {
 void MainWindow::clearArchiveRenderContext() {
     currentArchiveRenderPath.clear();
     currentArchiveRenderEntryId = 0;
+    currentArchiveRenderEntryPath.clear();
     currentArchiveRenderEntries.clear();
     currentArchiveTextureEntries.clear();
     currentArchiveTextureEntryIds.clear();
     currentArchiveTextureSourcesById.clear();
+    currentArchiveRenderEntryReferenceNamesById.clear();
     currentArchiveSupplementalRoots.clear();
     currentArchiveLoadedSupplementalEntryIds.clear();
 }
@@ -7291,11 +7661,14 @@ void MainWindow::clearArchiveRenderContext() {
 void MainWindow::clearExternalRenderContext() {
     currentExternalRenderAssets.clear();
     currentExternalRenderAssetPaths.clear();
+    currentAggregateRenderDependencyAssets.clear();
     currentRenderTriedSkeletonAutoload = false;
     currentRenderSuppressedMissingHierarchyKey.clear();
     currentRenderSuppressedMissingMeshKey.clear();
     currentRenderTextureDirectory.clear();
     currentRenderSuppressedMissingTextureKey.clear();
+    currentRenderAggregateDependencyAttemptKey.clear();
+    currentRenderHierarchyDependencyAttemptKey.clear();
     currentRenderAnimationDrafts.clear();
     resetRenderAnimationPlayback();
 }
@@ -7466,7 +7839,11 @@ bool MainWindow::tryLoadRenderSessionAsset(
 
     auto labelInUse = [&](const QString& candidate) {
         if (!currentFilePath.isEmpty()) {
-            const QString primaryLabel = BuildPrimaryRenderSourceLabel(currentFilePath, chunkData.get());
+            const QString primaryLabel = BuildPrimaryRenderSourceLabel(
+                currentFilePath,
+                currentArchiveRenderPath,
+                currentArchiveRenderEntryPath,
+                chunkData.get());
             if (primaryLabel.compare(candidate, Qt::CaseInsensitive) == 0) {
                 return true;
             }
@@ -7499,8 +7876,116 @@ bool MainWindow::tryLoadRenderSessionAsset(
 
     outAsset.role = role;
     outAsset.filePath = absolutePath;
+    outAsset.sourceKey = normalizedPath;
+    outAsset.sourceDisplayPath = absolutePath;
     outAsset.displayLabel = displayLabel;
     outAsset.roots = std::move(loadedRoots);
+    outAsset.hierarchyNames = CollectHierarchyNamesFromRoots(outAsset.roots);
+    outAsset.meshCount = CollectMeshCountFromRoots(outAsset.roots);
+    outAsset.animationCount = CollectAnimationCountFromRoots(outAsset.roots);
+    return true;
+}
+
+bool MainWindow::tryLoadRenderSessionArchiveAsset(
+    const QString& archivePath,
+    RenderSessionAssetRole role,
+    RenderSessionAsset& outAsset,
+    QString* outError)
+{
+    outAsset = {};
+
+    const QString absoluteArchivePath =
+        QDir::cleanPath(QFileInfo(archivePath).absoluteFilePath());
+    if (absoluteArchivePath.isEmpty()) {
+        if (outError) {
+            *outError = tr("The selected archive path is invalid.");
+        }
+        return false;
+    }
+
+    ChunkData archiveChunkData;
+    LoadedArchiveRenderContext archiveContext{};
+    if (!LoadW3DFromMixArchive(
+        this,
+        absoluteArchivePath,
+        archiveChunkData,
+        outError,
+        &archiveContext))
+    {
+        return false;
+    }
+
+    const QString sourceKey =
+        BuildArchiveEntrySourceKey(archiveContext.archivePath, archiveContext.selectedEntryId);
+    if (currentExternalRenderAssetPaths.contains(sourceKey)) {
+        if (outError) {
+            *outError = tr("This render asset is already loaded.");
+        }
+        return false;
+    }
+
+    QString entryDisplayLabel = QFileInfo(archiveContext.selectedEntryPath).fileName();
+    if (entryDisplayLabel.isEmpty()) {
+        entryDisplayLabel = archiveContext.selectedEntryPath;
+    }
+    if (entryDisplayLabel.isEmpty()) {
+        entryDisplayLabel = tr("Archive Entry %1")
+            .arg(archiveContext.selectedEntryId, 8, 16, QLatin1Char('0'))
+            .toUpper();
+    }
+
+    auto labelInUse = [&](const QString& candidate) {
+        if (!currentFilePath.isEmpty()) {
+            const QString primaryLabel = BuildPrimaryRenderSourceLabel(
+                currentFilePath,
+                currentArchiveRenderPath,
+                currentArchiveRenderEntryPath,
+                chunkData.get());
+            if (primaryLabel.compare(candidate, Qt::CaseInsensitive) == 0) {
+                return true;
+            }
+        }
+        for (const auto& asset : currentExternalRenderAssets) {
+            if (asset.displayLabel.compare(candidate, Qt::CaseInsensitive) == 0) {
+                return true;
+            }
+        }
+        return false;
+    };
+
+    QString displayLabel = entryDisplayLabel;
+    if (labelInUse(displayLabel)) {
+        const QString archiveLabel = QFileInfo(archiveContext.archivePath).fileName();
+        if (!archiveLabel.isEmpty()) {
+            const QString qualifiedLabel =
+                tr("%1 [%2]").arg(displayLabel, archiveLabel);
+            if (!labelInUse(qualifiedLabel)) {
+                displayLabel = qualifiedLabel;
+            }
+        }
+    }
+    if (labelInUse(displayLabel)) {
+        displayLabel = BuildArchiveEntryDisplayPath(
+            archiveContext.archivePath,
+            archiveContext.selectedEntryPath);
+    }
+
+    const auto& parsedRoots = archiveChunkData.getChunks();
+    if (parsedRoots.empty()) {
+        if (outError) {
+            *outError = tr("The selected archive entry does not contain any W3D/WLT roots.");
+        }
+        return false;
+    }
+
+    outAsset.role = role;
+    outAsset.filePath = archiveContext.archivePath;
+    outAsset.sourceKey = sourceKey;
+    outAsset.sourceDisplayPath = BuildArchiveEntryDisplayPath(
+        archiveContext.archivePath,
+        archiveContext.selectedEntryPath);
+    outAsset.displayLabel = displayLabel;
+    outAsset.roots.assign(parsedRoots.begin(), parsedRoots.end());
     outAsset.hierarchyNames = CollectHierarchyNamesFromRoots(outAsset.roots);
     outAsset.meshCount = CollectMeshCountFromRoots(outAsset.roots);
     outAsset.animationCount = CollectAnimationCountFromRoots(outAsset.roots);
@@ -7545,10 +8030,17 @@ void MainWindow::refreshRenderAssetList() {
             primaryRole = tr("Animation");
         }
         primaryItem->setText(0, primaryRole);
-        primaryItem->setText(1, QFileInfo(currentFilePath).fileName());
+        primaryItem->setText(1, BuildPrimaryRenderSourceName(
+            currentFilePath,
+            currentArchiveRenderPath,
+            currentArchiveRenderEntryPath));
         primaryItem->setText(2, QString::number(hierarchyCount));
         primaryItem->setText(3, QString::number(animationCount));
-        primaryItem->setToolTip(1, currentFilePath);
+        primaryItem->setToolTip(1, !currentArchiveRenderPath.isEmpty()
+            ? BuildArchiveEntryDisplayPath(
+                currentArchiveRenderPath,
+                currentArchiveRenderEntryPath)
+            : currentFilePath);
         primaryItem->setFlags(primaryItem->flags() & ~Qt::ItemIsDropEnabled);
     }
 
@@ -7558,12 +8050,12 @@ void MainWindow::refreshRenderAssetList() {
         item->setText(1, asset.displayLabel);
         item->setText(2, QString::number(asset.hierarchyNames.size()));
         item->setText(3, QString::number(asset.animationCount));
-        item->setToolTip(1, asset.filePath);
-        item->setData(0, kRenderAssetPathRole, NormalizeAbsolutePathKey(asset.filePath));
+        item->setToolTip(1, RenderSessionAssetSourceDisplayPath(asset));
+        item->setData(0, kRenderAssetPathRole, RenderSessionAssetSourceKey(asset));
         item->setData(0, kRenderAssetRoleRole, static_cast<int>(asset.role));
         if (!selectedPathKey.isEmpty()
             && selectedPathKey.compare(
-                NormalizeAbsolutePathKey(asset.filePath),
+                RenderSessionAssetSourceKey(asset),
                 Qt::CaseInsensitive) == 0)
         {
             renderAssetsTree->setCurrentItem(item);
@@ -8719,6 +9211,7 @@ void MainWindow::applyRenderSettingsToViewport() {
     settings.lockLodLevel = renderLodLockToggle ? renderLodLockToggle->isChecked() : false;
     settings.lockedLodLevel = renderLodLevelSpin ? renderLodLevelSpin->value() : 0;
     settings.showCameraGizmo = renderCameraGizmoToggle ? renderCameraGizmoToggle->isChecked() : true;
+    settings.showPivotMarkers = renderPivotMarkersToggle ? renderPivotMarkersToggle->isChecked() : true;
     renderViewport->SetRenderSettings(settings);
 }
 
@@ -8728,9 +9221,12 @@ void MainWindow::addRenderSkeletons() {
         : (lastDirectory.isEmpty() ? QDir::homePath() : lastDirectory);
     const QStringList filePaths = QFileDialog::getOpenFileNames(
         this,
-        tr("Add Model/Skeleton W3D/WLT"),
+        tr("Add Model/Skeleton Asset"),
         startDir,
-        tr("W3D Files (*.w3d *.W3D *.wlt *.WLT);;All Files (*)"));
+        tr("Render Assets (*.w3d *.W3D *.wlt *.WLT *.mix *.MIX *.dat *.DAT *.dbs *.DBS);;"
+           "W3D Files (*.w3d *.W3D *.wlt *.WLT);;"
+           "Archive Files (*.mix *.MIX *.dat *.DAT *.dbs *.DBS);;"
+           "All Files (*)"));
     if (filePaths.isEmpty()) {
         return;
     }
@@ -8740,13 +9236,25 @@ void MainWindow::addRenderSkeletons() {
     bool addedAny = false;
     QStringList errors;
     for (const QString& filePath : filePaths) {
-        if (currentExternalRenderAssetPaths.contains(NormalizeAbsolutePathKey(filePath))) {
+        if (!IsMixArchivePath(filePath)
+            && currentExternalRenderAssetPaths.contains(NormalizeAbsolutePathKey(filePath))) {
             continue;
         }
 
         RenderSessionAsset asset;
         QString loadError;
-        if (!tryLoadRenderSessionAsset(filePath, RenderSessionAssetRole::Skeleton, asset, &loadError)) {
+        const bool loaded = IsMixArchivePath(filePath)
+            ? tryLoadRenderSessionArchiveAsset(
+                filePath,
+                RenderSessionAssetRole::Skeleton,
+                asset,
+                &loadError)
+            : tryLoadRenderSessionAsset(
+                filePath,
+                RenderSessionAssetRole::Skeleton,
+                asset,
+                &loadError);
+        if (!loaded) {
             if (!loadError.isEmpty()) {
                 errors.push_back(tr("%1: %2").arg(QFileInfo(filePath).fileName(), loadError));
             }
@@ -8757,7 +9265,7 @@ void MainWindow::addRenderSkeletons() {
             continue;
         }
 
-        currentExternalRenderAssetPaths.insert(NormalizeAbsolutePathKey(asset.filePath));
+        currentExternalRenderAssetPaths.insert(RenderSessionAssetSourceKey(asset));
         currentExternalRenderAssets.push_back(std::move(asset));
         addedAny = true;
     }
@@ -8783,9 +9291,12 @@ void MainWindow::addRenderAnimations() {
         : (lastDirectory.isEmpty() ? QDir::homePath() : lastDirectory);
     const QStringList filePaths = QFileDialog::getOpenFileNames(
         this,
-        tr("Add Animation W3D/WLT"),
+        tr("Add Animation Asset"),
         startDir,
-        tr("W3D Files (*.w3d *.W3D *.wlt *.WLT);;All Files (*)"));
+        tr("Render Assets (*.w3d *.W3D *.wlt *.WLT *.mix *.MIX *.dat *.DAT *.dbs *.DBS);;"
+           "W3D Files (*.w3d *.W3D *.wlt *.WLT);;"
+           "Archive Files (*.mix *.MIX *.dat *.DAT *.dbs *.DBS);;"
+           "All Files (*)"));
     if (filePaths.isEmpty()) {
         return;
     }
@@ -8795,13 +9306,25 @@ void MainWindow::addRenderAnimations() {
     bool addedAny = false;
     QStringList errors;
     for (const QString& filePath : filePaths) {
-        if (currentExternalRenderAssetPaths.contains(NormalizeAbsolutePathKey(filePath))) {
+        if (!IsMixArchivePath(filePath)
+            && currentExternalRenderAssetPaths.contains(NormalizeAbsolutePathKey(filePath))) {
             continue;
         }
 
         RenderSessionAsset asset;
         QString loadError;
-        if (!tryLoadRenderSessionAsset(filePath, RenderSessionAssetRole::AnimationLibrary, asset, &loadError)) {
+        const bool loaded = IsMixArchivePath(filePath)
+            ? tryLoadRenderSessionArchiveAsset(
+                filePath,
+                RenderSessionAssetRole::AnimationLibrary,
+                asset,
+                &loadError)
+            : tryLoadRenderSessionAsset(
+                filePath,
+                RenderSessionAssetRole::AnimationLibrary,
+                asset,
+                &loadError);
+        if (!loaded) {
             if (!loadError.isEmpty()) {
                 errors.push_back(tr("%1: %2").arg(QFileInfo(filePath).fileName(), loadError));
             }
@@ -8812,7 +9335,7 @@ void MainWindow::addRenderAnimations() {
             continue;
         }
 
-        currentExternalRenderAssetPaths.insert(NormalizeAbsolutePathKey(asset.filePath));
+        currentExternalRenderAssetPaths.insert(RenderSessionAssetSourceKey(asset));
         currentExternalRenderAssets.push_back(std::move(asset));
         addedAny = true;
     }
@@ -8876,7 +9399,7 @@ void MainWindow::removeSelectedRenderSessionAsset() {
         currentExternalRenderAssets.begin(),
         currentExternalRenderAssets.end(),
         [&](const RenderSessionAsset& asset) {
-            return NormalizeAbsolutePathKey(asset.filePath).compare(
+            return RenderSessionAssetSourceKey(asset).compare(
                 normalizedPath,
                 Qt::CaseInsensitive) == 0;
         });
@@ -8905,7 +9428,7 @@ void MainWindow::clearRenderAnimationLibraries() {
 
     currentExternalRenderAssetPaths.clear();
     for (const auto& asset : currentExternalRenderAssets) {
-        currentExternalRenderAssetPaths.insert(NormalizeAbsolutePathKey(asset.filePath));
+        currentExternalRenderAssetPaths.insert(RenderSessionAssetSourceKey(asset));
     }
 
     currentRenderSuppressedMissingMeshKey.clear();
@@ -9477,7 +10000,11 @@ void MainWindow::rebuildRenderScene() {
         addAdditionalTextureDirectory(QFileInfo(asset.filePath).absolutePath());
     }
 
-    const QString primarySourceLabel = BuildPrimaryRenderSourceLabel(currentFilePath, chunkData.get());
+    const QString primarySourceLabel = BuildPrimaryRenderSourceLabel(
+        currentFilePath,
+        currentArchiveRenderPath,
+        currentArchiveRenderEntryPath,
+        chunkData.get());
 
     auto rebuildWithCurrentSession = [&]() -> OW3D::Render::SceneBuildResult {
         options.rootSourceLabels.clear();
@@ -9507,6 +10034,7 @@ void MainWindow::rebuildRenderScene() {
 
         OW3D::Render::W3DChunk skeletonRoots;
         OW3D::Render::W3DChunk animationLibraryRoots;
+        OW3D::Render::W3DChunk referenceOnlyRoots;
         for (const auto& asset : currentExternalRenderAssets) {
             auto& targetRoots = asset.role == RenderSessionAssetRole::Skeleton
                 ? skeletonRoots
@@ -9518,19 +10046,254 @@ void MainWindow::rebuildRenderScene() {
                 }
             }
         }
+        for (const auto& asset : currentAggregateRenderDependencyAssets) {
+            referenceOnlyRoots.insert(
+                referenceOnlyRoots.end(),
+                asset.roots.begin(),
+                asset.roots.end());
+            for (const auto& root : asset.roots) {
+                if (root) {
+                    options.rootSourceLabels[root.get()] = asset.sourceLabel.toStdString();
+                }
+            }
+        }
 
         const OW3D::Render::W3DChunk* skeletonRootsPtr =
             skeletonRoots.empty() ? nullptr : &skeletonRoots;
         const OW3D::Render::W3DChunk* animationRootsPtr =
             animationLibraryRoots.empty() ? nullptr : &animationLibraryRoots;
+        const OW3D::Render::W3DChunk* referenceRootsPtr =
+            referenceOnlyRoots.empty() ? nullptr : &referenceOnlyRoots;
         return OW3D::Render::BuildRenderScene(
             primaryRoots,
             options,
             skeletonRootsPtr,
-            animationRootsPtr);
+            animationRootsPtr,
+            referenceRootsPtr);
     };
 
     OW3D::Render::SceneBuildResult result = rebuildWithCurrentSession();
+
+    auto hasAggregateDependencySourceKey = [&](const QString& sourceKey) {
+        return std::any_of(
+            currentAggregateRenderDependencyAssets.begin(),
+            currentAggregateRenderDependencyAssets.end(),
+            [&](const AggregateRenderDependencyAsset& asset) {
+                return asset.sourceKey.compare(sourceKey, Qt::CaseInsensitive) == 0;
+            });
+    };
+
+    auto tryAutoloadReferenceDependencies = [&](const QStringList& missingReferences) {
+        if (missingReferences.isEmpty()) {
+            return false;
+        }
+
+        const QSet<QString> matchTokens = BuildAggregateDependencyMatchTokens(missingReferences);
+        if (matchTokens.isEmpty()) {
+            return false;
+        }
+
+        bool loadedAny = false;
+        if (!currentArchiveRenderPath.isEmpty() && !currentArchiveRenderEntries.empty()) {
+            const QString archiveKeyPrefix =
+                NormalizeAbsolutePathKey(currentArchiveRenderPath) + QStringLiteral("::");
+
+            for (const ArchiveRenderEntryInfo& entry : currentArchiveRenderEntries) {
+                if (!entry.likelyW3d || entry.id == currentArchiveRenderEntryId) {
+                    continue;
+                }
+
+                const QString sourceKey =
+                    archiveKeyPrefix + QString::number(static_cast<qulonglong>(entry.id));
+                if (hasAggregateDependencySourceKey(sourceKey)) {
+                    continue;
+                }
+
+                const QString entryPath = entry.name.isEmpty()
+                    ? QStringLiteral("entry_%1.w3d").arg(entry.id, 8, 16, QLatin1Char('0')).toUpper()
+                    : QDir::fromNativeSeparators(entry.name).trimmed();
+
+                QByteArray entryBytes;
+                ChunkData dependencyData;
+                bool dependencyLoaded = false;
+
+                bool matchesDependency = MatchesAggregateDependencyPath(entryPath, matchTokens);
+                if (!matchesDependency) {
+                    const auto cachedIt =
+                        currentArchiveRenderEntryReferenceNamesById.find(entry.id);
+                    if (cachedIt != currentArchiveRenderEntryReferenceNamesById.end()) {
+                        matchesDependency =
+                            ReferenceNamesContainAnyMatchToken(cachedIt->second, matchTokens);
+                    }
+                    else {
+                        QString readError;
+                        if (!ReadArchiveEntryBytes(
+                            currentArchiveRenderPath,
+                            entry.offset,
+                            entry.size,
+                            entryBytes,
+                            &readError))
+                        {
+                            continue;
+                        }
+
+                        QString parseError;
+                        if (!LoadChunkDataFromBytes(entryBytes, dependencyData, parseError)) {
+                            continue;
+                        }
+
+                        dependencyLoaded = true;
+                        const auto& parsedRoots = dependencyData.getChunks();
+                        currentArchiveRenderEntryReferenceNamesById[entry.id] =
+                            CollectRenderReferenceNamesFromRoots(parsedRoots);
+                        matchesDependency = ReferenceNamesContainAnyMatchToken(
+                            currentArchiveRenderEntryReferenceNamesById[entry.id],
+                            matchTokens);
+                    }
+                }
+
+                if (!matchesDependency) {
+                    continue;
+                }
+
+                if (!dependencyLoaded) {
+                    QString readError;
+                    if (!ReadArchiveEntryBytes(
+                        currentArchiveRenderPath,
+                        entry.offset,
+                        entry.size,
+                        entryBytes,
+                        &readError))
+                    {
+                        continue;
+                    }
+
+                    QString parseError;
+                    if (!LoadChunkDataFromBytes(entryBytes, dependencyData, parseError)) {
+                        continue;
+                    }
+                }
+
+                AggregateRenderDependencyAsset asset{};
+                asset.sourceKey = sourceKey;
+                asset.sourceLabel = QFileInfo(entryPath).fileName();
+                if (asset.sourceLabel.isEmpty()) {
+                    asset.sourceLabel = entryPath;
+                }
+                const auto& parsedRoots = dependencyData.getChunks();
+                asset.roots.assign(parsedRoots.begin(), parsedRoots.end());
+                if (asset.roots.empty()) {
+                    continue;
+                }
+                currentArchiveRenderEntryReferenceNamesById[entry.id] =
+                    CollectRenderReferenceNamesFromRoots(asset.roots);
+
+                currentAggregateRenderDependencyAssets.push_back(std::move(asset));
+                loadedAny = true;
+            }
+
+            return loadedAny;
+        }
+
+        if (currentFilePath.isEmpty()) {
+            return false;
+        }
+
+        const QFileInfo currentInfo(currentFilePath);
+        const QDir currentDir = currentInfo.absoluteDir();
+        const QStringList candidates = currentDir.entryList(
+            QStringList{ QStringLiteral("*.w3d"), QStringLiteral("*.W3D"), QStringLiteral("*.wlt"), QStringLiteral("*.WLT") },
+            QDir::Files | QDir::Readable,
+            QDir::Name | QDir::IgnoreCase);
+
+        for (const QString& fileName : candidates) {
+            const QString candidatePath =
+                QDir::cleanPath(currentDir.absoluteFilePath(fileName));
+            if (candidatePath.compare(
+                QDir::cleanPath(currentInfo.absoluteFilePath()),
+                Qt::CaseInsensitive) == 0)
+            {
+                continue;
+            }
+
+            const QString normalizedCandidatePath = NormalizeAbsolutePathKey(candidatePath);
+            if (normalizedCandidatePath.isEmpty()
+                || currentExternalRenderAssetPaths.contains(normalizedCandidatePath)
+                || hasAggregateDependencySourceKey(normalizedCandidatePath))
+            {
+                continue;
+            }
+            if (!MatchesAggregateDependencyPath(candidatePath, matchTokens)) {
+                continue;
+            }
+
+            std::vector<std::shared_ptr<ChunkItem>> loadedRoots;
+            QString loadError;
+            if (!LoadSupplementalRenderRootsFromFile(candidatePath, loadedRoots, &loadError)
+                || loadedRoots.empty())
+            {
+                continue;
+            }
+
+            AggregateRenderDependencyAsset asset{};
+            asset.sourceKey = normalizedCandidatePath;
+            asset.sourceLabel = QFileInfo(candidatePath).fileName();
+            asset.roots = std::move(loadedRoots);
+            currentAggregateRenderDependencyAssets.push_back(std::move(asset));
+            loadedAny = true;
+        }
+
+        return loadedAny;
+    };
+
+    {
+        const QStringList missingAggregateReferences =
+            CollectMissingAggregateRenderObjectNames(result);
+        const QString aggregateAttemptKey =
+            (!currentArchiveRenderPath.isEmpty()
+                ? NormalizeAbsolutePathKey(currentArchiveRenderPath)
+                : NormalizeAbsolutePathKey(currentFilePath))
+            + QStringLiteral("|")
+            + missingAggregateReferences.join(QLatin1Char('|')).toLower();
+
+        if (missingAggregateReferences.isEmpty()) {
+            currentRenderAggregateDependencyAttemptKey.clear();
+        }
+        else if (currentRenderAggregateDependencyAttemptKey != aggregateAttemptKey) {
+            currentRenderAggregateDependencyAttemptKey = aggregateAttemptKey;
+            if (tryAutoloadReferenceDependencies(missingAggregateReferences)) {
+                result = rebuildWithCurrentSession();
+                if (CollectMissingAggregateRenderObjectNames(result).isEmpty()) {
+                    currentRenderAggregateDependencyAttemptKey.clear();
+                }
+            }
+        }
+    }
+
+    if (!currentArchiveRenderPath.isEmpty() && !currentArchiveRenderEntries.empty()) {
+        const QStringList missingHierarchyNames =
+            CollectMissingRenderHierarchyNames(result);
+        const QString hierarchyAttemptKey =
+            NormalizeAbsolutePathKey(currentArchiveRenderPath)
+            + QStringLiteral("|hier|")
+            + missingHierarchyNames.join(QLatin1Char('|')).toLower();
+
+        if (missingHierarchyNames.isEmpty()) {
+            currentRenderHierarchyDependencyAttemptKey.clear();
+        }
+        else if (currentRenderHierarchyDependencyAttemptKey != hierarchyAttemptKey) {
+            currentRenderHierarchyDependencyAttemptKey = hierarchyAttemptKey;
+            if (tryAutoloadReferenceDependencies(missingHierarchyNames)) {
+                result = rebuildWithCurrentSession();
+                if (CollectMissingRenderHierarchyNames(result).isEmpty()) {
+                    currentRenderHierarchyDependencyAttemptKey.clear();
+                }
+            }
+        }
+    }
+    else {
+        currentRenderHierarchyDependencyAttemptKey.clear();
+    }
 
     if (!currentArchiveRenderPath.isEmpty() && !currentArchiveRenderEntries.empty()) {
         static const std::string kMissingSubObjectPrefix = "Referenced subobject mesh not found: ";
@@ -9994,7 +10757,15 @@ void MainWindow::setDirty(bool value) {
 void MainWindow::updateWindowTitle() {
     QString title = tr("oW3DEdit");
     if (!currentFilePath.isEmpty()) {
-        title += QStringLiteral(" - ") + QFileInfo(currentFilePath).fileName();
+        if (!currentArchiveRenderPath.isEmpty() && !currentArchiveRenderEntryPath.isEmpty()) {
+            title += QStringLiteral(" - ")
+                + QFileInfo(currentArchiveRenderPath).fileName()
+                + QStringLiteral("::")
+                + QDir::toNativeSeparators(currentArchiveRenderEntryPath);
+        }
+        else {
+            title += QStringLiteral(" - ") + QFileInfo(currentFilePath).fileName();
+        }
     }
     if (dirty) {
         title += QLatin1Char('*');
@@ -10776,6 +11547,17 @@ struct RoundTripReportRow {
     QString warnings;
 };
 
+struct PureAnimationCopyReportRow {
+    QString status = QStringLiteral("SKIP");
+    QString sourcePath;
+    QString relativePath;
+    QString detectedHierarchies;
+    QString matchedSkeletons;
+    int copiesWritten = 0;
+    QString copyTargets;
+    QString errorMessage;
+};
+
 static QString CsvEscape(const QString& value) {
     QString out = value;
     out.replace('"', "\"\"");
@@ -10826,6 +11608,31 @@ static void WriteRoundTripCsvRow(QTextStream& out, const RoundTripReportRow& row
         NumberOrBlank(row.durationMs),
         QString::number(row.warningCount),
         row.warnings
+    };
+
+    for (int i = 0; i < columns.size(); ++i) {
+        if (i > 0) out << ',';
+        out << CsvEscape(columns[i]);
+    }
+    out << '\n';
+}
+
+static void WritePureAnimationCopyCsvHeader(QTextStream& out) {
+    out
+        << "status,source_path,relative_path,detected_hierarchies,matched_skeletons,"
+        << "copies_written,copy_targets,error_message\n";
+}
+
+static void WritePureAnimationCopyCsvRow(QTextStream& out, const PureAnimationCopyReportRow& row) {
+    const QStringList columns = {
+        row.status,
+        row.sourcePath,
+        row.relativePath,
+        row.detectedHierarchies,
+        row.matchedSkeletons,
+        QString::number(row.copiesWritten),
+        row.copyTargets,
+        row.errorMessage
     };
 
     for (int i = 0; i < columns.size(); ++i) {
@@ -11002,6 +11809,10 @@ struct BatchInputSource {
     uint32_t archiveEntrySize = 0;
 };
 
+struct SkeletonAllowlist {
+    std::map<QString, QString> folderNameByNormalized;
+};
+
 static QString SanitizePathComponent(QString component) {
     component = component.trimmed();
     for (qsizetype i = 0; i < component.size(); ++i) {
@@ -11159,6 +11970,150 @@ static bool LoadBatchInputChunkData(
     }
 
     return LoadChunkDataFromBytes(originalBytes, outChunkData, outError);
+}
+
+static bool LoadSkeletonAllowlist(
+    const QString& allowlistPath,
+    SkeletonAllowlist& outAllowlist,
+    QString& outError)
+{
+    outAllowlist = {};
+
+    QFile file(allowlistPath);
+    if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
+        outError = QObject::tr("Failed to open allowlist file: %1").arg(file.errorString());
+        return false;
+    }
+
+    QTextStream stream(&file);
+    int lineNumber = 0;
+    while (!stream.atEnd()) {
+        QString line = stream.readLine();
+        ++lineNumber;
+        if (lineNumber == 1 && !line.isEmpty() && line.at(0) == QChar(0xFEFF)) {
+            line.remove(0, 1);
+        }
+
+        line = line.trimmed();
+        if (line.isEmpty() || line.startsWith(QLatin1Char('#'))) {
+            continue;
+        }
+
+        const QString normalized =
+            QString::fromStdString(NormalizeName(line.toStdString())).trimmed();
+        if (normalized.isEmpty()) {
+            continue;
+        }
+
+        if (outAllowlist.folderNameByNormalized.find(normalized)
+            == outAllowlist.folderNameByNormalized.end())
+        {
+            QString folderName = SanitizePathComponent(normalized);
+            if (folderName.isEmpty()) {
+                folderName = QStringLiteral("unnamed_skeleton");
+            }
+            outAllowlist.folderNameByNormalized.emplace(normalized, folderName);
+        }
+    }
+
+    if (outAllowlist.folderNameByNormalized.empty()) {
+        outError = QObject::tr("The allowlist file does not contain any hierarchy names.");
+        return false;
+    }
+
+    return true;
+}
+
+static bool CollectPureAnimationHierarchyNames(
+    const std::vector<std::shared_ptr<ChunkItem>>& roots,
+    QStringList& outHierarchyNames,
+    QString& outError)
+{
+    outHierarchyNames.clear();
+
+    std::vector<std::shared_ptr<ChunkItem>> headerChunks;
+    for (const auto& root : roots) {
+        CollectChunksByIdRecursive(root, 0x0201, headerChunks);
+        CollectChunksByIdRecursive(root, 0x0281, headerChunks);
+        CollectChunksByIdRecursive(root, 0x02C1, headerChunks);
+    }
+
+    QSet<QString> names;
+    auto addName = [&](const QString& rawName) {
+        const QString normalized =
+            QString::fromStdString(NormalizeName(rawName.trimmed().toStdString())).trimmed();
+        if (!normalized.isEmpty()) {
+            names.insert(normalized);
+        }
+    };
+
+    for (const auto& headerChunk : headerChunks) {
+        if (!headerChunk) {
+            continue;
+        }
+
+        switch (headerChunk->id) {
+        case 0x0201: {
+            auto parsed = ParseChunkStruct<W3dAnimHeaderStruct>(headerChunk);
+            if (const auto* err = std::get_if<std::string>(&parsed)) {
+                outError = QObject::tr("Failed to parse raw animation header: %1")
+                    .arg(QString::fromStdString(*err));
+                return false;
+            }
+            addName(ReadFixedString(std::get<W3dAnimHeaderStruct>(parsed).HierarchyName, W3D_NAME_LEN));
+            break;
+        }
+        case 0x0281: {
+            auto parsed = ParseChunkStruct<W3dCompressedAnimHeaderStruct>(headerChunk);
+            if (const auto* err = std::get_if<std::string>(&parsed)) {
+                outError = QObject::tr("Failed to parse compressed animation header: %1")
+                    .arg(QString::fromStdString(*err));
+                return false;
+            }
+            addName(
+                ReadFixedString(
+                    std::get<W3dCompressedAnimHeaderStruct>(parsed).HierarchyName,
+                    W3D_NAME_LEN));
+            break;
+        }
+        case 0x02C1: {
+            auto parsed = ParseChunkStruct<W3dMorphAnimHeaderStruct>(headerChunk);
+            if (const auto* err = std::get_if<std::string>(&parsed)) {
+                outError = QObject::tr("Failed to parse morph animation header: %1")
+                    .arg(QString::fromStdString(*err));
+                return false;
+            }
+            addName(
+                ReadFixedString(
+                    std::get<W3dMorphAnimHeaderStruct>(parsed).HierarchyName,
+                    W3D_NAME_LEN));
+            break;
+        }
+        default:
+            break;
+        }
+    }
+
+    outHierarchyNames = names.values();
+    outHierarchyNames.sort(Qt::CaseInsensitive);
+    return true;
+}
+
+static QStringList MatchAllowlistHierarchyNames(
+    const QStringList& detectedHierarchyNames,
+    const SkeletonAllowlist& allowlist)
+{
+    QStringList matched;
+    for (const QString& hierarchyName : detectedHierarchyNames) {
+        if (allowlist.folderNameByNormalized.find(hierarchyName)
+            != allowlist.folderNameByNormalized.end())
+        {
+            matched << hierarchyName;
+        }
+    }
+    matched.removeDuplicates();
+    matched.sort(Qt::CaseInsensitive);
+    return matched;
 }
 
 static void DiscoverBatchInputs(
@@ -11980,6 +12935,264 @@ void MainWindow::on_actionValidateRoundTripBatch_triggered()
     }
     else {
         QMessageBox::information(this, tr("Round-Trip Validate"), summary);
+    }
+}
+
+void MainWindow::on_actionCopyPureHumanAnimationsBySkeleton_triggered()
+{
+    const QString startDir = lastDirectory.isEmpty() ? QDir::homePath() : lastDirectory;
+    const QString srcDir = QFileDialog::getExistingDirectory(
+        this,
+        tr("Select Source Directory"),
+        startDir,
+        QFileDialog::ShowDirsOnly | QFileDialog::DontResolveSymlinks);
+    if (srcDir.isEmpty()) return;
+
+    const QString allowlistPath = QFileDialog::getOpenFileName(
+        this,
+        tr("Select Human Skeleton Allowlist"),
+        srcDir,
+        tr("Text Files (*.txt);;All Files (*)"));
+    if (allowlistPath.isEmpty()) return;
+
+    const QString outDir = QFileDialog::getExistingDirectory(
+        this,
+        tr("Select Output Directory"),
+        srcDir,
+        QFileDialog::ShowDirsOnly | QFileDialog::DontResolveSymlinks);
+    if (outDir.isEmpty()) return;
+
+    SkeletonAllowlist allowlist;
+    QString allowlistError;
+    if (!LoadSkeletonAllowlist(allowlistPath, allowlist, allowlistError)) {
+        QMessageBox::warning(
+            this,
+            tr("Copy Pure Human Animations by Skeleton"),
+            allowlistError.isEmpty()
+                ? tr("Failed to load the allowlist file.")
+                : allowlistError);
+        return;
+    }
+
+    std::vector<BatchInputSource> inputs;
+    QStringList discoveryWarnings;
+    DiscoverBatchInputs(srcDir, inputs, &discoveryWarnings);
+
+    std::vector<BatchInputSource> archiveInputs;
+    archiveInputs.reserve(inputs.size());
+    for (const BatchInputSource& input : inputs) {
+        if (input.fromArchive) {
+            archiveInputs.push_back(input);
+        }
+    }
+
+    if (archiveInputs.empty()) {
+        QString summary = tr("No W3D/WLT archive entries found in %1.").arg(srcDir);
+        if (!discoveryWarnings.isEmpty()) {
+            QStringList preview = discoveryWarnings.mid(0, 10);
+            if (discoveryWarnings.size() > preview.size()) {
+                preview << tr("... (%1 additional warnings)")
+                    .arg(discoveryWarnings.size() - preview.size());
+            }
+            summary += tr("\n\nArchive scan warnings (%1):\n%2")
+                .arg(discoveryWarnings.size())
+                .arg(preview.join("\n"));
+        }
+        QMessageBox::information(this, tr("Copy Pure Human Animations by Skeleton"), summary);
+        return;
+    }
+
+    const QString reportPath = QDir(outDir).absoluteFilePath(QStringLiteral("report.csv"));
+    QFile reportFile(reportPath);
+    if (!reportFile.open(QIODevice::WriteOnly | QIODevice::Truncate | QIODevice::Text)) {
+        QMessageBox::warning(
+            this,
+            tr("Copy Pure Human Animations by Skeleton"),
+            tr("Cannot write report file: %1").arg(reportPath));
+        return;
+    }
+    QTextStream reportStream(&reportFile);
+    WritePureAnimationCopyCsvHeader(reportStream);
+    reportStream.flush();
+
+    QProgressDialog progress(
+        tr("Preparing copy..."),
+        tr("Cancel"),
+        0,
+        static_cast<int>(archiveInputs.size()),
+        this);
+    progress.setWindowTitle(tr("Copy Pure Human Animations by Skeleton"));
+    progress.setWindowModality(Qt::WindowModal);
+    progress.setMinimumDuration(0);
+    progress.setAutoClose(false);
+    progress.setAutoReset(false);
+    progress.setValue(0);
+
+    QString cachedArchivePath;
+    QByteArray cachedArchiveBytes;
+    int pureAnimationCount = 0;
+    int copiedEntryCount = 0;
+    int copiesWrittenCount = 0;
+    int skippedCount = 0;
+    int failureCount = 0;
+    bool canceled = false;
+
+    for (int i = 0; i < static_cast<int>(archiveInputs.size()); ++i) {
+        const BatchInputSource& input = archiveInputs[static_cast<std::size_t>(i)];
+        progress.setValue(i);
+        progress.setLabelText(tr("Checking %1 (%2/%3)")
+            .arg(input.relativePath)
+            .arg(i + 1)
+            .arg(static_cast<int>(archiveInputs.size())));
+        QCoreApplication::processEvents();
+        if (progress.wasCanceled()) {
+            canceled = true;
+            break;
+        }
+
+        PureAnimationCopyReportRow row;
+        row.sourcePath = input.sourcePath;
+        row.relativePath = input.relativePath;
+
+        QByteArray sourceBytes;
+        QString readError;
+        if (!ReadBatchInputOriginalBytes(
+            input,
+            sourceBytes,
+            readError,
+            cachedArchivePath,
+            cachedArchiveBytes))
+        {
+            row.status = QStringLiteral("FAIL");
+            row.errorMessage = readError;
+            ++failureCount;
+            WritePureAnimationCopyCsvRow(reportStream, row);
+            reportStream.flush();
+            continue;
+        }
+
+        ChunkData sourceData;
+        QString loadError;
+        if (!LoadBatchInputChunkData(input, sourceBytes, sourceData, loadError)) {
+            row.status = QStringLiteral("FAIL");
+            row.errorMessage = loadError;
+            ++failureCount;
+            WritePureAnimationCopyCsvRow(reportStream, row);
+            reportStream.flush();
+            continue;
+        }
+
+        if (!IsPureAnimationFile(sourceData.getChunks())) {
+            row.status = QStringLiteral("SKIP");
+            row.errorMessage = tr("Entry is not a pure-animation W3D/WLT.");
+            ++skippedCount;
+            WritePureAnimationCopyCsvRow(reportStream, row);
+            reportStream.flush();
+            continue;
+        }
+
+        ++pureAnimationCount;
+
+        QStringList detectedHierarchyNames;
+        QString hierarchyError;
+        if (!CollectPureAnimationHierarchyNames(
+            sourceData.getChunks(),
+            detectedHierarchyNames,
+            hierarchyError))
+        {
+            row.status = QStringLiteral("FAIL");
+            row.errorMessage = hierarchyError;
+            ++failureCount;
+            WritePureAnimationCopyCsvRow(reportStream, row);
+            reportStream.flush();
+            continue;
+        }
+
+        row.detectedHierarchies = detectedHierarchyNames.join(QStringLiteral(" | "));
+
+        const QStringList matchedHierarchyNames =
+            MatchAllowlistHierarchyNames(detectedHierarchyNames, allowlist);
+        row.matchedSkeletons = matchedHierarchyNames.join(QStringLiteral(" | "));
+
+        if (matchedHierarchyNames.isEmpty()) {
+            row.status = QStringLiteral("SKIP");
+            row.errorMessage = detectedHierarchyNames.isEmpty()
+                ? tr("Pure-animation entry does not declare any hierarchy names.")
+                : tr("Pure-animation entry does not match the human skeleton allowlist.");
+            ++skippedCount;
+            WritePureAnimationCopyCsvRow(reportStream, row);
+            reportStream.flush();
+            continue;
+        }
+
+        QStringList copyTargets;
+        QString copyError;
+        for (const QString& hierarchyName : matchedHierarchyNames) {
+            const auto folderIt = allowlist.folderNameByNormalized.find(hierarchyName);
+            const QString folderName = folderIt != allowlist.folderNameByNormalized.end()
+                ? folderIt->second
+                : SanitizePathComponent(hierarchyName);
+            const QString destinationPath = QDir(outDir).absoluteFilePath(
+                QDir::cleanPath(folderName + QLatin1Char('/') + input.relativePath));
+
+            QString writeError;
+            if (!WriteAllBytes(destinationPath, sourceBytes, writeError)) {
+                copyError = writeError;
+                break;
+            }
+
+            copyTargets << QDir::toNativeSeparators(destinationPath);
+        }
+
+        row.copiesWritten = copyTargets.size();
+        row.copyTargets = copyTargets.join(QStringLiteral(" | "));
+
+        if (!copyError.isEmpty()) {
+            row.status = QStringLiteral("FAIL");
+            row.errorMessage = copyError;
+            ++failureCount;
+        }
+        else {
+            row.status = QStringLiteral("COPIED");
+            ++copiedEntryCount;
+            copiesWrittenCount += row.copiesWritten;
+        }
+
+        WritePureAnimationCopyCsvRow(reportStream, row);
+        reportStream.flush();
+    }
+
+    progress.setValue(static_cast<int>(archiveInputs.size()));
+    reportFile.close();
+    lastDirectory = srcDir;
+
+    QString summary =
+        tr("%1\n\nArchive entries discovered: %2\nPure-animation entries: %3\nCopied entries: %4\nCopies written: %5\nSkipped: %6\nFailed: %7\nReport: %8")
+            .arg(canceled ? tr("Copy canceled.") : tr("Copy completed."))
+            .arg(static_cast<int>(archiveInputs.size()))
+            .arg(pureAnimationCount)
+            .arg(copiedEntryCount)
+            .arg(copiesWrittenCount)
+            .arg(skippedCount)
+            .arg(failureCount)
+            .arg(QDir::toNativeSeparators(reportPath));
+
+    if (!discoveryWarnings.isEmpty()) {
+        QStringList preview = discoveryWarnings.mid(0, 10);
+        if (discoveryWarnings.size() > preview.size()) {
+            preview << tr("... (%1 additional warnings)")
+                .arg(discoveryWarnings.size() - preview.size());
+        }
+        summary += tr("\n\nArchive scan warnings (%1):\n%2")
+            .arg(discoveryWarnings.size())
+            .arg(preview.join("\n"));
+    }
+
+    if (canceled || failureCount > 0 || !discoveryWarnings.isEmpty()) {
+        QMessageBox::warning(this, tr("Copy Pure Human Animations by Skeleton"), summary);
+    }
+    else {
+        QMessageBox::information(this, tr("Copy Pure Human Animations by Skeleton"), summary);
     }
 }
 

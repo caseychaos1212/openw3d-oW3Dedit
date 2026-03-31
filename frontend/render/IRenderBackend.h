@@ -30,6 +30,7 @@ struct RenderSettings {
     bool lockLodLevel = false;
     int lockedLodLevel = 0;
     bool showCameraGizmo = true;
+    bool showPivotMarkers = true;
 };
 
 struct FrameStats {

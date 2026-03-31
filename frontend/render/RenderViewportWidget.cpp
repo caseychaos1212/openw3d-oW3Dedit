@@ -1290,7 +1290,7 @@ void RenderViewportWidget::BuildVisibleInstances(const Vec3& cameraPos) {
         if (pivotIndex < 0 || pivotIndex >= static_cast<int>(worlds.size())) {
             return fallback;
         }
-        return worlds[static_cast<std::size_t>(pivotIndex)];
+        return Multiply(worlds[static_cast<std::size_t>(pivotIndex)], fallback);
     };
 
     for (std::size_t lodGroupIndex = 0; lodGroupIndex < m_sceneResult.scene.lodGroups.size(); ++lodGroupIndex) {
@@ -1317,7 +1317,8 @@ void RenderViewportWidget::BuildVisibleInstances(const Vec3& cameraPos) {
                 continue;
             }
 
-            const Mat4 world = getWorldForBinding(entry.hierarchyIndex, entry.pivotIndex, Mat4::Identity());
+            const Mat4 world =
+                getWorldForBinding(entry.hierarchyIndex, entry.pivotIndex, entry.localTransform);
             const Vec3 worldCenter = TransformPoint(world, mesh.boundsCenter);
             const float distanceToCamera = Length(worldCenter - cameraPos);
 
@@ -1829,7 +1830,7 @@ void RenderViewportWidget::DrawPivotMarkersOverlay(
     const std::vector<std::vector<Mat4>>& hierarchyWorld,
     const Mat4& viewProjection)
 {
-    if (hierarchyWorld.empty()) {
+    if (!m_settings.showPivotMarkers || hierarchyWorld.empty()) {
         return;
     }
 
@@ -2264,7 +2265,7 @@ bool RenderViewportWidget::HandleGizmos(const Mat4& view, const Mat4& projection
 
     const Mat4 currentView = Mat4FromFloatArray(viewMatrix);
     const auto worlds = BuildHierarchyWorldTransforms();
-    DrawPivotMarkersOverlay(worlds, Multiply(currentView, projection));
+    DrawPivotMarkersOverlay(worlds, Multiply(projection, currentView));
 
     PivotKey key{};
     const ::ChunkItem* pivotsChunk = nullptr;
