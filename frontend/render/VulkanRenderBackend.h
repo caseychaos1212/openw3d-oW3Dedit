@@ -18,12 +18,17 @@ public:
     void Resize(uint32_t width, uint32_t height) override;
     void SetCamera(const CameraState& camera) override;
     void SetRenderSettings(const RenderSettings& settings) override;
+    void SetAnimationPlayback(const AnimationPlaybackState& playback) override;
+    void SetAnimationEditDraft(const std::optional<RenderAnimationEditDraft>& draft) override;
     void SetSelectedInstance(const std::optional<RenderInstanceKey>& selected) override;
     void SetTransformOverrides(
         const std::unordered_map<RenderInstanceKey, Mat4, RenderInstanceKeyHash>& overrides) override;
+    void SetPivotLocalOverrides(
+        const std::unordered_map<RenderPivotOverrideKey, Mat4, RenderPivotOverrideKeyHash>& overrides) override;
     void SetHiddenInstances(
         const std::unordered_set<RenderInstanceKey, RenderInstanceKeyHash>& hidden) override;
     void RenderFrame(const std::function<void()>& overlayCallback = {}) override;
+    bool CaptureFrame(QImage& outImage) override;
     FrameStats GetFrameStats() const override;
     void* NativeDeviceHandle() const override { return nullptr; }
     void* NativeDeviceContextHandle() const override { return nullptr; }
@@ -32,6 +37,7 @@ private:
     RenderScene m_scene{};
     CameraState m_camera{};
     RenderSettings m_settings{};
+    AnimationPlaybackState m_animationPlayback{};
 };
 
 } // namespace OW3D::Render

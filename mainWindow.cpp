@@ -14,6 +14,7 @@
 #include <QTableWidget>
 #include <QAbstractItemView>
 #include <QStackedWidget>
+#include <QHBoxLayout>
 #include <QVBoxLayout>
 #include <QFormLayout>
 #include <QLineEdit>
@@ -27,6 +28,7 @@
 #include <QLabel>
 #include <QPlainTextEdit>
 #include <QGridLayout>
+#include <QProgressBar>
 #include <QStringList>
 #include <QKeySequence>
 #include <QDialog>
@@ -79,6 +81,8 @@
 #include <QSignalBlocker>
 #include <QTabWidget>
 #include <QSet>
+
+#include "thirdparty/SimpleGifWriter.h"
 
 using ordered_json = nlohmann::ordered_json;
 
@@ -172,6 +176,13 @@ static int CollectMeshCountFromRoots(
     }
     return static_cast<int>(meshChunks.size());
 }
+
+namespace {
+QString SanitizePathComponent(QString component);
+int GifDelayCentisecondsFromClipFrameRate(float frameRate);
+}
+
+static std::string NormalizeRenderPivotNameKey(const std::string& value);
 
 static void AddRenderReferenceNameVariants(
     const QString& name,
@@ -427,13 +438,614 @@ constexpr int kRenderAssetPathRole = Qt::UserRole;
 constexpr int kRenderAssetRoleRole = Qt::UserRole + 1;
 constexpr int kRenderAnimationIndexRole = Qt::UserRole;
 constexpr int kRenderBlendPivotIndexRole = Qt::UserRole;
+constexpr int kRenderBlendAxisCount = 6;
+constexpr int kRenderBlendPositionXAxis = 0;
+constexpr int kRenderBlendPositionYAxis = 1;
+constexpr int kRenderBlendPositionZAxis = 2;
+constexpr int kRenderBlendRotationXAxis = 3;
+constexpr int kRenderBlendRotationYAxis = 4;
+constexpr int kRenderBlendRotationZAxis = 5;
 
-static float AnimationClipDurationSeconds(const OW3D::Render::RenderAnimationClip& clip)
+static std::array<int, kRenderBlendAxisCount> DefaultRenderBlendPivotAxisPercents(
+    int translationPercent,
+    int rotationPercent)
 {
-    if (clip.frameRate <= 0.0f || clip.numFrames <= 1u) {
+    const int clampedTranslation = std::clamp(translationPercent, 0, 100);
+    const int clampedRotation = std::clamp(rotationPercent, 0, 100);
+    return {
+        clampedTranslation,
+        clampedTranslation,
+        clampedTranslation,
+        clampedRotation,
+        clampedRotation,
+        clampedRotation
+    };
+}
+
+static std::array<int, kRenderBlendAxisCount> ResolveRenderBlendPivotAxisPercents(
+    int translationPercent,
+    int rotationPercent,
+    const std::unordered_map<int, std::array<int, kRenderBlendAxisCount>>& perPivotPercents,
+    int pivotIndex)
+{
+    if (const auto it = perPivotPercents.find(pivotIndex); it != perPivotPercents.end()) {
+        return it->second;
+    }
+    return DefaultRenderBlendPivotAxisPercents(translationPercent, rotationPercent);
+}
+
+static bool RenderBlendPivotAxisPercentsHaveAnyBlend(
+    const std::array<int, kRenderBlendAxisCount>& axisPercents)
+{
+    return std::any_of(
+        axisPercents.begin(),
+        axisPercents.end(),
+        [](int value) { return value > 0; });
+}
+
+static bool RenderBlendPivotAxisPercentsMatchDefaults(
+    const std::array<int, kRenderBlendAxisCount>& axisPercents,
+    int translationPercent,
+    int rotationPercent)
+{
+    return axisPercents == DefaultRenderBlendPivotAxisPercents(
+        translationPercent,
+        rotationPercent);
+}
+
+static QString FormatRenderBlendPivotAxisPercentsSummary(
+    const std::array<int, kRenderBlendAxisCount>& axisPercents)
+{
+    return QObject::tr("Pos X %1%%, Y %2%%, Z %3%% | Rot X %4%%, Y %5%%, Z %6%%")
+        .arg(axisPercents[static_cast<std::size_t>(kRenderBlendPositionXAxis)])
+        .arg(axisPercents[static_cast<std::size_t>(kRenderBlendPositionYAxis)])
+        .arg(axisPercents[static_cast<std::size_t>(kRenderBlendPositionZAxis)])
+        .arg(axisPercents[static_cast<std::size_t>(kRenderBlendRotationXAxis)])
+        .arg(axisPercents[static_cast<std::size_t>(kRenderBlendRotationYAxis)])
+        .arg(axisPercents[static_cast<std::size_t>(kRenderBlendRotationZAxis)]);
+}
+
+static uint32_t EffectiveRenderAnimationFrameCount(
+    const OW3D::Render::RenderAnimationClip& clip,
+    const OW3D::Render::RenderAnimationEditDraft* draft = nullptr)
+{
+    return OW3D::Render::ResolveAnimationFrameCount(&clip, draft);
+}
+
+static float EffectiveRenderAnimationFrameRate(
+    const OW3D::Render::RenderAnimationClip& clip,
+    const OW3D::Render::RenderAnimationEditDraft* draft = nullptr)
+{
+    return OW3D::Render::ResolveAnimationFrameRate(&clip, draft);
+}
+
+static bool HasPendingRenderAnimationDraftChanges(
+    const OW3D::Render::RenderAnimationClip* clip,
+    const OW3D::Render::RenderAnimationEditDraft* draft)
+{
+    if (!clip || !draft) {
+        return false;
+    }
+    return !draft->pivotSamples.empty()
+        || draft->numFrames != clip->numFrames
+        || std::fabs(draft->frameRate - clip->frameRate) > 1.0e-4f;
+}
+
+static float AnimationClipDurationSeconds(
+    const OW3D::Render::RenderAnimationClip& clip,
+    const OW3D::Render::RenderAnimationEditDraft* draft = nullptr)
+{
+    const uint32_t numFrames = EffectiveRenderAnimationFrameCount(clip, draft);
+    const float frameRate = EffectiveRenderAnimationFrameRate(clip, draft);
+    if (frameRate <= 0.0f || numFrames <= 1u) {
         return 0.0f;
     }
-    return static_cast<float>(clip.numFrames - 1u) / clip.frameRate;
+    return static_cast<float>(numFrames - 1u) / frameRate;
+}
+
+static uint32_t ComputeResampledAnimationFrameCount(
+    uint32_t sourceNumFrames,
+    float sourceFrameRate,
+    float targetFrameRate)
+{
+    if (sourceNumFrames == 0u) {
+        return 0u;
+    }
+    if (sourceNumFrames <= 1u || sourceFrameRate <= 0.0f || targetFrameRate <= 0.0f) {
+        return sourceNumFrames;
+    }
+
+    const double intervalCount =
+        static_cast<double>(sourceNumFrames - 1u)
+        * static_cast<double>(targetFrameRate)
+        / static_cast<double>(sourceFrameRate);
+    const auto roundedIntervals =
+        static_cast<uint32_t>(std::max<long long>(0ll, std::llround(intervalCount)));
+    return roundedIntervals + 1u;
+}
+
+static int MapAnimationFrameIndexToFrameRate(
+    int frameIndex,
+    float sourceFrameRate,
+    float targetFrameRate,
+    uint32_t targetNumFrames)
+{
+    const int targetMaxFrame = std::max(0, static_cast<int>(targetNumFrames) - 1);
+    if (sourceFrameRate <= 0.0f || targetFrameRate <= 0.0f) {
+        return std::clamp(frameIndex, 0, targetMaxFrame);
+    }
+
+    const double mappedFrame =
+        static_cast<double>(std::max(frameIndex, 0))
+        * static_cast<double>(targetFrameRate)
+        / static_cast<double>(sourceFrameRate);
+    return std::clamp(
+        static_cast<int>(std::llround(mappedFrame)),
+        0,
+        targetMaxFrame);
+}
+
+template <typename KeyframeT>
+static bool AnimationTrackHasFrameKey(
+    const std::vector<KeyframeT>& track,
+    int frameIndex,
+    float epsilon = 1.0e-3f)
+{
+    return std::any_of(
+        track.begin(),
+        track.end(),
+        [frameIndex, epsilon](const KeyframeT& key) {
+            return std::fabs(key.frame - static_cast<float>(frameIndex)) <= epsilon;
+        });
+}
+
+static QString BuildPivotAnimationSourceKeyFlags(
+    const OW3D::Render::RenderPivotAnimation* pivotAnimation,
+    int frameIndex)
+{
+    if (!pivotAnimation || frameIndex < 0) {
+        return QString();
+    }
+
+    const bool translationKey =
+        AnimationTrackHasFrameKey(pivotAnimation->translationX, frameIndex)
+        || AnimationTrackHasFrameKey(pivotAnimation->translationY, frameIndex)
+        || AnimationTrackHasFrameKey(pivotAnimation->translationZ, frameIndex);
+    const bool rotationKey =
+        AnimationTrackHasFrameKey(pivotAnimation->rotation, frameIndex);
+
+    if (translationKey && rotationKey) {
+        return QStringLiteral("TR");
+    }
+    if (translationKey) {
+        return QStringLiteral("T");
+    }
+    if (rotationKey) {
+        return QStringLiteral("R");
+    }
+    return QString();
+}
+
+struct PivotOverrideBaseTimingPreview {
+    uint32_t frameCount = 0u;
+    float frameRate = 0.0f;
+    int selectedStartFrame = 0;
+    int selectedEndFrame = 0;
+    int appliedStartFrame = 0;
+    int appliedEndFrame = 0;
+    bool normalizationRequested = false;
+    bool normalizationApplied = false;
+    bool normalizationAlreadyMatchesSource = false;
+    bool normalizationRequiresValidFrameRates = false;
+};
+
+static PivotOverrideBaseTimingPreview ComputePivotOverrideBaseTimingPreview(
+    uint32_t baseNumFrames,
+    float baseFrameRate,
+    int requestedStartFrame,
+    int requestedEndFrame,
+    bool preserveSourceRate,
+    bool normalizeBaseToSourceFrameRate,
+    float sourceFrameRate)
+{
+    PivotOverrideBaseTimingPreview preview{};
+    preview.frameCount = baseNumFrames;
+    preview.frameRate = baseFrameRate;
+
+    const int maxFrame = std::max(0, static_cast<int>(baseNumFrames) - 1);
+    preview.selectedStartFrame =
+        std::clamp(requestedStartFrame, 0, maxFrame);
+    preview.selectedEndFrame =
+        std::clamp(std::max(requestedStartFrame, requestedEndFrame), 0, maxFrame);
+    preview.appliedStartFrame = preview.selectedStartFrame;
+    preview.appliedEndFrame = preview.selectedEndFrame;
+
+    if (!preserveSourceRate || !normalizeBaseToSourceFrameRate) {
+        return preview;
+    }
+
+    preview.normalizationRequested = true;
+    if (baseFrameRate <= 0.0f || sourceFrameRate <= 0.0f) {
+        preview.normalizationRequiresValidFrameRates = true;
+        return preview;
+    }
+
+    if (std::fabs(baseFrameRate - sourceFrameRate) <= 1.0e-4f) {
+        preview.normalizationAlreadyMatchesSource = true;
+        return preview;
+    }
+
+    preview.normalizationApplied = true;
+    preview.frameRate = sourceFrameRate;
+    preview.frameCount = ComputeResampledAnimationFrameCount(
+        baseNumFrames,
+        baseFrameRate,
+        sourceFrameRate);
+    preview.appliedStartFrame = MapAnimationFrameIndexToFrameRate(
+        preview.selectedStartFrame,
+        baseFrameRate,
+        preview.frameRate,
+        preview.frameCount);
+    preview.appliedEndFrame = MapAnimationFrameIndexToFrameRate(
+        preview.selectedEndFrame,
+        baseFrameRate,
+        preview.frameRate,
+        preview.frameCount);
+    if (preview.appliedEndFrame < preview.appliedStartFrame) {
+        preview.appliedEndFrame = preview.appliedStartFrame;
+    }
+    return preview;
+}
+
+static void RetimeAnimationEditDraft(
+    const OW3D::Render::RenderAnimationClip& clip,
+    OW3D::Render::RenderAnimationEditDraft& draft,
+    uint32_t targetNumFrames,
+    float targetFrameRate)
+{
+    const uint32_t sourceNumFrames = EffectiveRenderAnimationFrameCount(clip, &draft);
+    const float sourceFrameRate = EffectiveRenderAnimationFrameRate(clip, &draft);
+    if (sourceNumFrames == targetNumFrames
+        && std::fabs(sourceFrameRate - targetFrameRate) <= 1.0e-4f)
+    {
+        draft.numFrames = targetNumFrames;
+        draft.frameRate = targetFrameRate;
+        return;
+    }
+
+    const OW3D::Render::RenderAnimationEditDraft sourceDraft = draft;
+    std::vector<int> pivotIndices;
+    pivotIndices.reserve(clip.pivots.size() + sourceDraft.pivotSamples.size());
+    for (int pivotIndex = 0; pivotIndex < static_cast<int>(clip.pivots.size()); ++pivotIndex) {
+        pivotIndices.push_back(pivotIndex);
+    }
+    for (const auto& [pivotIndex, samples] : sourceDraft.pivotSamples) {
+        (void)samples;
+        if (pivotIndex >= static_cast<int>(clip.pivots.size())) {
+            pivotIndices.push_back(pivotIndex);
+        }
+    }
+
+    draft.sourceAnimationChunk = clip.sourceAnimationChunk;
+    draft.numFrames = targetNumFrames;
+    draft.frameRate = targetFrameRate;
+    draft.pivotSamples.clear();
+
+    for (const int pivotIndex : pivotIndices) {
+        OW3D::Render::RenderDensePivotAnimationSamples samples{};
+        samples.translationX.resize(targetNumFrames, 0.0f);
+        samples.translationY.resize(targetNumFrames, 0.0f);
+        samples.translationZ.resize(targetNumFrames, 0.0f);
+        samples.rotation.resize(
+            targetNumFrames,
+            OW3D::Render::Vec4{ 0.0f, 0.0f, 0.0f, 1.0f });
+
+        for (uint32_t frame = 0; frame < targetNumFrames; ++frame) {
+            float sourceFrame = 0.0f;
+            if (sourceNumFrames > 1u
+                && sourceFrameRate > 0.0f
+                && targetFrameRate > 0.0f)
+            {
+                sourceFrame = static_cast<float>(
+                    static_cast<double>(frame)
+                    * static_cast<double>(sourceFrameRate)
+                    / static_cast<double>(targetFrameRate));
+                sourceFrame = std::clamp(
+                    sourceFrame,
+                    0.0f,
+                    static_cast<float>(sourceNumFrames - 1u));
+            }
+            else if (targetNumFrames > 1u) {
+                sourceFrame = OW3D::Render::AnimationFrameFromNormalizedProgress(
+                    sourceNumFrames,
+                    static_cast<float>(frame)
+                        / static_cast<float>(targetNumFrames - 1u));
+            }
+
+            const OW3D::Render::Vec3 translation =
+                OW3D::Render::SamplePivotAnimationTranslation(
+                    &clip,
+                    pivotIndex,
+                    sourceFrame,
+                    &sourceDraft);
+            const OW3D::Render::Vec4 rotation =
+                OW3D::Render::SamplePivotAnimationRotation(
+                    &clip,
+                    pivotIndex,
+                    sourceFrame,
+                    &sourceDraft);
+            samples.translationX[frame] = translation.x;
+            samples.translationY[frame] = translation.y;
+            samples.translationZ[frame] = translation.z;
+            samples.rotation[frame] =
+                OW3D::Render::AnimationNormalizeQuat(rotation);
+        }
+
+        draft.pivotSamples[pivotIndex] = std::move(samples);
+    }
+}
+
+static std::vector<int> CollectRenderAnimationDraftPivotIndices(
+    const OW3D::Render::RenderAnimationClip& clip,
+    const OW3D::Render::RenderAnimationEditDraft* draft)
+{
+    std::vector<int> pivotIndices;
+    pivotIndices.reserve(clip.pivots.size() + (draft ? draft->pivotSamples.size() : 0u));
+    for (int pivotIndex = 0; pivotIndex < static_cast<int>(clip.pivots.size()); ++pivotIndex) {
+        pivotIndices.push_back(pivotIndex);
+    }
+    if (draft) {
+        for (const auto& [pivotIndex, samples] : draft->pivotSamples) {
+            (void)samples;
+            if (pivotIndex >= static_cast<int>(clip.pivots.size())) {
+                pivotIndices.push_back(pivotIndex);
+            }
+        }
+    }
+    std::sort(pivotIndices.begin(), pivotIndices.end());
+    pivotIndices.erase(std::unique(pivotIndices.begin(), pivotIndices.end()), pivotIndices.end());
+    return pivotIndices;
+}
+
+static void PrepareAnimationEditDraftFromStaticPose(
+    const OW3D::Render::RenderAnimationClip& clip,
+    OW3D::Render::RenderAnimationEditDraft& draft,
+    uint32_t targetNumFrames,
+    float targetFrameRate,
+    float sourcePoseFrame)
+{
+    const OW3D::Render::RenderAnimationEditDraft sourceDraft = draft;
+    const auto pivotIndices = CollectRenderAnimationDraftPivotIndices(clip, &sourceDraft);
+
+    draft.sourceAnimationChunk = clip.sourceAnimationChunk;
+    draft.numFrames = targetNumFrames;
+    draft.frameRate = targetFrameRate;
+    draft.pivotSamples.clear();
+
+    for (const int pivotIndex : pivotIndices) {
+        OW3D::Render::RenderDensePivotAnimationSamples samples{};
+        samples.translationX.resize(targetNumFrames, 0.0f);
+        samples.translationY.resize(targetNumFrames, 0.0f);
+        samples.translationZ.resize(targetNumFrames, 0.0f);
+        samples.rotation.resize(
+            targetNumFrames,
+            OW3D::Render::Vec4{ 0.0f, 0.0f, 0.0f, 1.0f });
+
+        const OW3D::Render::Vec3 translation =
+            OW3D::Render::SamplePivotAnimationTranslation(
+                &clip,
+                pivotIndex,
+                sourcePoseFrame,
+                &sourceDraft);
+        const OW3D::Render::Vec4 rotation =
+            OW3D::Render::AnimationNormalizeQuat(
+                OW3D::Render::SamplePivotAnimationRotation(
+                    &clip,
+                    pivotIndex,
+                    sourcePoseFrame,
+                    &sourceDraft));
+
+        for (uint32_t frameIndex = 0; frameIndex < targetNumFrames; ++frameIndex) {
+            samples.translationX[frameIndex] = translation.x;
+            samples.translationY[frameIndex] = translation.y;
+            samples.translationZ[frameIndex] = translation.z;
+            samples.rotation[frameIndex] = rotation;
+        }
+
+        draft.pivotSamples[pivotIndex] = std::move(samples);
+    }
+}
+
+struct RenderHandPinChain {
+    QString label;
+    int effectorPivotIndex = -1;
+    std::vector<int> jointPivotIndices;
+};
+
+struct RenderHandPinTarget {
+    RenderHandPinChain chain;
+    OW3D::Render::Vec3 worldPosition{};
+};
+
+static bool RenderPivotNameMatchesAnyVariant(
+    const std::string& pivotName,
+    std::initializer_list<const char*> variants)
+{
+    const std::string normalized = NormalizeRenderPivotNameKey(pivotName);
+    for (const char* variant : variants) {
+        if (normalized == NormalizeRenderPivotNameKey(variant ? variant : "")) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static int FindRenderPivotIndexByNameVariants(
+    const std::unordered_map<std::string, int>& pivotIndexByName,
+    std::initializer_list<const char*> variants)
+{
+    for (const char* variant : variants) {
+        const auto it = pivotIndexByName.find(
+            NormalizeRenderPivotNameKey(variant ? variant : ""));
+        if (it != pivotIndexByName.end()) {
+            return it->second;
+        }
+    }
+    return -1;
+}
+
+static std::optional<RenderHandPinChain> ResolveRenderHandPinChain(
+    const OW3D::Render::RenderHierarchy& hierarchy,
+    const std::unordered_map<std::string, int>& pivotIndexByName,
+    bool leftHand)
+{
+    const int effectorPivotIndex = leftHand
+        ? FindRenderPivotIndexByNameVariants(
+            pivotIndexByName,
+            { "C_L_HAND", "C L HAND" })
+        : FindRenderPivotIndexByNameVariants(
+            pivotIndexByName,
+            { "C_R_HAND", "C R HAND" });
+    if (effectorPivotIndex < 0
+        || effectorPivotIndex >= static_cast<int>(hierarchy.pivots.size())) {
+        return std::nullopt;
+    }
+
+    std::vector<int> jointPivotIndicesReversed;
+    for (int parentIndex = hierarchy.pivots[static_cast<std::size_t>(effectorPivotIndex)].parentIndex;
+        parentIndex >= 0 && parentIndex < static_cast<int>(hierarchy.pivots.size());
+        parentIndex = hierarchy.pivots[static_cast<std::size_t>(parentIndex)].parentIndex)
+    {
+        const auto& pivot = hierarchy.pivots[static_cast<std::size_t>(parentIndex)];
+        const bool matchesClavicle = leftHand
+            ? RenderPivotNameMatchesAnyVariant(pivot.name, { "C_L_CLAVICLE", "C L CLAVICLE" })
+            : RenderPivotNameMatchesAnyVariant(pivot.name, { "C_R_CLAVICLE", "C R CLAVICLE" });
+        const bool matchesUpperArm = leftHand
+            ? RenderPivotNameMatchesAnyVariant(pivot.name, { "C_L_UPPERARM", "C L UPPERARM" })
+            : RenderPivotNameMatchesAnyVariant(pivot.name, { "C_R_UPPERARM", "C R UPPERARM" });
+        const bool matchesForearm = leftHand
+            ? RenderPivotNameMatchesAnyVariant(pivot.name, { "C_L_FOREARM", "C L FOREARM" })
+            : RenderPivotNameMatchesAnyVariant(pivot.name, { "C_R_FOREARM", "C R FOREARM" });
+        if (matchesClavicle || matchesUpperArm || matchesForearm) {
+            jointPivotIndicesReversed.push_back(parentIndex);
+        }
+    }
+
+    if (jointPivotIndicesReversed.empty()) {
+        return std::nullopt;
+    }
+
+    std::reverse(jointPivotIndicesReversed.begin(), jointPivotIndicesReversed.end());
+    RenderHandPinChain chain{};
+    chain.label = leftHand ? QObject::tr("Left hand") : QObject::tr("Right hand");
+    chain.effectorPivotIndex = effectorPivotIndex;
+    chain.jointPivotIndices = std::move(jointPivotIndicesReversed);
+    return chain;
+}
+
+static OW3D::Render::AnimationPlaybackState BuildRenderAnimationPlaybackForFrame(
+    int activeAnimationIndex,
+    int frameIndex,
+    float frameRate)
+{
+    OW3D::Render::AnimationPlaybackState playback{};
+    playback.activeAnimationIndex = activeAnimationIndex;
+    playback.loop = false;
+    playback.playing = false;
+    playback.speed = 1.0f;
+    playback.timeSeconds = frameRate > 0.0f
+        ? static_cast<float>(frameIndex) / frameRate
+        : 0.0f;
+    return playback;
+}
+
+static OW3D::Render::Vec3 ExtractRenderTransformTranslation(const OW3D::Render::Mat4& transform)
+{
+    return OW3D::Render::AnimationRigidTransformTranslation(transform);
+}
+
+static OW3D::Render::Vec4 QuaternionFromAxisAngle(
+    OW3D::Render::Vec3 axis,
+    float angleRadians)
+{
+    axis = OW3D::Render::Normalize(axis);
+    if (OW3D::Render::Length(axis) <= 1.0e-6f || std::fabs(angleRadians) <= 1.0e-6f) {
+        return { 0.0f, 0.0f, 0.0f, 1.0f };
+    }
+
+    const float halfAngle = angleRadians * 0.5f;
+    const float sinHalf = std::sin(halfAngle);
+    return OW3D::Render::AnimationNormalizeQuat({
+        axis.x * sinHalf,
+        axis.y * sinHalf,
+        axis.z * sinHalf,
+        std::cos(halfAngle)
+    });
+}
+
+static OW3D::Render::Vec3 FallbackRotationAxis(const OW3D::Render::Vec3& direction)
+{
+    OW3D::Render::Vec3 axis =
+        OW3D::Render::Cross(direction, { 0.0f, 0.0f, 1.0f });
+    if (OW3D::Render::Length(axis) <= 1.0e-6f) {
+        axis = OW3D::Render::Cross(direction, { 0.0f, 1.0f, 0.0f });
+    }
+    if (OW3D::Render::Length(axis) <= 1.0e-6f) {
+        axis = { 1.0f, 0.0f, 0.0f };
+    }
+    return OW3D::Render::Normalize(axis);
+}
+
+static OW3D::Render::Mat4 RotateRigidTransformInWorldSpace(
+    const OW3D::Render::Mat4& currentWorld,
+    const OW3D::Render::Vec4& worldRotationDelta)
+{
+    OW3D::Render::Mat4 rotated =
+        OW3D::Render::Multiply(
+            OW3D::Render::QuaternionToMatrix(
+                worldRotationDelta.x,
+                worldRotationDelta.y,
+                worldRotationDelta.z,
+                worldRotationDelta.w),
+            OW3D::Render::AnimationOrthonormalizeRigidTransform(currentWorld));
+    rotated.m[12] = currentWorld.m[12];
+    rotated.m[13] = currentWorld.m[13];
+    rotated.m[14] = currentWorld.m[14];
+    return OW3D::Render::AnimationOrthonormalizeRigidTransform(rotated);
+}
+
+static int ComputePivotOverrideEffectiveEndFrame(
+    uint32_t baseNumFrames,
+    float baseFrameRate,
+    uint32_t sourceNumFrames,
+    float sourceFrameRate,
+    int startFrame,
+    int requestedEndFrame,
+    bool preserveSourceRate,
+    bool truncateToShorter)
+{
+    const int maxFrame = std::max(0, static_cast<int>(baseNumFrames) - 1);
+    const int clampedStartFrame = std::clamp(startFrame, 0, maxFrame);
+    const int clampedEndFrame =
+        std::clamp(std::max(startFrame, requestedEndFrame), 0, maxFrame);
+    if (!preserveSourceRate || !truncateToShorter) {
+        return clampedEndFrame;
+    }
+    if (sourceNumFrames == 0u) {
+        return clampedStartFrame - 1;
+    }
+
+    int effectiveEndFrame = clampedStartFrame + static_cast<int>(sourceNumFrames) - 1;
+    if (baseFrameRate > 0.0f && sourceFrameRate > 0.0f) {
+        const double maxBaseFrameOffset =
+            static_cast<double>(sourceNumFrames - 1u)
+            * static_cast<double>(baseFrameRate)
+            / static_cast<double>(sourceFrameRate);
+        effectiveEndFrame =
+            clampedStartFrame + std::max(0, static_cast<int>(std::floor(maxBaseFrameOffset + 1.0e-6)));
+    }
+
+    return std::min(clampedEndFrame, effectiveEndFrame);
 }
 
 static bool SceneHasCompatibleHierarchyForAnimation(
@@ -983,6 +1595,33 @@ static W3dVectorStruct EulerFromQuaternion(
     euler.Y = pitch;
     euler.Z = yaw;
     return euler;
+}
+
+static OW3D::Render::Vec4 QuaternionFromEulerRadians(
+    float roll,
+    float pitch,
+    float yaw)
+{
+    const float cy = std::cos(yaw * 0.5f);
+    const float sy = std::sin(yaw * 0.5f);
+    const float cp = std::cos(pitch * 0.5f);
+    const float sp = std::sin(pitch * 0.5f);
+    const float cr = std::cos(roll * 0.5f);
+    const float sr = std::sin(roll * 0.5f);
+
+    return OW3D::Render::AnimationNormalizeQuat({
+        sr * cp * cy - cr * sp * sy,
+        cr * sp * cy + sr * cp * sy,
+        cr * cp * sy - sr * sp * cy,
+        cr * cp * cy + sr * sp * sy
+    });
+}
+
+static float BlendWrappedAngleRadians(float baseAngle, float targetAngle, float weight)
+{
+    constexpr float kTwoPi = 6.2831853071795864769f;
+    const float shortestDelta = std::remainder(targetAngle - baseAngle, kTwoPi);
+    return baseAngle + shortestDelta * std::clamp(weight, 0.0f, 1.0f);
 }
 
 template <typename Enum>
@@ -2273,6 +2912,8 @@ static std::shared_ptr<ChunkItem> FindChunkByPtr(
 constexpr uint32_t kChunkAnimation = 0x0200;
 constexpr uint32_t kChunkAnimationHeader = 0x0201;
 constexpr uint32_t kChunkAnimationChannel = 0x0202;
+constexpr uint32_t kChunkCompressedAnimation = 0x0280;
+constexpr uint32_t kChunkCompressedAnimationHeader = 0x0281;
 
 struct RawAnimationChannelHeader {
     uint16_t firstFrame = 0;
@@ -2359,6 +3000,313 @@ static bool IsEditablePoseChannelFlag(uint16_t flags) {
     return flags == 0u || flags == 1u || flags == 2u || flags == 6u;
 }
 
+static void ResizeDensePivotAnimationSamples(
+    DensePivotAnimationSamples& samples,
+    uint32_t numFrames)
+{
+    samples.translationX.resize(numFrames, 0.0f);
+    samples.translationY.resize(numFrames, 0.0f);
+    samples.translationZ.resize(numFrames, 0.0f);
+    samples.rotation.resize(numFrames, OW3D::Render::Vec4{ 0.0f, 0.0f, 0.0f, 1.0f });
+}
+
+static void ResizeAnimationEditDraftFrameCount(
+    OW3D::Render::RenderAnimationEditDraft& draft,
+    uint32_t numFrames)
+{
+    draft.numFrames = numFrames;
+    for (auto& [pivotIndex, samples] : draft.pivotSamples) {
+        Q_UNUSED(pivotIndex);
+        ResizeDensePivotAnimationSamples(samples, numFrames);
+    }
+}
+
+static std::vector<std::vector<OW3D::Render::Mat4>> BuildRenderAnimationWorldTransformsForFrame(
+    const OW3D::Render::RenderScene& scene,
+    int activeAnimationIndex,
+    int frameIndex,
+    float frameRate,
+    const std::optional<OW3D::Render::RenderAnimationEditDraft>& draft,
+    const std::function<std::optional<OW3D::Render::Mat4>(int, int, const OW3D::Render::Mat4&)>& localOverride = {})
+{
+    const OW3D::Render::AnimationPlaybackState playback =
+        BuildRenderAnimationPlaybackForFrame(
+            activeAnimationIndex,
+            frameIndex,
+            frameRate);
+    return OW3D::Render::BuildAnimatedHierarchyWorldTransforms(
+        scene,
+        playback,
+        playback.timeSeconds,
+        draft,
+        localOverride);
+}
+
+static OW3D::Render::Mat4 ResolveHandPinParentWorldTransform(
+    const OW3D::Render::RenderScene& scene,
+    const OW3D::Render::RenderHierarchy& hierarchy,
+    int hierarchyIndex,
+    int pivotIndex,
+    const std::vector<std::vector<OW3D::Render::Mat4>>& worlds)
+{
+    const int parentIndex = hierarchy.pivots[static_cast<std::size_t>(pivotIndex)].parentIndex;
+    if (parentIndex >= 0
+        && hierarchyIndex >= 0
+        && hierarchyIndex < static_cast<int>(worlds.size())
+        && parentIndex < static_cast<int>(worlds[static_cast<std::size_t>(hierarchyIndex)].size())) {
+        return worlds[static_cast<std::size_t>(hierarchyIndex)][static_cast<std::size_t>(parentIndex)];
+    }
+    if (hierarchy.attachedHierarchyIndex >= 0
+        && hierarchy.attachedHierarchyIndex < static_cast<int>(worlds.size())
+        && hierarchy.attachedPivotIndex >= 0
+        && hierarchy.attachedPivotIndex < static_cast<int>(
+            worlds[static_cast<std::size_t>(hierarchy.attachedHierarchyIndex)].size())) {
+        return worlds[static_cast<std::size_t>(hierarchy.attachedHierarchyIndex)]
+            [static_cast<std::size_t>(hierarchy.attachedPivotIndex)];
+    }
+    Q_UNUSED(scene);
+    return OW3D::Render::Mat4::Identity();
+}
+
+static std::optional<OW3D::Render::Vec3> SampleRenderHandPinTargetWorldPosition(
+    const OW3D::Render::RenderScene& scene,
+    int activeAnimationIndex,
+    int hierarchyIndex,
+    int effectorPivotIndex,
+    int frameIndex,
+    float frameRate,
+    const std::optional<OW3D::Render::RenderAnimationEditDraft>& draft)
+{
+    const auto worlds = BuildRenderAnimationWorldTransformsForFrame(
+        scene,
+        activeAnimationIndex,
+        frameIndex,
+        frameRate,
+        draft);
+    if (hierarchyIndex < 0
+        || hierarchyIndex >= static_cast<int>(worlds.size())
+        || effectorPivotIndex < 0
+        || effectorPivotIndex >= static_cast<int>(worlds[static_cast<std::size_t>(hierarchyIndex)].size())) {
+        return std::nullopt;
+    }
+
+    return OW3D::Render::TransformPoint(
+        worlds[static_cast<std::size_t>(hierarchyIndex)][static_cast<std::size_t>(effectorPivotIndex)],
+        { 0.0f, 0.0f, 0.0f });
+}
+
+static void SyncRenderHandPinSamplesIntoDraft(
+    const std::unordered_map<int, OW3D::Render::RenderDensePivotAnimationSamples>& samplesByPivot,
+    const std::vector<int>& pivotIndices,
+    std::optional<OW3D::Render::RenderAnimationEditDraft>& draft)
+{
+    if (!draft.has_value()) {
+        return;
+    }
+
+    for (const int pivotIndex : pivotIndices) {
+        const auto samplesIt = samplesByPivot.find(pivotIndex);
+        if (samplesIt == samplesByPivot.end()) {
+            continue;
+        }
+        draft->pivotSamples[pivotIndex] = samplesIt->second;
+    }
+}
+
+static void ApplyRenderHandPinToFrame(
+    const OW3D::Render::RenderScene& scene,
+    const OW3D::Render::RenderHierarchy& hierarchy,
+    int hierarchyIndex,
+    const OW3D::Render::RenderAnimationClip& clip,
+    int activeAnimationIndex,
+    int frameIndex,
+    float frameRate,
+    const RenderHandPinTarget& handPinTarget,
+    const std::optional<OW3D::Render::RenderAnimationEditDraft>& draft,
+    std::unordered_map<int, OW3D::Render::Mat4>& localOverrides,
+    std::unordered_map<int, OW3D::Render::RenderDensePivotAnimationSamples>& samplesByPivot)
+{
+    constexpr int kMaxIterations = 12;
+    constexpr float kTargetTolerance = 0.01f;
+    constexpr float kMinVectorLength = 1.0e-4f;
+
+    localOverrides.clear();
+
+    const auto buildWorlds = [&]() {
+        return BuildRenderAnimationWorldTransformsForFrame(
+            scene,
+            activeAnimationIndex,
+            frameIndex,
+            frameRate,
+            draft,
+            [&](int candidateHierarchyIndex, int candidatePivotIndex, const OW3D::Render::Mat4&) -> std::optional<OW3D::Render::Mat4> {
+                if (candidateHierarchyIndex != hierarchyIndex) {
+                    return std::nullopt;
+                }
+                const auto it = localOverrides.find(candidatePivotIndex);
+                if (it == localOverrides.end()) {
+                    return std::nullopt;
+                }
+                return it->second;
+            });
+    };
+
+    auto worlds = buildWorlds();
+    if (hierarchyIndex < 0
+        || hierarchyIndex >= static_cast<int>(worlds.size())
+        || handPinTarget.chain.effectorPivotIndex < 0
+        || handPinTarget.chain.effectorPivotIndex >= static_cast<int>(worlds[static_cast<std::size_t>(hierarchyIndex)].size())) {
+        return;
+    }
+
+    for (int iteration = 0; iteration < kMaxIterations; ++iteration) {
+        worlds = buildWorlds();
+        const auto& hierarchyWorlds = worlds[static_cast<std::size_t>(hierarchyIndex)];
+        const OW3D::Render::Vec3 effectorPosition =
+            OW3D::Render::TransformPoint(
+                hierarchyWorlds[static_cast<std::size_t>(handPinTarget.chain.effectorPivotIndex)],
+                { 0.0f, 0.0f, 0.0f });
+        if (OW3D::Render::Length(handPinTarget.worldPosition - effectorPosition) <= kTargetTolerance) {
+            break;
+        }
+
+        bool adjustedAnyJoint = false;
+        for (auto itJoint = handPinTarget.chain.jointPivotIndices.rbegin();
+            itJoint != handPinTarget.chain.jointPivotIndices.rend();
+            ++itJoint) {
+            const int jointPivotIndex = *itJoint;
+            worlds = buildWorlds();
+            if (hierarchyIndex < 0
+                || hierarchyIndex >= static_cast<int>(worlds.size())
+                || jointPivotIndex < 0
+                || jointPivotIndex >= static_cast<int>(worlds[static_cast<std::size_t>(hierarchyIndex)].size())) {
+                continue;
+            }
+
+            const auto& currentHierarchyWorlds = worlds[static_cast<std::size_t>(hierarchyIndex)];
+            const OW3D::Render::Vec3 jointPosition =
+                OW3D::Render::TransformPoint(
+                    currentHierarchyWorlds[static_cast<std::size_t>(jointPivotIndex)],
+                    { 0.0f, 0.0f, 0.0f });
+            const OW3D::Render::Vec3 currentEffectorPosition =
+                OW3D::Render::TransformPoint(
+                    currentHierarchyWorlds[static_cast<std::size_t>(handPinTarget.chain.effectorPivotIndex)],
+                    { 0.0f, 0.0f, 0.0f });
+
+            const OW3D::Render::Vec3 toEffector = currentEffectorPosition - jointPosition;
+            const OW3D::Render::Vec3 toTarget = handPinTarget.worldPosition - jointPosition;
+            const float toEffectorLength = OW3D::Render::Length(toEffector);
+            const float toTargetLength = OW3D::Render::Length(toTarget);
+            if (toEffectorLength <= kMinVectorLength || toTargetLength <= kMinVectorLength) {
+                continue;
+            }
+
+            const OW3D::Render::Vec3 effectorDirection = toEffector * (1.0f / toEffectorLength);
+            const OW3D::Render::Vec3 targetDirection = toTarget * (1.0f / toTargetLength);
+            const float cosTheta = std::clamp(
+                OW3D::Render::Dot(effectorDirection, targetDirection),
+                -1.0f,
+                1.0f);
+            if (cosTheta >= 0.9999f) {
+                continue;
+            }
+
+            OW3D::Render::Vec3 axis =
+                OW3D::Render::Cross(effectorDirection, targetDirection);
+            if (OW3D::Render::Length(axis) <= 1.0e-6f) {
+                if (cosTheta <= -0.9999f) {
+                    axis = FallbackRotationAxis(effectorDirection);
+                }
+                else {
+                    continue;
+                }
+            }
+            const float angleRadians = std::acos(cosTheta);
+            const OW3D::Render::Vec4 deltaRotation =
+                QuaternionFromAxisAngle(axis, angleRadians);
+
+            const OW3D::Render::Mat4 currentJointWorld =
+                currentHierarchyWorlds[static_cast<std::size_t>(jointPivotIndex)];
+            const OW3D::Render::Mat4 rotatedJointWorld =
+                RotateRigidTransformInWorldSpace(
+                    currentJointWorld,
+                    deltaRotation);
+            const OW3D::Render::Mat4 parentWorld =
+                ResolveHandPinParentWorldTransform(
+                    scene,
+                    hierarchy,
+                    hierarchyIndex,
+                    jointPivotIndex,
+                    currentHierarchyWorlds.empty()
+                        ? std::vector<std::vector<OW3D::Render::Mat4>>{}
+                        : worlds);
+            OW3D::Render::Mat4 newLocal =
+                OW3D::Render::Multiply(
+                    OW3D::Render::Inverse(parentWorld),
+                    rotatedJointWorld);
+            newLocal =
+                OW3D::Render::AnimationOrthonormalizeRigidTransform(newLocal);
+
+            const OW3D::Render::Mat4 currentLocal =
+                localOverrides.contains(jointPivotIndex)
+                ? localOverrides.at(jointPivotIndex)
+                : OW3D::Render::ComposeAnimatedPivotLocalTransform(
+                    hierarchy,
+                    jointPivotIndex,
+                    &clip,
+                    static_cast<float>(frameIndex),
+                    draft ? &*draft : nullptr);
+            const OW3D::Render::Vec3 currentTranslation =
+                ExtractRenderTransformTranslation(currentLocal);
+            const OW3D::Render::Vec4 newLocalRotation =
+                OW3D::Render::AnimationQuaternionFromMatrix(newLocal);
+            localOverrides[jointPivotIndex] =
+                OW3D::Render::TransformFromTranslationRotation(
+                    currentTranslation,
+                    newLocalRotation.x,
+                    newLocalRotation.y,
+                    newLocalRotation.z,
+                    newLocalRotation.w);
+            adjustedAnyJoint = true;
+        }
+
+        if (!adjustedAnyJoint) {
+            break;
+        }
+    }
+
+    for (const int jointPivotIndex : handPinTarget.chain.jointPivotIndices) {
+        const auto localIt = localOverrides.find(jointPivotIndex);
+        if (localIt == localOverrides.end()) {
+            continue;
+        }
+        const OW3D::Render::Mat4 animationLocal =
+            OW3D::Render::AnimationOrthonormalizeRigidTransform(
+                OW3D::Render::Multiply(
+                    OW3D::Render::Inverse(
+                        hierarchy.pivots[static_cast<std::size_t>(jointPivotIndex)].localTransform),
+                    localIt->second));
+        const OW3D::Render::Vec4 animationRotation =
+            OW3D::Render::AnimationQuaternionFromMatrix(animationLocal);
+        auto samplesIt = samplesByPivot.find(jointPivotIndex);
+        if (samplesIt == samplesByPivot.end()) {
+            continue;
+        }
+        auto& samples = samplesIt->second;
+        if (frameIndex < 0
+            || frameIndex >= static_cast<int>(samples.translationX.size())
+            || frameIndex >= static_cast<int>(samples.translationY.size())
+            || frameIndex >= static_cast<int>(samples.translationZ.size())
+            || frameIndex >= static_cast<int>(samples.rotation.size())) {
+            continue;
+        }
+        samples.translationX[static_cast<std::size_t>(frameIndex)] = animationLocal.m[12];
+        samples.translationY[static_cast<std::size_t>(frameIndex)] = animationLocal.m[13];
+        samples.translationZ[static_cast<std::size_t>(frameIndex)] = animationLocal.m[14];
+        samples.rotation[static_cast<std::size_t>(frameIndex)] = animationRotation;
+    }
+}
+
 static float DeleteDenseFloatFrameValue(
     const std::vector<float>& samples,
     int frameIndex)
@@ -2416,6 +3364,7 @@ static OW3D::Render::Vec4 DeleteDenseQuatFrameValue(
 }
 
 static std::shared_ptr<ChunkItem> BuildRawAnimationChannelChunk(
+    uint16_t firstFrame,
     uint16_t pivotIndex,
     uint16_t flags,
     uint16_t vectorLen,
@@ -2430,8 +3379,12 @@ static std::shared_ptr<ChunkItem> BuildRawAnimationChannelChunk(
     const uint32_t frameCount =
         vectorLen == 0u ? 0u : static_cast<uint32_t>(samples.size() / vectorLen);
     const uint16_t lastFrame =
-        frameCount > 0u ? static_cast<uint16_t>(frameCount - 1u) : 0u;
-    const uint16_t firstFrame = 0u;
+        frameCount > 0u
+            ? static_cast<uint16_t>(
+                std::min<uint32_t>(
+                    static_cast<uint32_t>(std::numeric_limits<uint16_t>::max()),
+                    static_cast<uint32_t>(firstFrame) + frameCount - 1u))
+            : firstFrame;
 
     chunk->data.resize(12u + (samples.size() * sizeof(float)));
     std::memcpy(chunk->data.data() + 0u, &firstFrame, sizeof(uint16_t));
@@ -2449,6 +3402,169 @@ static std::shared_ptr<ChunkItem> BuildRawAnimationChannelChunk(
     }
     chunk->length = static_cast<uint32_t>(chunk->data.size());
     return chunk;
+}
+
+static std::shared_ptr<ChunkItem> BuildRawAnimationChannelChunk(
+    uint16_t pivotIndex,
+    uint16_t flags,
+    uint16_t vectorLen,
+    const std::vector<float>& samples)
+{
+    return BuildRawAnimationChannelChunk(0u, pivotIndex, flags, vectorLen, samples);
+}
+
+static bool ReadRawAnimationChannelSamples(
+    const std::shared_ptr<ChunkItem>& chunk,
+    const RawAnimationChannelHeader& header,
+    std::vector<float>& outSamples,
+    QString* outError = nullptr)
+{
+    outSamples.clear();
+    if (!chunk || chunk->id != kChunkAnimationChannel) {
+        if (outError) {
+            *outError = QObject::tr("Animation channel payload is missing.");
+        }
+        return false;
+    }
+    if (header.vectorLen == 0u) {
+        if (outError) {
+            *outError = QObject::tr("Animation channel vector length is invalid.");
+        }
+        return false;
+    }
+
+    const uint32_t frameCount =
+        (header.lastFrame >= header.firstFrame)
+        ? (static_cast<uint32_t>(header.lastFrame) - static_cast<uint32_t>(header.firstFrame) + 1u)
+        : 0u;
+    const std::size_t sampleCount =
+        static_cast<std::size_t>(frameCount) * static_cast<std::size_t>(header.vectorLen);
+    const std::size_t payloadBytes = 12u + (sampleCount * sizeof(float));
+    if (chunk->data.size() < payloadBytes) {
+        if (outError) {
+            *outError = QObject::tr("Animation channel sample payload is truncated.");
+        }
+        return false;
+    }
+
+    outSamples.resize(sampleCount);
+    if (!outSamples.empty()) {
+        std::memcpy(
+            outSamples.data(),
+            chunk->data.data() + 12u,
+            outSamples.size() * sizeof(float));
+    }
+    return true;
+}
+
+static bool UpdateRawAnimationHeaderTiming(
+    const std::shared_ptr<ChunkItem>& animationChunk,
+    uint32_t numFrames,
+    float frameRate,
+    QString* outError = nullptr)
+{
+    if (!animationChunk || animationChunk->id != kChunkAnimation) {
+        if (outError) {
+            *outError = QObject::tr("Writable raw animation chunk was not found.");
+        }
+        return false;
+    }
+
+    const auto headerChunk = FindFirstChildById(animationChunk, kChunkAnimationHeader);
+    if (!headerChunk || headerChunk->data.size() < sizeof(W3dAnimHeaderStruct)) {
+        if (outError) {
+            *outError = QObject::tr("Animation header chunk is missing or truncated.");
+        }
+        return false;
+    }
+
+    const uint32_t storedFrameRate = frameRate > 0.0f
+        ? std::max<uint32_t>(1u, static_cast<uint32_t>(std::llround(frameRate)))
+        : 0u;
+    std::memcpy(
+        headerChunk->data.data() + offsetof(W3dAnimHeaderStruct, NumFrames),
+        &numFrames,
+        sizeof(uint32_t));
+    std::memcpy(
+        headerChunk->data.data() + offsetof(W3dAnimHeaderStruct, FrameRate),
+        &storedFrameRate,
+        sizeof(uint32_t));
+    headerChunk->length = static_cast<uint32_t>(headerChunk->data.size());
+    return true;
+}
+
+static bool TruncateRawAnimationToFrameCount(
+    const std::shared_ptr<ChunkItem>& animationChunk,
+    uint32_t numFrames,
+    float frameRate,
+    QString* outError = nullptr)
+{
+    if (!UpdateRawAnimationHeaderTiming(animationChunk, numFrames, frameRate, outError)) {
+        return false;
+    }
+
+    std::vector<std::shared_ptr<ChunkItem>> newChildren;
+    newChildren.reserve(animationChunk->children.size());
+    for (const auto& child : animationChunk->children) {
+        if (!child) {
+            continue;
+        }
+        if (child->id != kChunkAnimationChannel) {
+            child->parent = animationChunk.get();
+            newChildren.push_back(child);
+            continue;
+        }
+
+        RawAnimationChannelHeader header{};
+        QString parseError;
+        if (!ParseRawAnimationChannelHeader(child, header, &parseError)) {
+            if (outError) {
+                *outError = parseError.isEmpty()
+                    ? QObject::tr("Failed to parse an animation channel while truncating the clip.")
+                    : parseError;
+            }
+            return false;
+        }
+
+        if (static_cast<uint32_t>(header.firstFrame) >= numFrames) {
+            continue;
+        }
+        if (static_cast<uint32_t>(header.lastFrame) < numFrames) {
+            child->parent = animationChunk.get();
+            newChildren.push_back(child);
+            continue;
+        }
+
+        std::vector<float> samples;
+        QString sampleError;
+        if (!ReadRawAnimationChannelSamples(child, header, samples, &sampleError)) {
+            if (outError) {
+                *outError = sampleError.isEmpty()
+                    ? QObject::tr("Failed to read animation channel samples while truncating the clip.")
+                    : sampleError;
+            }
+            return false;
+        }
+
+        const uint32_t keptFrameCount = numFrames - static_cast<uint32_t>(header.firstFrame);
+        samples.resize(
+            static_cast<std::size_t>(keptFrameCount)
+            * static_cast<std::size_t>(header.vectorLen));
+        auto replacement = BuildRawAnimationChannelChunk(
+            header.firstFrame,
+            header.pivot,
+            header.flags,
+            header.vectorLen,
+            samples);
+        replacement->parent = animationChunk.get();
+        newChildren.push_back(std::move(replacement));
+    }
+
+    animationChunk->children = std::move(newChildren);
+    animationChunk->hasSubChunks = true;
+    animationChunk->data.clear();
+    animationChunk->length = 0u;
+    return true;
 }
 
 static bool RewriteRawAnimationPivotPoseChannels(
@@ -5414,6 +6530,8 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     renderTransportLayout->setSpacing(6);
     renderPlayPauseButton = new QPushButton(tr("Play"), renderTransportRow);
     renderStopButton = new QPushButton(tr("Stop"), renderTransportRow);
+    renderAnimationExportGifButton = new QPushButton(tr("Export GIF..."), renderTransportRow);
+    renderAnimationResetDraftButton = new QPushButton(tr("Reset Draft"), renderTransportRow);
     renderAnimationLoopToggle = new QCheckBox(tr("Loop"), renderTransportRow);
     renderAnimationLoopToggle->setChecked(true);
     renderAnimationEditKeysToggle = new QCheckBox(tr("Edit Keys"), renderTransportRow);
@@ -5425,6 +6543,8 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     renderAnimationSpeedSpin->setValue(1.0);
     renderTransportLayout->addWidget(renderPlayPauseButton);
     renderTransportLayout->addWidget(renderStopButton);
+    renderTransportLayout->addWidget(renderAnimationExportGifButton);
+    renderTransportLayout->addWidget(renderAnimationResetDraftButton);
     renderTransportLayout->addWidget(renderAnimationLoopToggle);
     renderTransportLayout->addWidget(renderAnimationEditKeysToggle);
     renderTransportLayout->addWidget(renderSpeedLabel);
@@ -5441,7 +6561,82 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     renderAnimationLayout->addWidget(renderAnimationMetadataLabel);
     renderAnimationLayout->addWidget(renderAnimationEditStatusLabel);
 
-    renderAnimationBlendGroup = new QGroupBox(tr("Pivot Override"), renderAnimationTab);
+    auto* renderFrameRow = new QWidget(renderAnimationTab);
+    auto* renderFrameLayout = new QHBoxLayout(renderFrameRow);
+    renderFrameLayout->setContentsMargins(0, 0, 0, 0);
+    renderFrameLayout->setSpacing(8);
+
+    renderAnimationFrameSlider = new QSlider(Qt::Horizontal, renderFrameRow);
+    renderAnimationFrameSlider->setRange(0, 0);
+    renderAnimationFrameSlider->setEnabled(false);
+    renderFrameLayout->addWidget(renderAnimationFrameSlider, 1);
+
+    renderAnimationFrameLabel = new QLabel(tr("Frame 0 / 0"), renderFrameRow);
+    renderAnimationFrameLabel->setMinimumWidth(92);
+    renderAnimationFrameLabel->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+    renderFrameLayout->addWidget(renderAnimationFrameLabel);
+
+    renderAnimationLayout->addWidget(renderFrameRow);
+
+    auto* renderAnimationEditorTabs = new QTabWidget(renderAnimationTab);
+    renderAnimationEditorTabs->setDocumentMode(true);
+    renderAnimationLayout->addWidget(renderAnimationEditorTabs, 1);
+
+    auto* renderPrepTab = new QWidget(renderAnimationEditorTabs);
+    auto* renderPrepTabLayout = new QVBoxLayout(renderPrepTab);
+    renderPrepTabLayout->setContentsMargins(0, 0, 0, 0);
+    renderPrepTabLayout->setSpacing(0);
+    renderAnimationPrepGroup = new QGroupBox(tr("Clip Prep"), renderPrepTab);
+    auto* renderPrepLayout = new QVBoxLayout(renderAnimationPrepGroup);
+    renderPrepLayout->setContentsMargins(6, 6, 6, 6);
+    renderPrepLayout->setSpacing(6);
+
+    auto* renderPrepSourceRow = new QWidget(renderAnimationPrepGroup);
+    auto* renderPrepSourceLayout = new QHBoxLayout(renderPrepSourceRow);
+    renderPrepSourceLayout->setContentsMargins(0, 0, 0, 0);
+    renderPrepSourceLayout->setSpacing(6);
+    auto* renderPrepSourceLabel = new QLabel(tr("Match Timing To"), renderPrepSourceRow);
+    renderAnimationPrepSourceCombo = new QComboBox(renderPrepSourceRow);
+    renderAnimationPrepSourceCombo->setSizeAdjustPolicy(QComboBox::AdjustToContentsOnFirstShow);
+    renderPrepSourceLayout->addWidget(renderPrepSourceLabel);
+    renderPrepSourceLayout->addWidget(renderAnimationPrepSourceCombo, 1);
+    renderPrepLayout->addWidget(renderPrepSourceRow);
+
+    auto* renderPrepPoseRow = new QWidget(renderAnimationPrepGroup);
+    auto* renderPrepPoseLayout = new QHBoxLayout(renderPrepPoseRow);
+    renderPrepPoseLayout->setContentsMargins(0, 0, 0, 0);
+    renderPrepPoseLayout->setSpacing(6);
+    auto* renderPrepPoseLabel = new QLabel(tr("Static Pose Frame"), renderPrepPoseRow);
+    renderAnimationPrepStaticPoseFrameSpin = new QSpinBox(renderPrepPoseRow);
+    renderAnimationPrepStaticPoseFrameSpin->setRange(0, 0);
+    renderPrepPoseLayout->addWidget(renderPrepPoseLabel);
+    renderPrepPoseLayout->addWidget(renderAnimationPrepStaticPoseFrameSpin);
+    renderPrepPoseLayout->addStretch(1);
+    renderPrepLayout->addWidget(renderPrepPoseRow);
+
+    auto* renderPrepActionRow = new QWidget(renderAnimationPrepGroup);
+    auto* renderPrepActionLayout = new QHBoxLayout(renderPrepActionRow);
+    renderPrepActionLayout->setContentsMargins(0, 0, 0, 0);
+    renderPrepActionLayout->setSpacing(6);
+    renderAnimationPrepApplyButton = new QPushButton(tr("Apply To Draft"), renderPrepActionRow);
+    renderPrepActionLayout->addWidget(renderAnimationPrepApplyButton);
+    renderPrepActionLayout->addStretch(1);
+    renderPrepLayout->addWidget(renderPrepActionRow);
+
+    renderAnimationPrepStatusLabel = new QLabel(
+        tr("Select a writable base clip and a compatible source clip to conform the base timing."),
+        renderAnimationPrepGroup);
+    renderAnimationPrepStatusLabel->setWordWrap(true);
+    renderPrepLayout->addWidget(renderAnimationPrepStatusLabel);
+    renderPrepTabLayout->addWidget(renderAnimationPrepGroup);
+    renderPrepTabLayout->addStretch(1);
+    renderAnimationEditorTabs->addTab(renderPrepTab, tr("Clip Prep"));
+
+    auto* renderBlendTab = new QWidget(renderAnimationEditorTabs);
+    auto* renderBlendTabLayout = new QVBoxLayout(renderBlendTab);
+    renderBlendTabLayout->setContentsMargins(0, 0, 0, 0);
+    renderBlendTabLayout->setSpacing(0);
+    renderAnimationBlendGroup = new QGroupBox(tr("Pivot Override"), renderBlendTab);
     auto* renderBlendLayout = new QVBoxLayout(renderAnimationBlendGroup);
     renderBlendLayout->setContentsMargins(6, 6, 6, 6);
     renderBlendLayout->setSpacing(6);
@@ -5472,11 +6667,87 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     renderAnimationBlendPivotTree = new QTreeWidget(renderAnimationBlendGroup);
     renderAnimationBlendPivotTree->setColumnCount(1);
     renderAnimationBlendPivotTree->setHeaderHidden(true);
-    renderAnimationBlendPivotTree->setAlternatingRowColors(true);
-    renderAnimationBlendPivotTree->setSelectionMode(QAbstractItemView::NoSelection);
+    renderAnimationBlendPivotTree->setAlternatingRowColors(false);
+    renderAnimationBlendPivotTree->setSelectionMode(QAbstractItemView::SingleSelection);
+    renderAnimationBlendPivotTree->setSelectionBehavior(QAbstractItemView::SelectRows);
     renderAnimationBlendPivotTree->setRootIsDecorated(true);
+    renderAnimationBlendPivotTree->setUniformRowHeights(true);
+    renderAnimationBlendPivotTree->setMouseTracking(false);
+    renderAnimationBlendPivotTree->viewport()->setAttribute(Qt::WA_Hover, false);
+    renderAnimationBlendPivotTree->setStyleSheet(
+        QStringLiteral("QTreeView::item:hover { background: transparent; }"));
     renderAnimationBlendPivotTree->setMaximumHeight(180);
     renderBlendLayout->addWidget(renderAnimationBlendPivotTree);
+
+    renderAnimationBlendPivotWeightsGroup =
+        new QGroupBox(tr("Selected Pivot Axis Weights"), renderAnimationBlendGroup);
+    auto* renderBlendPivotWeightsLayout =
+        new QVBoxLayout(renderAnimationBlendPivotWeightsGroup);
+    renderBlendPivotWeightsLayout->setContentsMargins(6, 6, 6, 6);
+    renderBlendPivotWeightsLayout->setSpacing(6);
+    renderAnimationBlendPivotWeightsLabel = new QLabel(
+        tr("Select a pivot row above to override its per-axis weights. Uncustomized pivots use the default percentages below."),
+        renderAnimationBlendPivotWeightsGroup);
+    renderAnimationBlendPivotWeightsLabel->setWordWrap(true);
+    renderBlendPivotWeightsLayout->addWidget(renderAnimationBlendPivotWeightsLabel);
+    auto* renderBlendPivotWeightsGrid = new QGridLayout();
+    renderBlendPivotWeightsGrid->setContentsMargins(0, 0, 0, 0);
+    renderBlendPivotWeightsGrid->setHorizontalSpacing(6);
+    renderBlendPivotWeightsGrid->setVerticalSpacing(4);
+    const QStringList renderBlendAxisLabels{
+        tr("Pos X"),
+        tr("Pos Y"),
+        tr("Pos Z"),
+        tr("Rot X"),
+        tr("Rot Y"),
+        tr("Rot Z")
+    };
+    for (int axisIndex = 0; axisIndex < kRenderBlendAxisCount; ++axisIndex) {
+        auto* axisLabel =
+            new QLabel(renderBlendAxisLabels[static_cast<qsizetype>(axisIndex)], renderAnimationBlendPivotWeightsGroup);
+        auto* axisSpin = new QSpinBox(renderAnimationBlendPivotWeightsGroup);
+        axisSpin->setRange(0, 100);
+        axisSpin->setSingleStep(5);
+        axisSpin->setSuffix(QStringLiteral("%"));
+        axisSpin->setValue(100);
+        renderAnimationBlendPivotAxisPercentSpins[static_cast<std::size_t>(axisIndex)] = axisSpin;
+        renderBlendPivotWeightsGrid->addWidget(axisLabel, axisIndex / 3, (axisIndex % 3) * 2);
+        renderBlendPivotWeightsGrid->addWidget(axisSpin, axisIndex / 3, (axisIndex % 3) * 2 + 1);
+    }
+    renderBlendPivotWeightsLayout->addLayout(renderBlendPivotWeightsGrid);
+    auto* renderBlendPivotWeightsActionRow = new QWidget(renderAnimationBlendPivotWeightsGroup);
+    auto* renderBlendPivotWeightsActionLayout = new QHBoxLayout(renderBlendPivotWeightsActionRow);
+    renderBlendPivotWeightsActionLayout->setContentsMargins(0, 0, 0, 0);
+    renderBlendPivotWeightsActionLayout->setSpacing(6);
+    renderAnimationBlendResetPivotWeightsButton =
+        new QPushButton(tr("Use Defaults For Selected Pivot"), renderBlendPivotWeightsActionRow);
+    renderBlendPivotWeightsActionLayout->addWidget(renderAnimationBlendResetPivotWeightsButton);
+    renderBlendPivotWeightsActionLayout->addStretch(1);
+    renderBlendPivotWeightsLayout->addWidget(renderBlendPivotWeightsActionRow);
+    renderBlendLayout->addWidget(renderAnimationBlendPivotWeightsGroup);
+
+    auto* renderBlendAmountRow = new QWidget(renderAnimationBlendGroup);
+    auto* renderBlendAmountLayout = new QHBoxLayout(renderBlendAmountRow);
+    renderBlendAmountLayout->setContentsMargins(0, 0, 0, 0);
+    renderBlendAmountLayout->setSpacing(6);
+    auto* renderBlendPositionPercentLabel = new QLabel(tr("Default Position %"), renderBlendAmountRow);
+    renderAnimationBlendTranslationPercentSpin = new QSpinBox(renderBlendAmountRow);
+    renderAnimationBlendTranslationPercentSpin->setRange(0, 100);
+    renderAnimationBlendTranslationPercentSpin->setSingleStep(5);
+    renderAnimationBlendTranslationPercentSpin->setSuffix(QStringLiteral("%"));
+    renderAnimationBlendTranslationPercentSpin->setValue(100);
+    auto* renderBlendRotationPercentLabel = new QLabel(tr("Default Rotation %"), renderBlendAmountRow);
+    renderAnimationBlendRotationPercentSpin = new QSpinBox(renderBlendAmountRow);
+    renderAnimationBlendRotationPercentSpin->setRange(0, 100);
+    renderAnimationBlendRotationPercentSpin->setSingleStep(5);
+    renderAnimationBlendRotationPercentSpin->setSuffix(QStringLiteral("%"));
+    renderAnimationBlendRotationPercentSpin->setValue(100);
+    renderBlendAmountLayout->addWidget(renderBlendPositionPercentLabel);
+    renderBlendAmountLayout->addWidget(renderAnimationBlendTranslationPercentSpin);
+    renderBlendAmountLayout->addWidget(renderBlendRotationPercentLabel);
+    renderBlendAmountLayout->addWidget(renderAnimationBlendRotationPercentSpin);
+    renderBlendAmountLayout->addStretch(1);
+    renderBlendLayout->addWidget(renderBlendAmountRow);
 
     auto* renderBlendOptionsRow = new QWidget(renderAnimationBlendGroup);
     auto* renderBlendOptionsLayout = new QHBoxLayout(renderBlendOptionsRow);
@@ -5486,8 +6757,38 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
         new QCheckBox(tr("Include Descendants"), renderBlendOptionsRow);
     renderAnimationBlendIncludeDescendantsToggle->setChecked(true);
     renderBlendOptionsLayout->addWidget(renderAnimationBlendIncludeDescendantsToggle);
+    renderAnimationBlendTruncateToggle =
+        new QCheckBox(tr("Truncate To Shorter Clip"), renderBlendOptionsRow);
+    renderAnimationBlendTruncateToggle->setChecked(false);
+    renderBlendOptionsLayout->addWidget(renderAnimationBlendTruncateToggle);
+    renderAnimationBlendNormalizeFrameRateToggle =
+        new QCheckBox(tr("Normalize Base To Source FPS"), renderBlendOptionsRow);
+    renderAnimationBlendNormalizeFrameRateToggle->setChecked(false);
+    renderBlendOptionsLayout->addWidget(renderAnimationBlendNormalizeFrameRateToggle);
     renderBlendOptionsLayout->addStretch(1);
     renderBlendLayout->addWidget(renderBlendOptionsRow);
+
+    auto* renderBlendHandPinRow = new QWidget(renderAnimationBlendGroup);
+    auto* renderBlendHandPinLayout = new QHBoxLayout(renderBlendHandPinRow);
+    renderBlendHandPinLayout->setContentsMargins(0, 0, 0, 0);
+    renderBlendHandPinLayout->setSpacing(6);
+    renderAnimationBlendPinLeftHandToggle =
+        new QCheckBox(tr("Pin Left Hand"), renderBlendHandPinRow);
+    renderAnimationBlendPinLeftHandToggle->setChecked(false);
+    renderBlendHandPinLayout->addWidget(renderAnimationBlendPinLeftHandToggle);
+    renderAnimationBlendPinRightHandToggle =
+        new QCheckBox(tr("Pin Right Hand"), renderBlendHandPinRow);
+    renderAnimationBlendPinRightHandToggle->setChecked(false);
+    renderBlendHandPinLayout->addWidget(renderAnimationBlendPinRightHandToggle);
+    auto* renderBlendHandPinReferenceLabel =
+        new QLabel(tr("Reference Frame"), renderBlendHandPinRow);
+    renderAnimationBlendHandPinReferenceFrameSpin =
+        new QSpinBox(renderBlendHandPinRow);
+    renderAnimationBlendHandPinReferenceFrameSpin->setRange(0, 0);
+    renderBlendHandPinLayout->addWidget(renderBlendHandPinReferenceLabel);
+    renderBlendHandPinLayout->addWidget(renderAnimationBlendHandPinReferenceFrameSpin);
+    renderBlendHandPinLayout->addStretch(1);
+    renderBlendLayout->addWidget(renderBlendHandPinRow);
 
     auto* renderBlendRangeRow = new QWidget(renderAnimationBlendGroup);
     auto* renderBlendRangeLayout = new QHBoxLayout(renderBlendRangeRow);
@@ -5520,24 +6821,57 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
         renderAnimationBlendGroup);
     renderAnimationBlendStatusLabel->setWordWrap(true);
     renderBlendLayout->addWidget(renderAnimationBlendStatusLabel);
-    renderAnimationLayout->addWidget(renderAnimationBlendGroup);
+    renderBlendTabLayout->addWidget(renderAnimationBlendGroup);
+    renderBlendTabLayout->addStretch(1);
+    renderAnimationEditorTabs->addTab(renderBlendTab, tr("Pivot Override"));
 
-    auto* renderFrameRow = new QWidget(renderAnimationTab);
-    auto* renderFrameLayout = new QHBoxLayout(renderFrameRow);
-    renderFrameLayout->setContentsMargins(0, 0, 0, 0);
-    renderFrameLayout->setSpacing(8);
+    auto* renderPivotSheetTab = new QWidget(renderAnimationEditorTabs);
+    auto* renderPivotSheetTabLayout = new QVBoxLayout(renderPivotSheetTab);
+    renderPivotSheetTabLayout->setContentsMargins(0, 0, 0, 0);
+    renderPivotSheetTabLayout->setSpacing(0);
+    renderAnimationPivotSheetGroup = new QGroupBox(tr("Selected Pivot Sheet"), renderPivotSheetTab);
+    auto* renderPivotSheetLayout = new QVBoxLayout(renderAnimationPivotSheetGroup);
+    renderPivotSheetLayout->setContentsMargins(6, 6, 6, 6);
+    renderPivotSheetLayout->setSpacing(6);
 
-    renderAnimationFrameSlider = new QSlider(Qt::Horizontal, renderFrameRow);
-    renderAnimationFrameSlider->setRange(0, 0);
-    renderAnimationFrameSlider->setEnabled(false);
-    renderFrameLayout->addWidget(renderAnimationFrameSlider, 1);
+    renderAnimationPivotSheetLabel = new QLabel(
+        tr("Select a pivot in the viewport or Scene Browser to inspect sampled transform values."),
+        renderAnimationPivotSheetGroup);
+    renderAnimationPivotSheetLabel->setWordWrap(true);
+    renderPivotSheetLayout->addWidget(renderAnimationPivotSheetLabel);
 
-    renderAnimationFrameLabel = new QLabel(tr("Frame 0 / 0"), renderFrameRow);
-    renderAnimationFrameLabel->setMinimumWidth(92);
-    renderAnimationFrameLabel->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
-    renderFrameLayout->addWidget(renderAnimationFrameLabel);
+    renderAnimationPivotSheetStatusLabel = new QLabel(
+        tr("The sheet shows per-frame local translation and Euler rotation for the selected pivot. Euler angles can wrap around at +/-180 degrees."),
+        renderAnimationPivotSheetGroup);
+    renderAnimationPivotSheetStatusLabel->setWordWrap(true);
+    renderPivotSheetLayout->addWidget(renderAnimationPivotSheetStatusLabel);
 
-    renderAnimationLayout->addWidget(renderFrameRow);
+    renderAnimationPivotSheetTable = new QTableWidget(renderAnimationPivotSheetGroup);
+    renderAnimationPivotSheetTable->setColumnCount(8);
+    renderAnimationPivotSheetTable->setHorizontalHeaderLabels({
+        tr("Frame"),
+        tr("Src Key"),
+        tr("Pos X"),
+        tr("Pos Y"),
+        tr("Pos Z"),
+        tr("Rot X"),
+        tr("Rot Y"),
+        tr("Rot Z")
+    });
+    renderAnimationPivotSheetTable->setAlternatingRowColors(true);
+    renderAnimationPivotSheetTable->setSelectionBehavior(QAbstractItemView::SelectRows);
+    renderAnimationPivotSheetTable->setSelectionMode(QAbstractItemView::SingleSelection);
+    renderAnimationPivotSheetTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    renderAnimationPivotSheetTable->setWordWrap(false);
+    renderAnimationPivotSheetTable->verticalHeader()->setVisible(false);
+    renderAnimationPivotSheetTable->horizontalHeader()->setSectionResizeMode(QHeaderView::ResizeToContents);
+    renderAnimationPivotSheetTable->horizontalHeader()->setStretchLastSection(true);
+    renderAnimationPivotSheetTable->setMinimumHeight(220);
+    renderPivotSheetLayout->addWidget(renderAnimationPivotSheetTable);
+
+    renderPivotSheetTabLayout->addWidget(renderAnimationPivotSheetGroup);
+    renderPivotSheetTabLayout->addStretch(1);
+    renderAnimationEditorTabs->addTab(renderPivotSheetTab, tr("Pivot Sheet"));
 
     renderTabs->addTab(renderAnimationTabScroll, tr("Animations"));
     renderTabs->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Ignored);
@@ -5634,6 +6968,11 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
         });
     connect(
         renderViewport,
+        &OW3D::Render::RenderViewportWidget::pivotSelectionChanged,
+        this,
+        &MainWindow::handleViewportPivotSelectionChanged);
+    connect(
+        renderViewport,
         &OW3D::Render::RenderViewportWidget::pivotTransformCommitRequested,
         this,
         &MainWindow::handleViewportPivotTransformCommit);
@@ -5667,12 +7006,54 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     });
     connect(renderPlayPauseButton, &QPushButton::clicked, this, &MainWindow::toggleRenderAnimationPlayback);
     connect(renderStopButton, &QPushButton::clicked, this, &MainWindow::stopRenderAnimationPlayback);
+    connect(renderAnimationExportGifButton, &QPushButton::clicked, this, &MainWindow::exportActiveRenderAnimationGif);
+    connect(renderAnimationResetDraftButton, &QPushButton::clicked, this, &MainWindow::resetActiveRenderAnimationDraft);
     connect(renderAnimationLoopToggle, &QCheckBox::toggled, this, &MainWindow::handleRenderAnimationLoopChanged);
     connect(renderAnimationEditKeysToggle, &QCheckBox::toggled, this, &MainWindow::handleRenderAnimationEditKeysChanged);
+    connect(
+        renderAnimationPivotSheetTable,
+        &QTableWidget::cellClicked,
+        this,
+        &MainWindow::handleRenderAnimationPivotSheetCellClicked);
+    connect(renderAnimationPrepSourceCombo, qOverload<int>(&QComboBox::currentIndexChanged), this, &MainWindow::handleRenderPrepSourceClipChanged);
+    connect(renderAnimationPrepStaticPoseFrameSpin, qOverload<int>(&QSpinBox::valueChanged), this, &MainWindow::handleRenderPrepStaticPoseFrameChanged);
+    connect(renderAnimationPrepApplyButton, &QPushButton::clicked, this, &MainWindow::applyRenderAnimationClipPrep);
     connect(renderAnimationBlendSourceCombo, qOverload<int>(&QComboBox::currentIndexChanged), this, &MainWindow::handleRenderBlendSourceClipChanged);
     connect(renderAnimationBlendTimingCombo, qOverload<int>(&QComboBox::currentIndexChanged), this, &MainWindow::handleRenderBlendTimingModeChanged);
     connect(renderAnimationBlendPivotTree, &QTreeWidget::itemChanged, this, &MainWindow::handleRenderBlendPivotItemChanged);
+    connect(
+        renderAnimationBlendPivotTree,
+        &QTreeWidget::currentItemChanged,
+        this,
+        &MainWindow::handleRenderBlendPivotCurrentItemChanged);
+    connect(
+        renderAnimationBlendTranslationPercentSpin,
+        qOverload<int>(&QSpinBox::valueChanged),
+        this,
+        &MainWindow::handleRenderBlendTranslationPercentChanged);
+    connect(
+        renderAnimationBlendRotationPercentSpin,
+        qOverload<int>(&QSpinBox::valueChanged),
+        this,
+        &MainWindow::handleRenderBlendRotationPercentChanged);
+    for (QSpinBox* axisSpin : renderAnimationBlendPivotAxisPercentSpins) {
+        connect(
+            axisSpin,
+            qOverload<int>(&QSpinBox::valueChanged),
+            this,
+            &MainWindow::handleRenderBlendPivotAxisWeightChanged);
+    }
+    connect(
+        renderAnimationBlendResetPivotWeightsButton,
+        &QPushButton::clicked,
+        this,
+        &MainWindow::resetRenderBlendSelectedPivotWeights);
     connect(renderAnimationBlendIncludeDescendantsToggle, &QCheckBox::toggled, this, &MainWindow::handleRenderBlendIncludeDescendantsChanged);
+    connect(renderAnimationBlendTruncateToggle, &QCheckBox::toggled, this, &MainWindow::handleRenderBlendTruncateChanged);
+    connect(renderAnimationBlendNormalizeFrameRateToggle, &QCheckBox::toggled, this, &MainWindow::handleRenderBlendNormalizeFrameRateChanged);
+    connect(renderAnimationBlendPinLeftHandToggle, &QCheckBox::toggled, this, &MainWindow::handleRenderBlendPinLeftHandChanged);
+    connect(renderAnimationBlendPinRightHandToggle, &QCheckBox::toggled, this, &MainWindow::handleRenderBlendPinRightHandChanged);
+    connect(renderAnimationBlendHandPinReferenceFrameSpin, qOverload<int>(&QSpinBox::valueChanged), this, &MainWindow::handleRenderBlendHandPinReferenceFrameChanged);
     connect(renderAnimationBlendStartFrameSpin, qOverload<int>(&QSpinBox::valueChanged), this, &MainWindow::handleRenderBlendStartFrameChanged);
     connect(renderAnimationBlendEndFrameSpin, qOverload<int>(&QSpinBox::valueChanged), this, &MainWindow::handleRenderBlendEndFrameChanged);
     connect(renderAnimationBlendApplyButton, &QPushButton::clicked, this, &MainWindow::applyRenderAnimationPivotOverride);
@@ -5790,6 +7171,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     QAction* toggleRenderPlaybackAction = renderMenu->addAction(tr("Play/Pause Animation"));
     toggleRenderPlaybackAction->setShortcut(QKeySequence(Qt::Key_Space));
     QAction* stopRenderPlaybackAction = renderMenu->addAction(tr("Stop Animation"));
+    QAction* exportCurrentAnimationGifAction = renderMenu->addAction(tr("Export Current Animation GIF..."));
     connect(addRenderSkeletonsAction, &QAction::triggered, this, &MainWindow::addRenderSkeletons);
     connect(addRenderAnimationsAction, &QAction::triggered, this, &MainWindow::addRenderAnimations);
     connect(setRenderTextureFolderAction, &QAction::triggered, this, &MainWindow::selectRenderTextureFolder);
@@ -5798,6 +7180,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     connect(clearRenderAnimationsAction, &QAction::triggered, this, &MainWindow::clearRenderAnimationLibraries);
     connect(toggleRenderPlaybackAction, &QAction::triggered, this, &MainWindow::toggleRenderAnimationPlayback);
     connect(stopRenderPlaybackAction, &QAction::triggered, this, &MainWindow::stopRenderAnimationPlayback);
+    connect(exportCurrentAnimationGifAction, &QAction::triggered, this, &MainWindow::exportActiveRenderAnimationGif);
     auto batchMenu = menuBar()->addMenu(tr("Batch Tools"));
     auto exportChunksAct = new QAction(tr("Export Chunk List..."), this);
     batchMenu->addAction(exportChunksAct);
@@ -5816,6 +7199,11 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     batchMenu->addAction(copyPureHumanAnimationsAct);
     connect(copyPureHumanAnimationsAct, &QAction::triggered,
         this, &MainWindow::on_actionCopyPureHumanAnimationsBySkeleton_triggered);
+    auto exportSkeletonAGifsAct =
+        new QAction(tr("Export Animation GIFs..."), this);
+    batchMenu->addAction(exportSkeletonAGifsAct);
+    connect(exportSkeletonAGifsAct, &QAction::triggered,
+        this, &MainWindow::on_actionExportSkeletonAAnimationGifs_triggered);
 
     {
         QSettings settings;
@@ -7681,6 +9069,7 @@ void MainWindow::resetRenderAnimationPlayback() {
     currentRenderAnimationPlayback.loop = true;
     currentRenderAnimationPlayback.speed = 1.0f;
     currentRenderActiveClipIdentity.reset();
+    currentRenderAnimationPrepState = {};
     currentRenderAnimationBlendState = {};
     if (renderAnimationPlaybackTimer) {
         renderAnimationPlaybackTimer->stop();
@@ -7707,9 +9096,11 @@ OW3D::Render::RenderAnimationEditDraft* MainWindow::ensureRenderAnimationEditDra
     auto [it, inserted] = currentRenderAnimationDrafts.try_emplace(animationChunk.get());
     auto& draft = it->second;
     draft.sourceAnimationChunk = animationChunk.get();
-    if (inserted || draft.numFrames != clip.numFrames) {
+    if (inserted || draft.numFrames == 0u) {
         draft.numFrames = clip.numFrames;
-        draft.pivotSamples.clear();
+    }
+    if (inserted || draft.frameRate <= 0.0f) {
+        draft.frameRate = clip.frameRate;
     }
     return &draft;
 }
@@ -7723,9 +9114,6 @@ const OW3D::Render::RenderAnimationEditDraft* MainWindow::findRenderAnimationEdi
 
     const auto it = currentRenderAnimationDrafts.find(clip.sourceAnimationChunk);
     if (it == currentRenderAnimationDrafts.end()) {
-        return nullptr;
-    }
-    if (it->second.numFrames != clip.numFrames) {
         return nullptr;
     }
     return &it->second;
@@ -8194,7 +9582,12 @@ void MainWindow::refreshRenderPlaybackControls() {
         activeValid ? &animations[static_cast<std::size_t>(activeIndex)] : nullptr;
     const OW3D::Render::RenderAnimationEditDraft* activeDraft =
         findActiveRenderAnimationEditDraft();
-    const bool hasActiveDraft = activeDraft && !activeDraft->pivotSamples.empty();
+    const bool hasActiveDraft =
+        HasPendingRenderAnimationDraftChanges(activeClip, activeDraft);
+    const uint32_t activeFrameCount =
+        activeClip ? EffectiveRenderAnimationFrameCount(*activeClip, activeDraft) : 0u;
+    const float activeFrameRate =
+        activeClip ? EffectiveRenderAnimationFrameRate(*activeClip, activeDraft) : 0.0f;
     QString editKeysReason;
     const bool editableActiveClip = ResolveEditablePrimaryRenderAnimation(
         chunkData.get(),
@@ -8223,6 +9616,13 @@ void MainWindow::refreshRenderPlaybackControls() {
     if (renderStopButton) {
         renderStopButton->setEnabled(activeClip != nullptr);
     }
+    if (renderAnimationExportGifButton) {
+        renderAnimationExportGifButton->setEnabled(
+            activeClip != nullptr && SceneHasRenderableMeshData(currentRenderSceneResult));
+    }
+    if (renderAnimationResetDraftButton) {
+        renderAnimationResetDraftButton->setEnabled(hasActiveDraft);
+    }
     if (renderAnimationLoopToggle) {
         QSignalBlocker blocker(renderAnimationLoopToggle);
         renderAnimationLoopToggle->setChecked(currentRenderAnimationPlayback.loop);
@@ -8245,14 +9645,14 @@ void MainWindow::refreshRenderPlaybackControls() {
     int displayedMaxFrame = 0;
     if (renderAnimationFrameSlider) {
         renderAnimationFrameSlider->setEnabled(activeClip != nullptr);
-        if (!activeClip || activeClip->frameRate <= 0.0f || activeClip->numFrames == 0u) {
+        if (!activeClip || activeFrameRate <= 0.0f || activeFrameCount == 0u) {
             renderAnimationFrameSlider->setRange(0, 0);
             renderAnimationFrameSlider->setValue(0);
         }
         else {
-            const int maxFrame = std::max(0, static_cast<int>(activeClip->numFrames) - 1);
+            const int maxFrame = std::max(0, static_cast<int>(activeFrameCount) - 1);
             const float frameFloat =
-                currentRenderAnimationPlayback.timeSeconds * activeClip->frameRate;
+                currentRenderAnimationPlayback.timeSeconds * activeFrameRate;
             const int currentFrame = std::clamp(
                 static_cast<int>(std::round(frameFloat)),
                 0,
@@ -8289,9 +9689,9 @@ void MainWindow::refreshRenderPlaybackControls() {
     const QString sourceLabel = activeClip->sourceFileLabel.empty()
         ? tr("(Unknown Source)")
         : QString::fromStdString(activeClip->sourceFileLabel);
-    const float duration = AnimationClipDurationSeconds(*activeClip);
-    const float currentFrame = activeClip->frameRate > 0.0f
-        ? currentRenderAnimationPlayback.timeSeconds * activeClip->frameRate
+    const float duration = AnimationClipDurationSeconds(*activeClip, activeDraft);
+    const float currentFrame = activeFrameRate > 0.0f
+        ? currentRenderAnimationPlayback.timeSeconds * activeFrameRate
         : 0.0f;
 
     if (renderAnimationClipLabel) {
@@ -8303,8 +9703,8 @@ void MainWindow::refreshRenderPlaybackControls() {
             tr("Hierarchy: %1 | Source: %2 | Frames: %3 | FPS: %4 | Frame: %5 | Time: %6 / %7 s")
                 .arg(hierarchyName.isEmpty() ? tr("(none)") : hierarchyName)
                 .arg(sourceLabel)
-                .arg(QString::number(activeClip->numFrames))
-                .arg(QString::number(activeClip->frameRate, 'f', 2))
+                .arg(QString::number(activeFrameCount))
+                .arg(QString::number(activeFrameRate, 'f', 2))
                 .arg(QString::number(currentFrame, 'f', 2))
                 .arg(QString::number(currentRenderAnimationPlayback.timeSeconds, 'f', 2))
                 .arg(QString::number(duration, 'f', 2));
@@ -8321,21 +9721,20 @@ void MainWindow::refreshRenderPlaybackControls() {
                     ? tr("Only raw clips from the current file are editable.")
                     : editKeysReason);
         if (hasActiveDraft) {
-            statusText += tr(" Preview edits are pending save.");
+            statusText += tr(" Preview edits are pending save. Use Reset Draft to discard them.");
         }
         renderAnimationEditStatusLabel->setText(statusText);
     }
+
+    refreshRenderAnimationPivotSheetFrameHighlight();
 }
 
-void MainWindow::refreshRenderBlendControls() {
-    if (!renderAnimationBlendSourceCombo
-        || !renderAnimationBlendTimingCombo
-        || !renderAnimationBlendPivotTree
-        || !renderAnimationBlendIncludeDescendantsToggle
-        || !renderAnimationBlendStartFrameSpin
-        || !renderAnimationBlendEndFrameSpin
-        || !renderAnimationBlendApplyButton
-        || !renderAnimationBlendStatusLabel) {
+void MainWindow::refreshRenderAnimationPrepControls() {
+    if (!renderAnimationPrepGroup
+        || !renderAnimationPrepSourceCombo
+        || !renderAnimationPrepStaticPoseFrameSpin
+        || !renderAnimationPrepApplyButton
+        || !renderAnimationPrepStatusLabel) {
         return;
     }
 
@@ -8345,6 +9744,419 @@ void MainWindow::refreshRenderBlendControls() {
         activeIndex >= 0 && activeIndex < static_cast<int>(animations.size());
     const OW3D::Render::RenderAnimationClip* activeClip =
         activeValid ? &animations[static_cast<std::size_t>(activeIndex)] : nullptr;
+    const OW3D::Render::RenderAnimationEditDraft* activeDraft =
+        activeClip ? findRenderAnimationEditDraftForClip(*activeClip) : nullptr;
+    const uint32_t activeFrameCount =
+        activeClip ? EffectiveRenderAnimationFrameCount(*activeClip, activeDraft) : 0u;
+    const int activeMaxFrame = activeFrameCount > 0u
+        ? std::max(0, static_cast<int>(activeFrameCount) - 1)
+        : 0;
+
+    QString editReason;
+    const bool editableActiveClip = ResolveEditablePrimaryRenderAnimation(
+        chunkData.get(),
+        currentRenderSceneResult,
+        currentRenderAnimationPlayback,
+        nullptr,
+        nullptr,
+        nullptr,
+        &editReason);
+    const int hierarchyIndex =
+        (editableActiveClip && activeClip) ? findCompatibleRenderHierarchyIndexForAnimation(activeIndex) : -1;
+    const OW3D::Render::RenderHierarchy* hierarchy =
+        hierarchyIndex >= 0
+        && hierarchyIndex < static_cast<int>(currentRenderSceneResult.scene.hierarchies.size())
+        ? &currentRenderSceneResult.scene.hierarchies[static_cast<std::size_t>(hierarchyIndex)]
+        : nullptr;
+    const bool controlsEnabled = editableActiveClip && hierarchy != nullptr;
+
+    currentRenderAnimationPrepState.staticPoseFrame =
+        std::clamp(currentRenderAnimationPrepState.staticPoseFrame, 0, activeMaxFrame);
+
+    suppressRenderAnimationPrepUiSignals = true;
+    {
+        QSignalBlocker comboBlocker(renderAnimationPrepSourceCombo);
+        renderAnimationPrepSourceCombo->clear();
+        renderAnimationPrepSourceCombo->addItem(tr("(No Source Clip)"), -1);
+
+        int desiredTargetIndex = -1;
+        if (currentRenderAnimationPrepState.targetClipIdentity.has_value()) {
+            desiredTargetIndex = findRenderAnimationIndexByIdentity(
+                *currentRenderAnimationPrepState.targetClipIdentity);
+        }
+        if (desiredTargetIndex < 0) {
+            desiredTargetIndex = currentRenderAnimationPrepState.targetAnimationIndex;
+        }
+
+        int comboSelection = 0;
+        int firstCandidateSelection = -1;
+        for (int animationIndex = 0; animationIndex < static_cast<int>(animations.size()); ++animationIndex) {
+            if (animationIndex == activeIndex) {
+                continue;
+            }
+
+            const auto& candidate = animations[static_cast<std::size_t>(animationIndex)];
+            if (!candidate.supportedForPlayback) {
+                continue;
+            }
+            if (!hierarchy || std::find(
+                hierarchy->compatibleAnimationIndices.begin(),
+                hierarchy->compatibleAnimationIndices.end(),
+                animationIndex) == hierarchy->compatibleAnimationIndices.end()) {
+                continue;
+            }
+
+            const OW3D::Render::RenderAnimationEditDraft* candidateDraft =
+                findRenderAnimationEditDraftForClip(candidate);
+            const uint32_t candidateFrameCount =
+                EffectiveRenderAnimationFrameCount(candidate, candidateDraft);
+            const float candidateFrameRate =
+                EffectiveRenderAnimationFrameRate(candidate, candidateDraft);
+            const QString label = tr("%1 | %2 | %3 frames @ %4 FPS")
+                .arg(QString::fromStdString(candidate.fullName))
+                .arg(candidate.sourceFileLabel.empty()
+                    ? tr("(Unknown Source)")
+                    : QString::fromStdString(candidate.sourceFileLabel))
+                .arg(candidateFrameCount)
+                .arg(QString::number(candidateFrameRate, 'f', 2));
+            renderAnimationPrepSourceCombo->addItem(label, animationIndex);
+            const int comboIndex = renderAnimationPrepSourceCombo->count() - 1;
+            if (firstCandidateSelection < 0) {
+                firstCandidateSelection = comboIndex;
+            }
+            if (animationIndex == desiredTargetIndex) {
+                comboSelection = comboIndex;
+            }
+        }
+
+        if (comboSelection == 0 && firstCandidateSelection > 0) {
+            comboSelection = firstCandidateSelection;
+        }
+        renderAnimationPrepSourceCombo->setCurrentIndex(comboSelection);
+        currentRenderAnimationPrepState.targetAnimationIndex =
+            renderAnimationPrepSourceCombo->currentData().toInt();
+        if (currentRenderAnimationPrepState.targetAnimationIndex >= 0
+            && currentRenderAnimationPrepState.targetAnimationIndex < static_cast<int>(animations.size())) {
+            currentRenderAnimationPrepState.targetClipIdentity =
+                BuildRenderAnimationClipIdentity(
+                    animations[static_cast<std::size_t>(currentRenderAnimationPrepState.targetAnimationIndex)]);
+        }
+        else {
+            currentRenderAnimationPrepState.targetAnimationIndex = -1;
+            currentRenderAnimationPrepState.targetClipIdentity.reset();
+        }
+    }
+
+    {
+        QSignalBlocker frameBlocker(renderAnimationPrepStaticPoseFrameSpin);
+        renderAnimationPrepStaticPoseFrameSpin->setRange(0, activeMaxFrame);
+        renderAnimationPrepStaticPoseFrameSpin->setValue(
+            currentRenderAnimationPrepState.staticPoseFrame);
+    }
+    suppressRenderAnimationPrepUiSignals = false;
+
+    renderAnimationPrepGroup->setEnabled(controlsEnabled);
+    renderAnimationPrepSourceCombo->setEnabled(controlsEnabled);
+    renderAnimationPrepStaticPoseFrameSpin->setEnabled(controlsEnabled);
+    renderAnimationPrepApplyButton->setEnabled(
+        controlsEnabled && currentRenderAnimationPrepState.targetAnimationIndex >= 0);
+
+    QString statusText;
+    if (!activeClip) {
+        statusText = tr("Select a writable base clip to prepare.");
+    }
+    else if (!editableActiveClip) {
+        statusText = tr("Clip prep unavailable: %1").arg(
+            editReason.isEmpty()
+                ? tr("The active base clip is read-only.")
+                : editReason);
+    }
+    else if (!hierarchy) {
+        statusText = tr("Clip prep unavailable: the active clip has no compatible hierarchy.");
+    }
+    else if (currentRenderAnimationPrepState.targetAnimationIndex < 0) {
+        statusText = tr("Select a compatible source clip to match the base timing.");
+    }
+    else {
+        const auto& targetClip =
+            animations[static_cast<std::size_t>(currentRenderAnimationPrepState.targetAnimationIndex)];
+        const OW3D::Render::RenderAnimationEditDraft* targetDraft =
+            findRenderAnimationEditDraftForClip(targetClip);
+        statusText = tr(
+            "Prepare the active base clip by sampling pose frame %1 and duplicating it across %2 frames at %3 FPS from %4.")
+            .arg(currentRenderAnimationPrepState.staticPoseFrame)
+            .arg(EffectiveRenderAnimationFrameCount(targetClip, targetDraft))
+            .arg(QString::number(
+                EffectiveRenderAnimationFrameRate(targetClip, targetDraft),
+                'f',
+                2))
+            .arg(QString::fromStdString(targetClip.fullName));
+    }
+    renderAnimationPrepStatusLabel->setText(statusText);
+}
+
+void MainWindow::refreshRenderAnimationPivotSheetFrameHighlight() {
+    if (!renderAnimationPivotSheetTable) {
+        return;
+    }
+
+    const auto& animations = currentRenderSceneResult.scene.animations;
+    const int activeIndex = currentRenderAnimationPlayback.activeAnimationIndex;
+    if (activeIndex < 0 || activeIndex >= static_cast<int>(animations.size())) {
+        QSignalBlocker blocker(renderAnimationPivotSheetTable);
+        renderAnimationPivotSheetTable->clearSelection();
+        return;
+    }
+
+    const auto& clip = animations[static_cast<std::size_t>(activeIndex)];
+    const OW3D::Render::RenderAnimationEditDraft* activeDraft =
+        findRenderAnimationEditDraftForClip(clip);
+    const uint32_t frameCount = EffectiveRenderAnimationFrameCount(clip, activeDraft);
+    const float frameRate = EffectiveRenderAnimationFrameRate(clip, activeDraft);
+    if (frameCount == 0u || renderAnimationPivotSheetTable->rowCount() <= 0) {
+        QSignalBlocker blocker(renderAnimationPivotSheetTable);
+        renderAnimationPivotSheetTable->clearSelection();
+        return;
+    }
+
+    const int maxFrame = std::max(0, static_cast<int>(frameCount) - 1);
+    const int currentFrame = frameRate > 0.0f
+        ? std::clamp(
+            static_cast<int>(std::round(currentRenderAnimationPlayback.timeSeconds * frameRate)),
+            0,
+            maxFrame)
+        : 0;
+    if (currentFrame >= renderAnimationPivotSheetTable->rowCount()) {
+        QSignalBlocker blocker(renderAnimationPivotSheetTable);
+        renderAnimationPivotSheetTable->clearSelection();
+        return;
+    }
+
+    QSignalBlocker blocker(renderAnimationPivotSheetTable);
+    renderAnimationPivotSheetTable->clearSelection();
+    renderAnimationPivotSheetTable->selectRow(currentFrame);
+}
+
+void MainWindow::refreshRenderAnimationPivotSheet() {
+    if (!renderAnimationPivotSheetGroup
+        || !renderAnimationPivotSheetLabel
+        || !renderAnimationPivotSheetStatusLabel
+        || !renderAnimationPivotSheetTable) {
+        return;
+    }
+
+    QSignalBlocker tableBlocker(renderAnimationPivotSheetTable);
+    suppressRenderAnimationPivotSheetSignals = true;
+    renderAnimationPivotSheetTable->setUpdatesEnabled(false);
+    renderAnimationPivotSheetTable->clearContents();
+    renderAnimationPivotSheetTable->setRowCount(0);
+    renderAnimationPivotSheetTable->setEnabled(false);
+
+    auto finishRefresh = [this]() {
+        renderAnimationPivotSheetTable->setUpdatesEnabled(true);
+        suppressRenderAnimationPivotSheetSignals = false;
+        refreshRenderAnimationPivotSheetFrameHighlight();
+    };
+
+    const auto& hierarchies = currentRenderSceneResult.scene.hierarchies;
+    if (currentRenderSelectedPivotHierarchyIndex < 0
+        || currentRenderSelectedPivotIndex < 0
+        || currentRenderSelectedPivotHierarchyIndex >= static_cast<int>(hierarchies.size())) {
+        renderAnimationPivotSheetLabel->setText(
+            tr("Select a pivot in the viewport or Scene Browser to inspect sampled transform values."));
+        renderAnimationPivotSheetStatusLabel->setText(
+            tr("The sheet shows per-frame local translation and Euler rotation for the selected pivot. Euler angles can wrap around at +/-180 degrees."));
+        finishRefresh();
+        return;
+    }
+
+    const auto& selectedHierarchy =
+        hierarchies[static_cast<std::size_t>(currentRenderSelectedPivotHierarchyIndex)];
+    if (currentRenderSelectedPivotIndex >= static_cast<int>(selectedHierarchy.pivots.size())) {
+        renderAnimationPivotSheetLabel->setText(
+            tr("The selected pivot is no longer valid for the current scene."));
+        renderAnimationPivotSheetStatusLabel->setText(
+            tr("Pick a different pivot to inspect its sampled animation values."));
+        finishRefresh();
+        return;
+    }
+
+    QString selectedHierarchyName = selectedHierarchy.name.empty()
+        ? tr("Hierarchy %1").arg(currentRenderSelectedPivotHierarchyIndex)
+        : QString::fromStdString(selectedHierarchy.name);
+    QString selectedPivotName = selectedHierarchy.pivots[static_cast<std::size_t>(currentRenderSelectedPivotIndex)].name.empty()
+        ? tr("Pivot %1").arg(currentRenderSelectedPivotIndex)
+        : QString::fromStdString(
+            selectedHierarchy.pivots[static_cast<std::size_t>(currentRenderSelectedPivotIndex)].name);
+
+    const auto& animations = currentRenderSceneResult.scene.animations;
+    const int activeIndex = currentRenderAnimationPlayback.activeAnimationIndex;
+    if (activeIndex < 0 || activeIndex >= static_cast<int>(animations.size())) {
+        renderAnimationPivotSheetLabel->setText(
+            tr("Selected Pivot: %1 | %2").arg(selectedHierarchyName, selectedPivotName));
+        renderAnimationPivotSheetStatusLabel->setText(
+            tr("Select an active clip to inspect this pivot across frames."));
+        finishRefresh();
+        return;
+    }
+
+    const auto& activeClip = animations[static_cast<std::size_t>(activeIndex)];
+    const OW3D::Render::RenderAnimationEditDraft* activeDraft =
+        findRenderAnimationEditDraftForClip(activeClip);
+    const uint32_t frameCount = EffectiveRenderAnimationFrameCount(activeClip, activeDraft);
+    if (frameCount == 0u) {
+        renderAnimationPivotSheetLabel->setText(
+            tr("Selected Pivot: %1 | %2").arg(selectedHierarchyName, selectedPivotName));
+        renderAnimationPivotSheetStatusLabel->setText(
+            tr("The active clip reports zero frames."));
+        finishRefresh();
+        return;
+    }
+
+    const int clipHierarchyIndex = findCompatibleRenderHierarchyIndexForAnimation(activeIndex);
+    if (clipHierarchyIndex < 0
+        || clipHierarchyIndex >= static_cast<int>(hierarchies.size())) {
+        renderAnimationPivotSheetLabel->setText(
+            tr("Selected Pivot: %1 | %2").arg(selectedHierarchyName, selectedPivotName));
+        renderAnimationPivotSheetStatusLabel->setText(
+            tr("The active clip does not resolve to a compatible hierarchy for this pivot."));
+        finishRefresh();
+        return;
+    }
+
+    const auto& clipHierarchy = hierarchies[static_cast<std::size_t>(clipHierarchyIndex)];
+    const int clipPivotIndex = ResolveMappedRenderPivotIndex(
+        clipHierarchy,
+        BuildRenderPivotIndexByName(clipHierarchy),
+        selectedHierarchy,
+        currentRenderSelectedPivotIndex);
+    if (clipPivotIndex < 0) {
+        renderAnimationPivotSheetLabel->setText(
+            tr("Selected Pivot: %1 | %2").arg(selectedHierarchyName, selectedPivotName));
+        renderAnimationPivotSheetStatusLabel->setText(
+            tr("This selected pivot could not be matched into the active clip hierarchy."));
+        finishRefresh();
+        return;
+    }
+
+    QString clipPivotName = tr("Pivot %1").arg(clipPivotIndex);
+    if (clipPivotIndex >= 0
+        && clipPivotIndex < static_cast<int>(clipHierarchy.pivots.size())
+        && !clipHierarchy.pivots[static_cast<std::size_t>(clipPivotIndex)].name.empty()) {
+        clipPivotName =
+            QString::fromStdString(clipHierarchy.pivots[static_cast<std::size_t>(clipPivotIndex)].name);
+    }
+
+    renderAnimationPivotSheetLabel->setText(
+        tr("Selected Pivot: %1 | %2 | Clip Pivot: %3")
+            .arg(selectedHierarchyName, selectedPivotName, clipPivotName));
+
+    const bool pivotUsesDraftSamples =
+        activeDraft
+        && activeDraft->pivotSamples.find(clipPivotIndex) != activeDraft->pivotSamples.end();
+    renderAnimationPivotSheetStatusLabel->setText(
+        pivotUsesDraftSamples
+            ? tr("Click a frame row to scrub. Values are sampled from the current dense draft for this pivot. `Src Key` still marks raw source-clip keyframes. Euler angles can wrap around at +/-180 degrees.")
+            : tr("Click a frame row to scrub. Values are sampled from the active clip. `Src Key` marks raw source-clip keyframes at exact frames. Euler angles can wrap around at +/-180 degrees."));
+
+    const OW3D::Render::RenderPivotAnimation* sourcePivotAnimation =
+        clipPivotIndex >= 0
+        && clipPivotIndex < static_cast<int>(activeClip.pivots.size())
+        ? &activeClip.pivots[static_cast<std::size_t>(clipPivotIndex)]
+        : nullptr;
+
+    renderAnimationPivotSheetTable->setEnabled(true);
+    renderAnimationPivotSheetTable->setRowCount(static_cast<int>(frameCount));
+    constexpr float kRadToDeg = 57.29577951308232f;
+    for (int frameIndex = 0; frameIndex < static_cast<int>(frameCount); ++frameIndex) {
+        const OW3D::Render::Vec3 translation =
+            OW3D::Render::SamplePivotAnimationTranslation(
+                &activeClip,
+                clipPivotIndex,
+                static_cast<float>(frameIndex),
+                activeDraft);
+        const OW3D::Render::Vec4 rotation =
+            OW3D::Render::SamplePivotAnimationRotation(
+                &activeClip,
+                clipPivotIndex,
+                static_cast<float>(frameIndex),
+                activeDraft);
+        const W3dVectorStruct eulerRadians =
+            EulerFromQuaternion(rotation.x, rotation.y, rotation.z, rotation.w);
+        const QString sourceKeyFlags =
+            BuildPivotAnimationSourceKeyFlags(sourcePivotAnimation, frameIndex);
+
+        auto* frameItem = new QTableWidgetItem(QString::number(frameIndex));
+        frameItem->setData(Qt::UserRole, frameIndex);
+        frameItem->setTextAlignment(Qt::AlignRight | Qt::AlignVCenter);
+        renderAnimationPivotSheetTable->setItem(frameIndex, 0, frameItem);
+
+        auto* keyItem = new QTableWidgetItem(sourceKeyFlags);
+        keyItem->setTextAlignment(Qt::AlignCenter);
+        renderAnimationPivotSheetTable->setItem(frameIndex, 1, keyItem);
+
+        auto makeValueItem = [](float value, int decimals) {
+            auto* item = new QTableWidgetItem(QString::number(value, 'f', decimals));
+            item->setTextAlignment(Qt::AlignRight | Qt::AlignVCenter);
+            return item;
+        };
+        renderAnimationPivotSheetTable->setItem(frameIndex, 2, makeValueItem(translation.x, 3));
+        renderAnimationPivotSheetTable->setItem(frameIndex, 3, makeValueItem(translation.y, 3));
+        renderAnimationPivotSheetTable->setItem(frameIndex, 4, makeValueItem(translation.z, 3));
+        renderAnimationPivotSheetTable->setItem(
+            frameIndex,
+            5,
+            makeValueItem(eulerRadians.X * kRadToDeg, 2));
+        renderAnimationPivotSheetTable->setItem(
+            frameIndex,
+            6,
+            makeValueItem(eulerRadians.Y * kRadToDeg, 2));
+        renderAnimationPivotSheetTable->setItem(
+            frameIndex,
+            7,
+            makeValueItem(eulerRadians.Z * kRadToDeg, 2));
+    }
+    renderAnimationPivotSheetTable->resizeColumnsToContents();
+    finishRefresh();
+}
+
+void MainWindow::refreshRenderBlendControls() {
+    if (!renderAnimationBlendSourceCombo
+        || !renderAnimationBlendTimingCombo
+        || !renderAnimationBlendPivotTree
+        || !renderAnimationBlendPivotWeightsGroup
+        || !renderAnimationBlendPivotWeightsLabel
+        || !renderAnimationBlendIncludeDescendantsToggle
+        || !renderAnimationBlendTruncateToggle
+        || !renderAnimationBlendNormalizeFrameRateToggle
+        || !renderAnimationBlendPinLeftHandToggle
+        || !renderAnimationBlendPinRightHandToggle
+        || !renderAnimationBlendHandPinReferenceFrameSpin
+        || !renderAnimationBlendTranslationPercentSpin
+        || !renderAnimationBlendRotationPercentSpin
+        || !renderAnimationBlendResetPivotWeightsButton
+        || !renderAnimationBlendStartFrameSpin
+        || !renderAnimationBlendEndFrameSpin
+        || !renderAnimationBlendApplyButton
+        || !renderAnimationBlendStatusLabel) {
+        return;
+    }
+    for (QSpinBox* axisSpin : renderAnimationBlendPivotAxisPercentSpins) {
+        if (!axisSpin) {
+            return;
+        }
+    }
+
+    const auto& animations = currentRenderSceneResult.scene.animations;
+    const int activeIndex = currentRenderAnimationPlayback.activeAnimationIndex;
+    const bool activeValid =
+        activeIndex >= 0 && activeIndex < static_cast<int>(animations.size());
+    const OW3D::Render::RenderAnimationClip* activeClip =
+        activeValid ? &animations[static_cast<std::size_t>(activeIndex)] : nullptr;
+    const OW3D::Render::RenderAnimationEditDraft* activeDraft =
+        activeClip ? findRenderAnimationEditDraftForClip(*activeClip) : nullptr;
+    const uint32_t activeFrameCount =
+        activeClip ? EffectiveRenderAnimationFrameCount(*activeClip, activeDraft) : 0u;
 
     QString editReason;
     const bool editableActiveClip = ResolveEditablePrimaryRenderAnimation(
@@ -8368,6 +10180,8 @@ void MainWindow::refreshRenderBlendControls() {
     if (currentRenderAnimationBlendState.hierarchyKey != hierarchyKey) {
         currentRenderAnimationBlendState.hierarchyKey = hierarchyKey;
         currentRenderAnimationBlendState.pivotIndices.clear();
+        currentRenderAnimationBlendState.pivotAxisBlendPercents.clear();
+        currentRenderAnimationBlendState.selectedPivotIndex = -1;
     }
 
     if (hierarchy) {
@@ -8378,13 +10192,34 @@ void MainWindow::refreshRenderBlendControls() {
             }
         }
         currentRenderAnimationBlendState.pivotIndices = std::move(filteredPivots);
+
+        std::unordered_map<int, std::array<int, kRenderBlendAxisCount>> filteredAxisPercents;
+        for (const auto& [pivotIndex, axisPercents] : currentRenderAnimationBlendState.pivotAxisBlendPercents) {
+            if (pivotIndex >= 0
+                && pivotIndex < static_cast<int>(hierarchy->pivots.size())
+                && !RenderBlendPivotAxisPercentsMatchDefaults(
+                    axisPercents,
+                    currentRenderAnimationBlendState.translationBlendPercent,
+                    currentRenderAnimationBlendState.rotationBlendPercent)) {
+                filteredAxisPercents.emplace(pivotIndex, axisPercents);
+            }
+        }
+        currentRenderAnimationBlendState.pivotAxisBlendPercents = std::move(filteredAxisPercents);
+        if (currentRenderAnimationBlendState.selectedPivotIndex < 0
+            || currentRenderAnimationBlendState.selectedPivotIndex >= static_cast<int>(hierarchy->pivots.size())) {
+            currentRenderAnimationBlendState.selectedPivotIndex = -1;
+        }
     }
     else {
         currentRenderAnimationBlendState.pivotIndices.clear();
+        currentRenderAnimationBlendState.pivotAxisBlendPercents.clear();
+        currentRenderAnimationBlendState.selectedPivotIndex = -1;
     }
 
-    const int maxFrame = (activeClip && activeClip->numFrames > 0u)
-        ? std::max(0, static_cast<int>(activeClip->numFrames) - 1)
+    const uint32_t selectionFrameCount =
+        activeClip ? activeClip->numFrames : 0u;
+    const int maxFrame = selectionFrameCount > 0u
+        ? std::max(0, static_cast<int>(selectionFrameCount) - 1)
         : 0;
     if (!activeClip) {
         currentRenderAnimationBlendState.frameRangeInitialized = false;
@@ -8489,6 +10324,14 @@ void MainWindow::refreshRenderBlendControls() {
         renderAnimationBlendEndFrameSpin->setValue(currentRenderAnimationBlendState.endFrame);
     }
 
+    currentRenderAnimationBlendState.handPinReferenceFrame =
+        std::clamp(
+            currentRenderAnimationBlendState.handPinReferenceFrame,
+            0,
+            activeFrameCount > 0u
+                ? std::max(0, static_cast<int>(activeFrameCount) - 1)
+                : 0);
+
     {
         QSignalBlocker toggleBlocker(renderAnimationBlendIncludeDescendantsToggle);
         renderAnimationBlendIncludeDescendantsToggle->setChecked(
@@ -8496,8 +10339,56 @@ void MainWindow::refreshRenderBlendControls() {
     }
 
     {
+        QSignalBlocker toggleBlocker(renderAnimationBlendTruncateToggle);
+        renderAnimationBlendTruncateToggle->setChecked(
+            currentRenderAnimationBlendState.truncateToShorter);
+    }
+
+    {
+        QSignalBlocker toggleBlocker(renderAnimationBlendNormalizeFrameRateToggle);
+        renderAnimationBlendNormalizeFrameRateToggle->setChecked(
+            currentRenderAnimationBlendState.normalizeBaseToSourceFrameRate);
+    }
+
+    {
+        QSignalBlocker toggleBlocker(renderAnimationBlendPinLeftHandToggle);
+        renderAnimationBlendPinLeftHandToggle->setChecked(
+            currentRenderAnimationBlendState.pinLeftHand);
+    }
+
+    {
+        QSignalBlocker toggleBlocker(renderAnimationBlendPinRightHandToggle);
+        renderAnimationBlendPinRightHandToggle->setChecked(
+            currentRenderAnimationBlendState.pinRightHand);
+    }
+
+    {
+        QSignalBlocker frameBlocker(renderAnimationBlendHandPinReferenceFrameSpin);
+        renderAnimationBlendHandPinReferenceFrameSpin->setRange(
+            0,
+            activeFrameCount > 0u
+                ? std::max(0, static_cast<int>(activeFrameCount) - 1)
+                : 0);
+        renderAnimationBlendHandPinReferenceFrameSpin->setValue(
+            currentRenderAnimationBlendState.handPinReferenceFrame);
+    }
+
+    {
+        QSignalBlocker spinBlocker(renderAnimationBlendTranslationPercentSpin);
+        renderAnimationBlendTranslationPercentSpin->setValue(
+            currentRenderAnimationBlendState.translationBlendPercent);
+    }
+
+    {
+        QSignalBlocker spinBlocker(renderAnimationBlendRotationPercentSpin);
+        renderAnimationBlendRotationPercentSpin->setValue(
+            currentRenderAnimationBlendState.rotationBlendPercent);
+    }
+
+    {
         QSignalBlocker treeBlocker(renderAnimationBlendPivotTree);
         renderAnimationBlendPivotTree->clear();
+        QTreeWidgetItem* selectedItem = nullptr;
         if (hierarchy && !hierarchy->pivots.empty()) {
             std::vector<std::vector<int>> children(hierarchy->pivots.size());
             std::vector<int> roots;
@@ -8515,17 +10406,43 @@ void MainWindow::refreshRenderBlendControls() {
             std::function<void(QTreeWidgetItem*, int)> addPivotItem =
                 [&](QTreeWidgetItem* parentItem, int pivotIndex) {
                     const auto& pivot = hierarchy->pivots[static_cast<std::size_t>(pivotIndex)];
+                    const auto resolvedAxisPercents = ResolveRenderBlendPivotAxisPercents(
+                        currentRenderAnimationBlendState.translationBlendPercent,
+                        currentRenderAnimationBlendState.rotationBlendPercent,
+                        currentRenderAnimationBlendState.pivotAxisBlendPercents,
+                        pivotIndex);
+                    const bool hasCustomAxisPercents =
+                        currentRenderAnimationBlendState.pivotAxisBlendPercents.find(pivotIndex)
+                        != currentRenderAnimationBlendState.pivotAxisBlendPercents.end();
                     auto* item = parentItem
                         ? new QTreeWidgetItem(parentItem)
                         : new QTreeWidgetItem(renderAnimationBlendPivotTree);
-                    item->setText(0, QString::fromStdString(pivot.name));
+                    QString itemLabel = QString::fromStdString(pivot.name);
+                    if (hasCustomAxisPercents) {
+                        itemLabel += tr(" [custom]");
+                    }
+                    item->setText(0, itemLabel);
                     item->setData(0, kRenderBlendPivotIndexRole, pivotIndex);
-                    item->setFlags(item->flags() | Qt::ItemIsUserCheckable | Qt::ItemIsEnabled);
+                    item->setFlags(
+                        item->flags()
+                        | Qt::ItemIsUserCheckable
+                        | Qt::ItemIsEnabled
+                        | Qt::ItemIsSelectable);
                     item->setCheckState(
                         0,
                         currentRenderAnimationBlendState.pivotIndices.contains(pivotIndex)
                             ? Qt::Checked
                             : Qt::Unchecked);
+                    item->setToolTip(
+                        0,
+                        hasCustomAxisPercents
+                            ? tr("Custom axis weights. %1")
+                                .arg(FormatRenderBlendPivotAxisPercentsSummary(resolvedAxisPercents))
+                            : tr("Using default axis weights. %1")
+                                .arg(FormatRenderBlendPivotAxisPercentsSummary(resolvedAxisPercents)));
+                    if (pivotIndex == currentRenderAnimationBlendState.selectedPivotIndex) {
+                        selectedItem = item;
+                    }
                     for (const int childIndex : children[static_cast<std::size_t>(pivotIndex)]) {
                         addPivotItem(item, childIndex);
                     }
@@ -8536,22 +10453,28 @@ void MainWindow::refreshRenderBlendControls() {
             }
             renderAnimationBlendPivotTree->expandAll();
         }
+        if (selectedItem) {
+            renderAnimationBlendPivotTree->setCurrentItem(selectedItem);
+        }
     }
     suppressRenderAnimationBlendUiSignals = false;
 
+    refreshRenderBlendPivotWeightEditor();
     refreshRenderBlendStatus();
 }
 
-void MainWindow::refreshRenderBlendStatus() {
-    if (!renderAnimationBlendSourceCombo
-        || !renderAnimationBlendTimingCombo
-        || !renderAnimationBlendPivotTree
-        || !renderAnimationBlendIncludeDescendantsToggle
-        || !renderAnimationBlendStartFrameSpin
-        || !renderAnimationBlendEndFrameSpin
-        || !renderAnimationBlendApplyButton
-        || !renderAnimationBlendStatusLabel) {
+void MainWindow::refreshRenderBlendPivotWeightEditor() {
+    if (!renderAnimationBlendPivotWeightsGroup
+        || !renderAnimationBlendPivotWeightsLabel
+        || !renderAnimationBlendResetPivotWeightsButton
+        || !renderAnimationBlendTranslationPercentSpin
+        || !renderAnimationBlendRotationPercentSpin) {
         return;
+    }
+    for (QSpinBox* axisSpin : renderAnimationBlendPivotAxisPercentSpins) {
+        if (!axisSpin) {
+            return;
+        }
     }
 
     const auto& animations = currentRenderSceneResult.scene.animations;
@@ -8560,6 +10483,119 @@ void MainWindow::refreshRenderBlendStatus() {
         activeIndex >= 0 && activeIndex < static_cast<int>(animations.size());
     const OW3D::Render::RenderAnimationClip* activeClip =
         activeValid ? &animations[static_cast<std::size_t>(activeIndex)] : nullptr;
+
+    QString editReason;
+    const bool editableActiveClip = ResolveEditablePrimaryRenderAnimation(
+        chunkData.get(),
+        currentRenderSceneResult,
+        currentRenderAnimationPlayback,
+        nullptr,
+        nullptr,
+        nullptr,
+        &editReason);
+    const int hierarchyIndex =
+        (editableActiveClip && activeClip) ? findCompatibleRenderHierarchyIndexForAnimation(activeIndex) : -1;
+    const OW3D::Render::RenderHierarchy* hierarchy =
+        hierarchyIndex >= 0
+        && hierarchyIndex < static_cast<int>(currentRenderSceneResult.scene.hierarchies.size())
+        ? &currentRenderSceneResult.scene.hierarchies[static_cast<std::size_t>(hierarchyIndex)]
+        : nullptr;
+
+    const bool controlsEnabled = editableActiveClip && hierarchy != nullptr;
+    const int selectedPivotIndex = currentRenderAnimationBlendState.selectedPivotIndex;
+    const bool selectedPivotValid =
+        controlsEnabled
+        && selectedPivotIndex >= 0
+        && selectedPivotIndex < static_cast<int>(hierarchy->pivots.size());
+    renderAnimationBlendPivotWeightsGroup->setEnabled(controlsEnabled);
+
+    QString labelText;
+    if (!controlsEnabled) {
+        labelText = tr("Selected pivot axis weights are available when an editable base clip and compatible hierarchy are active.");
+    }
+    else if (!selectedPivotValid) {
+        labelText = tr("Select a pivot row above to override its per-axis weights. Uncustomized pivots use the default percentages below.");
+    }
+    else {
+        const bool hasCustomAxisPercents =
+            currentRenderAnimationBlendState.pivotAxisBlendPercents.find(selectedPivotIndex)
+            != currentRenderAnimationBlendState.pivotAxisBlendPercents.end();
+        const auto resolvedAxisPercents = ResolveRenderBlendPivotAxisPercents(
+            currentRenderAnimationBlendState.translationBlendPercent,
+            currentRenderAnimationBlendState.rotationBlendPercent,
+            currentRenderAnimationBlendState.pivotAxisBlendPercents,
+            selectedPivotIndex);
+        labelText = tr("%1. %2 %3")
+            .arg(QString::fromStdString(
+                hierarchy->pivots[static_cast<std::size_t>(selectedPivotIndex)].name))
+            .arg(
+                hasCustomAxisPercents
+                    ? tr("Custom axis weights are active.")
+                    : tr("Using default axis weights."))
+            .arg(FormatRenderBlendPivotAxisPercentsSummary(resolvedAxisPercents));
+    }
+    renderAnimationBlendPivotWeightsLabel->setText(labelText);
+
+    const auto resolvedAxisPercents = selectedPivotValid
+        ? ResolveRenderBlendPivotAxisPercents(
+            currentRenderAnimationBlendState.translationBlendPercent,
+            currentRenderAnimationBlendState.rotationBlendPercent,
+            currentRenderAnimationBlendState.pivotAxisBlendPercents,
+            selectedPivotIndex)
+        : DefaultRenderBlendPivotAxisPercents(
+            currentRenderAnimationBlendState.translationBlendPercent,
+            currentRenderAnimationBlendState.rotationBlendPercent);
+
+    for (int axisIndex = 0; axisIndex < kRenderBlendAxisCount; ++axisIndex) {
+        QSignalBlocker spinBlocker(
+            renderAnimationBlendPivotAxisPercentSpins[static_cast<std::size_t>(axisIndex)]);
+        renderAnimationBlendPivotAxisPercentSpins[static_cast<std::size_t>(axisIndex)]->setValue(
+            resolvedAxisPercents[static_cast<std::size_t>(axisIndex)]);
+        renderAnimationBlendPivotAxisPercentSpins[static_cast<std::size_t>(axisIndex)]->setEnabled(
+            selectedPivotValid);
+    }
+
+    renderAnimationBlendResetPivotWeightsButton->setEnabled(
+        selectedPivotValid
+        && currentRenderAnimationBlendState.pivotAxisBlendPercents.find(selectedPivotIndex)
+        != currentRenderAnimationBlendState.pivotAxisBlendPercents.end());
+}
+
+void MainWindow::refreshRenderBlendStatus() {
+    if (!renderAnimationBlendSourceCombo
+        || !renderAnimationBlendTimingCombo
+        || !renderAnimationBlendPivotTree
+        || !renderAnimationBlendPivotWeightsGroup
+        || !renderAnimationBlendPivotWeightsLabel
+        || !renderAnimationBlendIncludeDescendantsToggle
+        || !renderAnimationBlendTruncateToggle
+        || !renderAnimationBlendNormalizeFrameRateToggle
+        || !renderAnimationBlendPinLeftHandToggle
+        || !renderAnimationBlendPinRightHandToggle
+        || !renderAnimationBlendHandPinReferenceFrameSpin
+        || !renderAnimationBlendTranslationPercentSpin
+        || !renderAnimationBlendRotationPercentSpin
+        || !renderAnimationBlendResetPivotWeightsButton
+        || !renderAnimationBlendStartFrameSpin
+        || !renderAnimationBlendEndFrameSpin
+        || !renderAnimationBlendApplyButton
+        || !renderAnimationBlendStatusLabel) {
+        return;
+    }
+    for (QSpinBox* axisSpin : renderAnimationBlendPivotAxisPercentSpins) {
+        if (!axisSpin) {
+            return;
+        }
+    }
+
+    const auto& animations = currentRenderSceneResult.scene.animations;
+    const int activeIndex = currentRenderAnimationPlayback.activeAnimationIndex;
+    const bool activeValid =
+        activeIndex >= 0 && activeIndex < static_cast<int>(animations.size());
+    const OW3D::Render::RenderAnimationClip* activeClip =
+        activeValid ? &animations[static_cast<std::size_t>(activeIndex)] : nullptr;
+    const OW3D::Render::RenderAnimationEditDraft* activeDraft =
+        activeClip ? findRenderAnimationEditDraftForClip(*activeClip) : nullptr;
 
     QString editReason;
     const bool editableActiveClip = ResolveEditablePrimaryRenderAnimation(
@@ -8580,17 +10616,57 @@ void MainWindow::refreshRenderBlendStatus() {
         : nullptr;
 
     const bool controlsEnabled = editableActiveClip && hierarchy != nullptr;
+    const bool preserveSourceRate =
+        currentRenderAnimationBlendState.timingMode
+        == RenderAnimationBlendState::TimingMode::PreserveSourceRate;
+    const float activeFrameRate =
+        activeClip ? EffectiveRenderAnimationFrameRate(*activeClip, activeDraft) : 0.0f;
+    const uint32_t activeFrameCount =
+        activeClip ? EffectiveRenderAnimationFrameCount(*activeClip, activeDraft) : 0u;
+    const uint32_t selectedBaseFrameCount =
+        activeClip ? activeClip->numFrames : 0u;
+    const int selectedBaseMaxFrame = selectedBaseFrameCount > 0u
+        ? std::max(0, static_cast<int>(selectedBaseFrameCount) - 1)
+        : 0;
     renderAnimationBlendSourceCombo->setEnabled(controlsEnabled);
     renderAnimationBlendTimingCombo->setEnabled(controlsEnabled);
     renderAnimationBlendPivotTree->setEnabled(controlsEnabled);
     renderAnimationBlendIncludeDescendantsToggle->setEnabled(controlsEnabled);
+    renderAnimationBlendTruncateToggle->setEnabled(controlsEnabled && preserveSourceRate);
+    renderAnimationBlendNormalizeFrameRateToggle->setEnabled(controlsEnabled && preserveSourceRate);
+    renderAnimationBlendPinLeftHandToggle->setEnabled(controlsEnabled);
+    renderAnimationBlendPinRightHandToggle->setEnabled(controlsEnabled);
+    renderAnimationBlendHandPinReferenceFrameSpin->setEnabled(controlsEnabled);
+    renderAnimationBlendTranslationPercentSpin->setEnabled(controlsEnabled);
+    renderAnimationBlendRotationPercentSpin->setEnabled(controlsEnabled);
     renderAnimationBlendStartFrameSpin->setEnabled(controlsEnabled);
     renderAnimationBlendEndFrameSpin->setEnabled(controlsEnabled);
 
     const bool hasOverlaySource = currentRenderAnimationBlendState.overlayAnimationIndex >= 0;
     const bool hasPivots = !currentRenderAnimationBlendState.pivotIndices.isEmpty();
+    const QSet<int> affectedPivots =
+        hierarchy
+        ? ExpandBlendPivotSelection(
+            *hierarchy,
+            currentRenderAnimationBlendState.pivotIndices,
+            currentRenderAnimationBlendState.includeDescendants)
+        : QSet<int>{};
+    bool hasBlendAmount = false;
+    int customAxisWeightPivotCount = 0;
+    for (const int pivotIndex : affectedPivots) {
+        const auto resolvedAxisPercents = ResolveRenderBlendPivotAxisPercents(
+            currentRenderAnimationBlendState.translationBlendPercent,
+            currentRenderAnimationBlendState.rotationBlendPercent,
+            currentRenderAnimationBlendState.pivotAxisBlendPercents,
+            pivotIndex);
+        hasBlendAmount |= RenderBlendPivotAxisPercentsHaveAnyBlend(resolvedAxisPercents);
+        if (currentRenderAnimationBlendState.pivotAxisBlendPercents.find(pivotIndex)
+            != currentRenderAnimationBlendState.pivotAxisBlendPercents.end()) {
+            customAxisWeightPivotCount += 1;
+        }
+    }
     renderAnimationBlendApplyButton->setEnabled(
-        controlsEnabled && hasOverlaySource && hasPivots);
+        controlsEnabled && hasOverlaySource && hasPivots && hasBlendAmount);
 
     QString statusText;
     if (!activeClip) {
@@ -8611,18 +10687,110 @@ void MainWindow::refreshRenderBlendStatus() {
     else if (!hasPivots) {
         statusText = tr("Check one or more pivots to override.");
     }
+    else if (!hasBlendAmount) {
+        statusText = tr("Set a default percentage above 0, or assign custom axis weights above 0 to an affected pivot, before applying the override.");
+    }
     else {
         const auto& overlayClip =
             animations[static_cast<std::size_t>(currentRenderAnimationBlendState.overlayAnimationIndex)];
-        statusText = tr("Override %1 selected pivot(s) from %2 across frames %3-%4.")
+        const OW3D::Render::RenderAnimationEditDraft* overlayDraft =
+            findRenderAnimationEditDraftForClip(overlayClip);
+        const uint32_t overlayFrameCount =
+            EffectiveRenderAnimationFrameCount(overlayClip, overlayDraft);
+        const float overlayFrameRate =
+            EffectiveRenderAnimationFrameRate(overlayClip, overlayDraft);
+        const int requestedStartFrame =
+            std::clamp(currentRenderAnimationBlendState.startFrame, 0, selectedBaseMaxFrame);
+        const int requestedEndFrame = std::clamp(
+            std::max(currentRenderAnimationBlendState.startFrame, currentRenderAnimationBlendState.endFrame),
+            0,
+            selectedBaseMaxFrame);
+        const PivotOverrideBaseTimingPreview baseTimingPreview =
+            ComputePivotOverrideBaseTimingPreview(
+                activeFrameCount,
+                activeFrameRate,
+                requestedStartFrame,
+                requestedEndFrame,
+                preserveSourceRate,
+                currentRenderAnimationBlendState.normalizeBaseToSourceFrameRate,
+                overlayFrameRate);
+        const int effectiveEndFrame = ComputePivotOverrideEffectiveEndFrame(
+            baseTimingPreview.frameCount,
+            baseTimingPreview.frameRate,
+            overlayFrameCount,
+            overlayFrameRate,
+            baseTimingPreview.appliedStartFrame,
+            baseTimingPreview.appliedEndFrame,
+            preserveSourceRate,
+            currentRenderAnimationBlendState.truncateToShorter);
+        statusText = tr("Override %1 selected pivot(s) from %2 across selected base frames %3-%4.")
             .arg(currentRenderAnimationBlendState.pivotIndices.size())
             .arg(QString::fromStdString(overlayClip.fullName))
-            .arg(currentRenderAnimationBlendState.startFrame)
-            .arg(currentRenderAnimationBlendState.endFrame);
+            .arg(requestedStartFrame)
+            .arg(requestedEndFrame);
+        statusText += tr(" Default blend: position %1%%, rotation %2%%.")
+            .arg(currentRenderAnimationBlendState.translationBlendPercent)
+            .arg(currentRenderAnimationBlendState.rotationBlendPercent);
+        if (customAxisWeightPivotCount > 0) {
+            statusText += tr(" %1 affected pivot(s) use custom per-axis weights.")
+                .arg(customAxisWeightPivotCount);
+        }
+        if (currentRenderAnimationBlendState.pinLeftHand
+            || currentRenderAnimationBlendState.pinRightHand) {
+            const QStringList enabledPins = {
+                currentRenderAnimationBlendState.pinLeftHand ? tr("left") : QString(),
+                currentRenderAnimationBlendState.pinRightHand ? tr("right") : QString()
+            };
+            QStringList compactPins;
+            for (const QString& pinLabel : enabledPins) {
+                if (!pinLabel.isEmpty()) {
+                    compactPins.push_back(pinLabel);
+                }
+            }
+            statusText += tr(" Post-blend hand pins: %1 hand(s) fixed to base-pose frame %2.")
+                .arg(compactPins.join(tr(" + ")))
+                .arg(currentRenderAnimationBlendState.handPinReferenceFrame);
+        }
         statusText += currentRenderAnimationBlendState.timingMode
             == RenderAnimationBlendState::TimingMode::FitSourceToRange
             ? tr(" Timing: fit the full source clip into the destination range.")
             : tr(" Timing: preserve the source clip's playback rate.");
+        if (baseTimingPreview.selectedStartFrame != requestedStartFrame
+            || baseTimingPreview.selectedEndFrame != requestedEndFrame)
+        {
+            statusText += tr(" The current draft clamps that selection to frames %1-%2 before sampling.")
+                .arg(baseTimingPreview.selectedStartFrame)
+                .arg(baseTimingPreview.selectedEndFrame);
+        }
+        if (baseTimingPreview.normalizationApplied) {
+            statusText += tr(" Normalize base to source FPS is on; the base draft will be retimed from %1 FPS / %2 frames to %3 FPS / %4 frames, and the selected range maps to frames %5-%6 before sampling.")
+                .arg(QString::number(activeFrameRate, 'f', 2))
+                .arg(activeFrameCount)
+                .arg(QString::number(baseTimingPreview.frameRate, 'f', 2))
+                .arg(baseTimingPreview.frameCount)
+                .arg(baseTimingPreview.appliedStartFrame)
+                .arg(baseTimingPreview.appliedEndFrame);
+        }
+        else if (baseTimingPreview.normalizationRequested) {
+            if (baseTimingPreview.normalizationRequiresValidFrameRates) {
+                statusText += tr(" Normalize base to source FPS is on, but both clips need a valid FPS before the base timing can be retimed.");
+            }
+            else if (baseTimingPreview.normalizationAlreadyMatchesSource) {
+                statusText += tr(" Normalize base to source FPS is on; the base draft already matches the source FPS.");
+            }
+        }
+        if (preserveSourceRate && currentRenderAnimationBlendState.truncateToShorter) {
+            if (effectiveEndFrame >= baseTimingPreview.appliedStartFrame) {
+                statusText += tr(" Truncate to shorter clip is on; the draft clip will end at frame %1.")
+                    .arg(effectiveEndFrame);
+                statusText += tr(" Frames %1-%2 will be overwritten before the clip is shortened.")
+                    .arg(baseTimingPreview.appliedStartFrame)
+                    .arg(effectiveEndFrame);
+            }
+            else {
+                statusText += tr(" Truncate to shorter clip is on; the selected source clip has no frames to apply.");
+            }
+        }
         if (currentRenderAnimationBlendState.includeDescendants) {
             statusText += tr(" Descendants will be included when applied.");
         }
@@ -8635,6 +10803,8 @@ void MainWindow::syncRenderAnimationUi() {
     refreshRenderAnimationList();
     refreshRenderPlaybackSelection();
     refreshRenderPlaybackControls();
+    refreshRenderAnimationPrepControls();
+    refreshRenderAnimationPivotSheet();
     refreshRenderBlendControls();
     syncRenderAnimationPlaybackToViewport();
     syncActiveRenderAnimationDraftToViewport();
@@ -8695,6 +10865,19 @@ void MainWindow::handleViewportChunkActivated(void* chunkPtr) {
         return;
     }
     selectChunkInTree(chunkPtr);
+}
+
+void MainWindow::handleViewportPivotSelectionChanged(int hierarchyIndex, int pivotIndex) {
+    const int normalizedHierarchyIndex = hierarchyIndex >= 0 ? hierarchyIndex : -1;
+    const int normalizedPivotIndex = pivotIndex >= 0 ? pivotIndex : -1;
+    if (currentRenderSelectedPivotHierarchyIndex == normalizedHierarchyIndex
+        && currentRenderSelectedPivotIndex == normalizedPivotIndex) {
+        return;
+    }
+
+    currentRenderSelectedPivotHierarchyIndex = normalizedHierarchyIndex;
+    currentRenderSelectedPivotIndex = normalizedPivotIndex;
+    refreshRenderAnimationPivotSheet();
 }
 
 void MainWindow::handleViewportPivotTransformCommit(
@@ -8850,7 +11033,10 @@ void MainWindow::handleViewportAnimationKeyframeCommit(
     if (pivotIndex < 0) {
         return;
     }
-    if (frameIndex < 0 || frameIndex >= static_cast<int>(clip->numFrames)) {
+    const OW3D::Render::RenderAnimationEditDraft* existingDraft =
+        findRenderAnimationEditDraftForClip(*clip);
+    const uint32_t clipFrameCount = EffectiveRenderAnimationFrameCount(*clip, existingDraft);
+    if (frameIndex < 0 || frameIndex >= static_cast<int>(clipFrameCount)) {
         QMessageBox::warning(
             this,
             tr("Animation Edit Failed"),
@@ -8894,7 +11080,7 @@ void MainWindow::handleViewportAnimationKeyframeCommit(
     }
 
     DensePivotAnimationSamples samples =
-        OW3D::Render::BuildDensePivotAnimationSamples(*clip, clipPivotIndex, clip->numFrames, draft);
+        OW3D::Render::BuildDensePivotAnimationSamples(*clip, clipPivotIndex, clipFrameCount, draft);
 
     const float qLen = std::sqrt(qx * qx + qy * qy + qz * qz + qw * qw);
     OW3D::Render::Vec4 rotation{
@@ -8972,7 +11158,10 @@ void MainWindow::handleViewportAnimationKeyframeDelete(
     if (pivotIndex < 0) {
         return;
     }
-    if (frameIndex < 0 || frameIndex >= static_cast<int>(clip->numFrames)) {
+    const OW3D::Render::RenderAnimationEditDraft* existingDraft =
+        findRenderAnimationEditDraftForClip(*clip);
+    const uint32_t clipFrameCount = EffectiveRenderAnimationFrameCount(*clip, existingDraft);
+    if (frameIndex < 0 || frameIndex >= static_cast<int>(clipFrameCount)) {
         QMessageBox::warning(
             this,
             tr("Animation Edit Failed"),
@@ -9016,7 +11205,7 @@ void MainWindow::handleViewportAnimationKeyframeDelete(
     }
 
     DensePivotAnimationSamples samples =
-        OW3D::Render::BuildDensePivotAnimationSamples(*clip, clipPivotIndex, clip->numFrames, draft);
+        OW3D::Render::BuildDensePivotAnimationSamples(*clip, clipPivotIndex, clipFrameCount, draft);
 
     samples.translationX[static_cast<std::size_t>(frameIndex)] =
         DeleteDenseFloatFrameValue(samples.translationX, frameIndex);
@@ -9084,6 +11273,20 @@ bool MainWindow::flushPendingRenderAnimationDrafts(QString* outError) {
         }
 
         const auto beforeSnapshot = CloneChunkTree(animationChunk);
+        QString truncateError;
+        if (!TruncateRawAnimationToFrameCount(
+            animationChunk,
+            draft.numFrames,
+            draft.frameRate,
+            &truncateError))
+        {
+            if (outError) {
+                *outError = truncateError.isEmpty()
+                    ? tr("Failed to update the raw animation header while saving a draft.")
+                    : truncateError;
+            }
+            return false;
+        }
         std::vector<int> pivotIndices;
         pivotIndices.reserve(draft.pivotSamples.size());
         for (const auto& [pivotIndex, samples] : draft.pivotSamples) {
@@ -9461,6 +11664,175 @@ void MainWindow::handleRenderAnimationEditKeysChanged(bool checked) {
     syncRenderAnimationUi();
 }
 
+void MainWindow::handleRenderPrepSourceClipChanged(int) {
+    if (suppressRenderAnimationPrepUiSignals || !renderAnimationPrepSourceCombo) {
+        return;
+    }
+
+    const int targetAnimationIndex =
+        renderAnimationPrepSourceCombo->currentData().toInt();
+    currentRenderAnimationPrepState.targetAnimationIndex = targetAnimationIndex;
+
+    const auto& animations = currentRenderSceneResult.scene.animations;
+    if (targetAnimationIndex >= 0
+        && targetAnimationIndex < static_cast<int>(animations.size())) {
+        currentRenderAnimationPrepState.targetClipIdentity =
+            BuildRenderAnimationClipIdentity(
+                animations[static_cast<std::size_t>(targetAnimationIndex)]);
+    }
+    else {
+        currentRenderAnimationPrepState.targetAnimationIndex = -1;
+        currentRenderAnimationPrepState.targetClipIdentity.reset();
+    }
+
+    refreshRenderAnimationPrepControls();
+}
+
+void MainWindow::handleRenderPrepStaticPoseFrameChanged(int value) {
+    currentRenderAnimationPrepState.staticPoseFrame = value;
+    refreshRenderAnimationPrepControls();
+}
+
+void MainWindow::applyRenderAnimationClipPrep() {
+    int activeAnimationIndex = -1;
+    const OW3D::Render::RenderAnimationClip* baseClip = nullptr;
+    std::shared_ptr<ChunkItem> baseAnimationChunk;
+    QString editReason;
+    if (!ResolveEditablePrimaryRenderAnimation(
+        chunkData.get(),
+        currentRenderSceneResult,
+        currentRenderAnimationPlayback,
+        &activeAnimationIndex,
+        &baseClip,
+        &baseAnimationChunk,
+        &editReason)) {
+        QMessageBox::information(
+            this,
+            tr("Clip Prep Unavailable"),
+            editReason.isEmpty() ? tr("The active clip is read-only.") : editReason);
+        return;
+    }
+    if (!baseClip || !baseAnimationChunk) {
+        return;
+    }
+
+    const int targetAnimationIndex = currentRenderAnimationPrepState.targetAnimationIndex;
+    const auto& animations = currentRenderSceneResult.scene.animations;
+    if (targetAnimationIndex < 0
+        || targetAnimationIndex >= static_cast<int>(animations.size())) {
+        QMessageBox::information(
+            this,
+            tr("Clip Prep Unavailable"),
+            tr("Select a compatible source clip first."));
+        return;
+    }
+    if (targetAnimationIndex == activeAnimationIndex) {
+        QMessageBox::information(
+            this,
+            tr("Clip Prep Unavailable"),
+            tr("The source clip must be different from the active base clip."));
+        return;
+    }
+
+    const auto& targetClip = animations[static_cast<std::size_t>(targetAnimationIndex)];
+    if (!targetClip.supportedForPlayback) {
+        QMessageBox::warning(
+            this,
+            tr("Clip Prep Failed"),
+            tr("The selected source clip is not supported for playback sampling."));
+        return;
+    }
+
+    const int hierarchyIndex = findCompatibleRenderHierarchyIndexForAnimation(activeAnimationIndex);
+    if (hierarchyIndex < 0
+        || hierarchyIndex >= static_cast<int>(currentRenderSceneResult.scene.hierarchies.size())) {
+        QMessageBox::warning(
+            this,
+            tr("Clip Prep Failed"),
+            tr("The active base clip does not target a compatible hierarchy."));
+        return;
+    }
+
+    const auto& hierarchy =
+        currentRenderSceneResult.scene.hierarchies[static_cast<std::size_t>(hierarchyIndex)];
+    if (std::find(
+        hierarchy.compatibleAnimationIndices.begin(),
+        hierarchy.compatibleAnimationIndices.end(),
+        targetAnimationIndex) == hierarchy.compatibleAnimationIndices.end()) {
+        QMessageBox::warning(
+            this,
+            tr("Clip Prep Failed"),
+            tr("The selected source clip is not compatible with the active hierarchy."));
+        return;
+    }
+
+    const OW3D::Render::RenderAnimationEditDraft* existingDraft =
+        findRenderAnimationEditDraftForClip(*baseClip);
+    const uint32_t baseFrameCount =
+        EffectiveRenderAnimationFrameCount(*baseClip, existingDraft);
+    const int maxPoseFrame = baseFrameCount > 0u
+        ? std::max(0, static_cast<int>(baseFrameCount) - 1)
+        : 0;
+    const int poseFrame =
+        std::clamp(currentRenderAnimationPrepState.staticPoseFrame, 0, maxPoseFrame);
+
+    const OW3D::Render::RenderAnimationEditDraft* targetDraft =
+        findRenderAnimationEditDraftForClip(targetClip);
+    const uint32_t targetFrameCount =
+        EffectiveRenderAnimationFrameCount(targetClip, targetDraft);
+    const float targetFrameRate =
+        EffectiveRenderAnimationFrameRate(targetClip, targetDraft);
+    if (targetFrameCount == 0u) {
+        QMessageBox::warning(
+            this,
+            tr("Clip Prep Failed"),
+            tr("The selected source clip reports zero frames."));
+        return;
+    }
+    if (targetFrameCount > 1u && targetFrameRate <= 0.0f) {
+        QMessageBox::warning(
+            this,
+            tr("Clip Prep Failed"),
+            tr("The selected source clip reports an invalid frame rate."));
+        return;
+    }
+
+    const auto beforeDrafts = currentRenderAnimationDrafts;
+    OW3D::Render::RenderAnimationEditDraft* baseDraft =
+        ensureRenderAnimationEditDraft(*baseClip, baseAnimationChunk);
+    if (!baseDraft) {
+        QMessageBox::warning(
+            this,
+            tr("Clip Prep Failed"),
+            tr("The active base clip could not be prepared for draft editing."));
+        return;
+    }
+
+    PrepareAnimationEditDraftFromStaticPose(
+        *baseClip,
+        *baseDraft,
+        targetFrameCount,
+        targetFrameRate,
+        static_cast<float>(poseFrame));
+
+    if (!applyingRenderTransformUndoRedo) {
+        RenderEditUndoEntry entry{};
+        entry.kind = RenderEditUndoEntry::Kind::AnimationDrafts;
+        entry.beforeDrafts = beforeDrafts;
+        entry.afterDrafts = currentRenderAnimationDrafts;
+        renderTransformUndoStack.push_back(std::move(entry));
+        renderTransformRedoStack.clear();
+    }
+
+    currentRenderAnimationPrepState.staticPoseFrame = poseFrame;
+    setDirty(true);
+    currentRenderAnimationPlayback.timeSeconds = std::clamp(
+        currentRenderAnimationPlayback.timeSeconds,
+        0.0f,
+        AnimationClipDurationSeconds(*baseClip, baseDraft));
+    syncRenderAnimationUi();
+}
+
 void MainWindow::handleRenderBlendSourceClipChanged(int) {
     if (suppressRenderAnimationBlendUiSignals || !renderAnimationBlendSourceCombo) {
         return;
@@ -9514,14 +11886,109 @@ void MainWindow::handleRenderBlendPivotItemChanged(QTreeWidgetItem* item, int) {
     else {
         currentRenderAnimationBlendState.pivotIndices.remove(pivotIndex);
     }
+    if (!renderAnimationBlendPivotTree->currentItem()) {
+        renderAnimationBlendPivotTree->setCurrentItem(item);
+    }
     QTimer::singleShot(0, this, [this]() {
         refreshRenderBlendStatus();
     });
 }
 
+void MainWindow::handleRenderBlendPivotCurrentItemChanged(QTreeWidgetItem* current, QTreeWidgetItem*) {
+    if (suppressRenderAnimationBlendUiSignals) {
+        return;
+    }
+
+    if (!current) {
+        currentRenderAnimationBlendState.selectedPivotIndex = -1;
+        refreshRenderBlendPivotWeightEditor();
+        return;
+    }
+
+    const QVariant pivotData = current->data(0, kRenderBlendPivotIndexRole);
+    currentRenderAnimationBlendState.selectedPivotIndex =
+        pivotData.isValid() ? pivotData.toInt() : -1;
+    refreshRenderBlendPivotWeightEditor();
+}
+
 void MainWindow::handleRenderBlendIncludeDescendantsChanged(bool checked) {
     currentRenderAnimationBlendState.includeDescendants = checked;
     refreshRenderBlendStatus();
+}
+
+void MainWindow::handleRenderBlendTruncateChanged(bool checked) {
+    currentRenderAnimationBlendState.truncateToShorter = checked;
+    refreshRenderBlendStatus();
+}
+
+void MainWindow::handleRenderBlendNormalizeFrameRateChanged(bool checked) {
+    currentRenderAnimationBlendState.normalizeBaseToSourceFrameRate = checked;
+    refreshRenderBlendStatus();
+}
+
+void MainWindow::handleRenderBlendPinLeftHandChanged(bool checked) {
+    currentRenderAnimationBlendState.pinLeftHand = checked;
+    refreshRenderBlendStatus();
+}
+
+void MainWindow::handleRenderBlendPinRightHandChanged(bool checked) {
+    currentRenderAnimationBlendState.pinRightHand = checked;
+    refreshRenderBlendStatus();
+}
+
+void MainWindow::handleRenderBlendHandPinReferenceFrameChanged(int value) {
+    currentRenderAnimationBlendState.handPinReferenceFrame = std::max(value, 0);
+    refreshRenderBlendStatus();
+}
+
+void MainWindow::handleRenderBlendTranslationPercentChanged(int value) {
+    currentRenderAnimationBlendState.translationBlendPercent = std::clamp(value, 0, 100);
+    refreshRenderBlendControls();
+}
+
+void MainWindow::handleRenderBlendRotationPercentChanged(int value) {
+    currentRenderAnimationBlendState.rotationBlendPercent = std::clamp(value, 0, 100);
+    refreshRenderBlendControls();
+}
+
+void MainWindow::handleRenderBlendPivotAxisWeightChanged(int) {
+    if (suppressRenderAnimationBlendUiSignals) {
+        return;
+    }
+
+    const int selectedPivotIndex = currentRenderAnimationBlendState.selectedPivotIndex;
+    if (selectedPivotIndex < 0) {
+        return;
+    }
+
+    std::array<int, kRenderBlendAxisCount> axisPercents{};
+    for (int axisIndex = 0; axisIndex < kRenderBlendAxisCount; ++axisIndex) {
+        axisPercents[static_cast<std::size_t>(axisIndex)] = std::clamp(
+            renderAnimationBlendPivotAxisPercentSpins[static_cast<std::size_t>(axisIndex)]->value(),
+            0,
+            100);
+    }
+
+    if (RenderBlendPivotAxisPercentsMatchDefaults(
+            axisPercents,
+            currentRenderAnimationBlendState.translationBlendPercent,
+            currentRenderAnimationBlendState.rotationBlendPercent)) {
+        currentRenderAnimationBlendState.pivotAxisBlendPercents.erase(selectedPivotIndex);
+    }
+    else {
+        currentRenderAnimationBlendState.pivotAxisBlendPercents[selectedPivotIndex] = axisPercents;
+    }
+    refreshRenderBlendControls();
+}
+
+void MainWindow::resetRenderBlendSelectedPivotWeights() {
+    const int selectedPivotIndex = currentRenderAnimationBlendState.selectedPivotIndex;
+    if (selectedPivotIndex < 0) {
+        return;
+    }
+
+    currentRenderAnimationBlendState.pivotAxisBlendPercents.erase(selectedPivotIndex);
+    refreshRenderBlendControls();
 }
 
 void MainWindow::handleRenderBlendStartFrameChanged(int value) {
@@ -9638,14 +12105,26 @@ void MainWindow::applyRenderAnimationPivotOverride() {
             tr("Check one or more pivots to override."));
         return;
     }
+    bool affectedPivotsHaveBlend = false;
+    for (const int pivotIndex : affectedPivots) {
+        const auto axisPercents = ResolveRenderBlendPivotAxisPercents(
+            currentRenderAnimationBlendState.translationBlendPercent,
+            currentRenderAnimationBlendState.rotationBlendPercent,
+            currentRenderAnimationBlendState.pivotAxisBlendPercents,
+            pivotIndex);
+        if (RenderBlendPivotAxisPercentsHaveAnyBlend(axisPercents)) {
+            affectedPivotsHaveBlend = true;
+            break;
+        }
+    }
+    if (!affectedPivotsHaveBlend) {
+        QMessageBox::information(
+            this,
+            tr("Pivot Override Unavailable"),
+            tr("Set a default percentage above 0, or assign custom axis weights above 0 to an affected pivot, before applying the override."));
+        return;
+    }
 
-    const int maxFrame = std::max(0, static_cast<int>(baseClip->numFrames) - 1);
-    const int startFrame =
-        std::clamp(currentRenderAnimationBlendState.startFrame, 0, maxFrame);
-    const int endFrame =
-        std::clamp(std::max(currentRenderAnimationBlendState.startFrame, currentRenderAnimationBlendState.endFrame), 0, maxFrame);
-
-    const auto beforeDrafts = currentRenderAnimationDrafts;
     OW3D::Render::RenderAnimationEditDraft* baseDraft =
         ensureRenderAnimationEditDraft(*baseClip, baseAnimationChunk);
     if (!baseDraft) {
@@ -9656,7 +12135,140 @@ void MainWindow::applyRenderAnimationPivotOverride() {
         return;
     }
 
+    const uint32_t baseFrameCount = EffectiveRenderAnimationFrameCount(*baseClip, baseDraft);
+    const float baseFrameRate = EffectiveRenderAnimationFrameRate(*baseClip, baseDraft);
     const auto* sourceDraft = findRenderAnimationEditDraftForClip(sourceClip);
+    const uint32_t sourceFrameCount =
+        EffectiveRenderAnimationFrameCount(sourceClip, sourceDraft);
+    const float sourceFrameRate = EffectiveRenderAnimationFrameRate(sourceClip, sourceDraft);
+    const int selectedBaseMaxFrame = baseClip->numFrames > 0u
+        ? std::max(0, static_cast<int>(baseClip->numFrames) - 1)
+        : 0;
+    const int requestedStartFrame =
+        std::clamp(currentRenderAnimationBlendState.startFrame, 0, selectedBaseMaxFrame);
+    const int requestedEndFrame = std::clamp(
+        std::max(currentRenderAnimationBlendState.startFrame, currentRenderAnimationBlendState.endFrame),
+        0,
+        selectedBaseMaxFrame);
+    const bool preserveSourceRate =
+        currentRenderAnimationBlendState.timingMode
+        == RenderAnimationBlendState::TimingMode::PreserveSourceRate;
+    const PivotOverrideBaseTimingPreview baseTimingPreview =
+        ComputePivotOverrideBaseTimingPreview(
+            baseFrameCount,
+            baseFrameRate,
+            requestedStartFrame,
+            requestedEndFrame,
+            preserveSourceRate,
+            currentRenderAnimationBlendState.normalizeBaseToSourceFrameRate,
+            sourceFrameRate);
+    const int startFrame = baseTimingPreview.appliedStartFrame;
+    const int endFrame = baseTimingPreview.appliedEndFrame;
+    const int effectiveEndFrame = ComputePivotOverrideEffectiveEndFrame(
+        baseTimingPreview.frameCount,
+        baseTimingPreview.frameRate,
+        sourceFrameCount,
+        sourceFrameRate,
+        startFrame,
+        endFrame,
+        preserveSourceRate,
+        currentRenderAnimationBlendState.truncateToShorter);
+    if (effectiveEndFrame < startFrame) {
+        QMessageBox::warning(
+            this,
+            tr("Pivot Override Failed"),
+            tr("The selected source clip does not contain any frames that can be applied."));
+        return;
+    }
+
+    const auto beforeDrafts = currentRenderAnimationDrafts;
+    if (baseTimingPreview.normalizationApplied) {
+        RetimeAnimationEditDraft(
+            *baseClip,
+            *baseDraft,
+            baseTimingPreview.frameCount,
+            baseTimingPreview.frameRate);
+    }
+
+    const uint32_t appliedBaseFrameCount =
+        EffectiveRenderAnimationFrameCount(*baseClip, baseDraft);
+    const float appliedBaseFrameRate =
+        EffectiveRenderAnimationFrameRate(*baseClip, baseDraft);
+    const uint32_t newDraftFrameCount =
+        (preserveSourceRate && currentRenderAnimationBlendState.truncateToShorter)
+        ? static_cast<uint32_t>(effectiveEndFrame + 1)
+        : appliedBaseFrameCount;
+    if (baseDraft->numFrames != newDraftFrameCount) {
+        ResizeAnimationEditDraftFrameCount(*baseDraft, newDraftFrameCount);
+    }
+
+    const bool handPinsRequested =
+        currentRenderAnimationBlendState.pinLeftHand
+        || currentRenderAnimationBlendState.pinRightHand;
+    QStringList skippedHandPinReasons;
+    std::vector<RenderHandPinTarget> handPinTargets;
+    if (handPinsRequested) {
+        const bool multiFrameDraft = newDraftFrameCount > 1u;
+        if (multiFrameDraft && appliedBaseFrameRate <= 0.0f) {
+            skippedHandPinReasons.push_back(
+                tr("Hand pins were skipped because the prepared base draft has an invalid frame rate."));
+        }
+        else {
+            const std::optional<OW3D::Render::RenderAnimationEditDraft> preBlendDraft = *baseDraft;
+            const int maxReferenceFrame = newDraftFrameCount > 0u
+                ? std::max(0, static_cast<int>(newDraftFrameCount) - 1)
+                : 0;
+            const int referenceFrame = std::clamp(
+                currentRenderAnimationBlendState.handPinReferenceFrame,
+                0,
+                maxReferenceFrame);
+
+            auto appendHandPinTarget = [&](bool leftHand) {
+                const QString handLabel = leftHand ? tr("Left hand") : tr("Right hand");
+                const std::optional<RenderHandPinChain> chain =
+                    ResolveRenderHandPinChain(
+                        hierarchy,
+                        basePivotIndexByName,
+                        leftHand);
+                if (!chain.has_value()) {
+                    skippedHandPinReasons.push_back(
+                        tr("%1 pin was skipped because no usable clavicle/upperarm/forearm chain could be resolved.")
+                            .arg(handLabel));
+                    return;
+                }
+
+                const std::optional<OW3D::Render::Vec3> targetWorldPosition =
+                    SampleRenderHandPinTargetWorldPosition(
+                        currentRenderSceneResult.scene,
+                        activeAnimationIndex,
+                        hierarchyIndex,
+                        chain->effectorPivotIndex,
+                        referenceFrame,
+                        appliedBaseFrameRate,
+                        preBlendDraft);
+                if (!targetWorldPosition.has_value()) {
+                    skippedHandPinReasons.push_back(
+                        tr("%1 pin was skipped because the base-pose target could not be sampled at frame %2.")
+                            .arg(handLabel)
+                            .arg(referenceFrame));
+                    return;
+                }
+
+                RenderHandPinTarget handPinTarget{};
+                handPinTarget.chain = *chain;
+                handPinTarget.worldPosition = *targetWorldPosition;
+                handPinTargets.push_back(std::move(handPinTarget));
+            };
+
+            if (currentRenderAnimationBlendState.pinLeftHand) {
+                appendHandPinTarget(true);
+            }
+            if (currentRenderAnimationBlendState.pinRightHand) {
+                appendHandPinTarget(false);
+            }
+        }
+    }
+
     QStringList skippedPivotNames;
     int appliedPivotCount = 0;
     for (const int selectedPivotIndex : affectedPivots) {
@@ -9681,14 +12293,56 @@ void MainWindow::applyRenderAnimationPivotOverride() {
             continue;
         }
 
+        const auto axisPercents = ResolveRenderBlendPivotAxisPercents(
+            currentRenderAnimationBlendState.translationBlendPercent,
+            currentRenderAnimationBlendState.rotationBlendPercent,
+            currentRenderAnimationBlendState.pivotAxisBlendPercents,
+            selectedPivotIndex);
+        if (!RenderBlendPivotAxisPercentsHaveAnyBlend(axisPercents)) {
+            continue;
+        }
+        const float translationBlendX =
+            std::clamp(
+                static_cast<float>(axisPercents[static_cast<std::size_t>(kRenderBlendPositionXAxis)]) / 100.0f,
+                0.0f,
+                1.0f);
+        const float translationBlendY =
+            std::clamp(
+                static_cast<float>(axisPercents[static_cast<std::size_t>(kRenderBlendPositionYAxis)]) / 100.0f,
+                0.0f,
+                1.0f);
+        const float translationBlendZ =
+            std::clamp(
+                static_cast<float>(axisPercents[static_cast<std::size_t>(kRenderBlendPositionZAxis)]) / 100.0f,
+                0.0f,
+                1.0f);
+        const float rotationBlendX =
+            std::clamp(
+                static_cast<float>(axisPercents[static_cast<std::size_t>(kRenderBlendRotationXAxis)]) / 100.0f,
+                0.0f,
+                1.0f);
+        const float rotationBlendY =
+            std::clamp(
+                static_cast<float>(axisPercents[static_cast<std::size_t>(kRenderBlendRotationYAxis)]) / 100.0f,
+                0.0f,
+                1.0f);
+        const float rotationBlendZ =
+            std::clamp(
+                static_cast<float>(axisPercents[static_cast<std::size_t>(kRenderBlendRotationZAxis)]) / 100.0f,
+                0.0f,
+                1.0f);
+        const bool uniformRotationBlend =
+            std::fabs(rotationBlendX - rotationBlendY) <= 1.0e-6f
+            && std::fabs(rotationBlendY - rotationBlendZ) <= 1.0e-6f;
+
         DensePivotAnimationSamples samples =
             OW3D::Render::BuildDensePivotAnimationSamples(
                 *baseClip,
                 basePivotIndex,
-                baseClip->numFrames,
+                newDraftFrameCount,
                 baseDraft);
 
-        for (int frameIndex = startFrame; frameIndex <= endFrame; ++frameIndex) {
+        for (int frameIndex = startFrame; frameIndex <= effectiveEndFrame; ++frameIndex) {
             float sourceFrame = 0.0f;
             if (currentRenderAnimationBlendState.timingMode
                 == RenderAnimationBlendState::TimingMode::FitSourceToRange) {
@@ -9697,18 +12351,18 @@ void MainWindow::applyRenderAnimationPivotOverride() {
                     : static_cast<float>(frameIndex - startFrame)
                         / static_cast<float>(endFrame - startFrame);
                 sourceFrame = OW3D::Render::AnimationFrameFromNormalizedProgress(
-                    sourceClip.numFrames,
+                    sourceFrameCount,
                     progress);
             }
-            else if (baseClip->frameRate > 0.0f && sourceClip.frameRate > 0.0f) {
+            else if (appliedBaseFrameRate > 0.0f && sourceFrameRate > 0.0f) {
                 const float elapsedSeconds =
-                    static_cast<float>(frameIndex - startFrame) / baseClip->frameRate;
-                sourceFrame = elapsedSeconds * sourceClip.frameRate;
-                if (sourceClip.numFrames > 0u) {
+                    static_cast<float>(frameIndex - startFrame) / appliedBaseFrameRate;
+                sourceFrame = elapsedSeconds * sourceFrameRate;
+                if (sourceFrameCount > 0u) {
                     sourceFrame = std::clamp(
                         sourceFrame,
                         0.0f,
-                        static_cast<float>(sourceClip.numFrames - 1u));
+                        static_cast<float>(sourceFrameCount - 1u));
                 }
             }
             else {
@@ -9717,7 +12371,7 @@ void MainWindow::applyRenderAnimationPivotOverride() {
                     : static_cast<float>(frameIndex - startFrame)
                         / static_cast<float>(endFrame - startFrame);
                 sourceFrame = OW3D::Render::AnimationFrameFromNormalizedProgress(
-                    sourceClip.numFrames,
+                    sourceFrameCount,
                     progress);
             }
             const OW3D::Render::Vec3 translation =
@@ -9732,12 +12386,58 @@ void MainWindow::applyRenderAnimationPivotOverride() {
                     sourcePivotIndex,
                     sourceFrame,
                     sourceDraft);
-
-            samples.translationX[static_cast<std::size_t>(frameIndex)] = translation.x;
-            samples.translationY[static_cast<std::size_t>(frameIndex)] = translation.y;
-            samples.translationZ[static_cast<std::size_t>(frameIndex)] = translation.z;
-            samples.rotation[static_cast<std::size_t>(frameIndex)] =
+            const OW3D::Render::Vec4 sourceRotation =
                 OW3D::Render::AnimationNormalizeQuat(rotation);
+            const OW3D::Render::Vec3 baseTranslation{
+                samples.translationX[static_cast<std::size_t>(frameIndex)],
+                samples.translationY[static_cast<std::size_t>(frameIndex)],
+                samples.translationZ[static_cast<std::size_t>(frameIndex)]
+            };
+            const OW3D::Render::Vec4 baseRotation =
+                OW3D::Render::AnimationNormalizeQuat(
+                    samples.rotation[static_cast<std::size_t>(frameIndex)]);
+            const OW3D::Render::Vec3 blendedTranslation{
+                baseTranslation.x + (translation.x - baseTranslation.x) * translationBlendX,
+                baseTranslation.y + (translation.y - baseTranslation.y) * translationBlendY,
+                baseTranslation.z + (translation.z - baseTranslation.z) * translationBlendZ
+            };
+            OW3D::Render::Vec4 blendedRotation = baseRotation;
+            if (uniformRotationBlend) {
+                const float rotationBlend = rotationBlendX;
+                blendedRotation =
+                    rotationBlend <= 1.0e-6f
+                    ? baseRotation
+                    : (rotationBlend >= 1.0f - 1.0e-6f
+                        ? sourceRotation
+                        : OW3D::Render::AnimationNormalizeQuat(
+                            OW3D::Render::AnimationSlerpQuat(
+                                baseRotation,
+                                sourceRotation,
+                                rotationBlend)));
+            }
+            else {
+                const W3dVectorStruct baseEuler =
+                    EulerFromQuaternion(
+                        baseRotation.x,
+                        baseRotation.y,
+                        baseRotation.z,
+                        baseRotation.w);
+                const W3dVectorStruct sourceEuler =
+                    EulerFromQuaternion(
+                        sourceRotation.x,
+                        sourceRotation.y,
+                        sourceRotation.z,
+                        sourceRotation.w);
+                blendedRotation = QuaternionFromEulerRadians(
+                    BlendWrappedAngleRadians(baseEuler.X, sourceEuler.X, rotationBlendX),
+                    BlendWrappedAngleRadians(baseEuler.Y, sourceEuler.Y, rotationBlendY),
+                    BlendWrappedAngleRadians(baseEuler.Z, sourceEuler.Z, rotationBlendZ));
+            }
+
+            samples.translationX[static_cast<std::size_t>(frameIndex)] = blendedTranslation.x;
+            samples.translationY[static_cast<std::size_t>(frameIndex)] = blendedTranslation.y;
+            samples.translationZ[static_cast<std::size_t>(frameIndex)] = blendedTranslation.z;
+            samples.rotation[static_cast<std::size_t>(frameIndex)] = blendedRotation;
         }
 
         baseDraft->pivotSamples[basePivotIndex] = std::move(samples);
@@ -9753,8 +12453,68 @@ void MainWindow::applyRenderAnimationPivotOverride() {
         return;
     }
 
-    currentRenderAnimationBlendState.startFrame = startFrame;
-    currentRenderAnimationBlendState.endFrame = endFrame;
+    if (!handPinTargets.empty()) {
+        std::vector<int> handPinJointPivotIndices;
+        for (const RenderHandPinTarget& handPinTarget : handPinTargets) {
+            handPinJointPivotIndices.insert(
+                handPinJointPivotIndices.end(),
+                handPinTarget.chain.jointPivotIndices.begin(),
+                handPinTarget.chain.jointPivotIndices.end());
+        }
+        std::sort(handPinJointPivotIndices.begin(), handPinJointPivotIndices.end());
+        handPinJointPivotIndices.erase(
+            std::unique(handPinJointPivotIndices.begin(), handPinJointPivotIndices.end()),
+            handPinJointPivotIndices.end());
+
+        std::unordered_map<int, OW3D::Render::RenderDensePivotAnimationSamples> handPinSamplesByPivot;
+        handPinSamplesByPivot.reserve(handPinJointPivotIndices.size());
+        for (const int jointPivotIndex : handPinJointPivotIndices) {
+            handPinSamplesByPivot.emplace(
+                jointPivotIndex,
+                OW3D::Render::BuildDensePivotAnimationSamples(
+                    *baseClip,
+                    jointPivotIndex,
+                    newDraftFrameCount,
+                    baseDraft));
+        }
+
+        std::optional<OW3D::Render::RenderAnimationEditDraft> workingHandPinDraft = *baseDraft;
+        SyncRenderHandPinSamplesIntoDraft(
+            handPinSamplesByPivot,
+            handPinJointPivotIndices,
+            workingHandPinDraft);
+
+        std::unordered_map<int, OW3D::Render::Mat4> handPinLocalOverrides;
+        for (int frameIndex = startFrame;
+            frameIndex <= effectiveEndFrame && frameIndex < static_cast<int>(newDraftFrameCount);
+            ++frameIndex) {
+            for (const RenderHandPinTarget& handPinTarget : handPinTargets) {
+                ApplyRenderHandPinToFrame(
+                    currentRenderSceneResult.scene,
+                    hierarchy,
+                    hierarchyIndex,
+                    *baseClip,
+                    activeAnimationIndex,
+                    frameIndex,
+                    appliedBaseFrameRate,
+                    handPinTarget,
+                    workingHandPinDraft,
+                    handPinLocalOverrides,
+                    handPinSamplesByPivot);
+                SyncRenderHandPinSamplesIntoDraft(
+                    handPinSamplesByPivot,
+                    handPinTarget.chain.jointPivotIndices,
+                    workingHandPinDraft);
+            }
+        }
+
+        for (auto& [jointPivotIndex, jointSamples] : handPinSamplesByPivot) {
+            baseDraft->pivotSamples[jointPivotIndex] = std::move(jointSamples);
+        }
+    }
+
+    currentRenderAnimationBlendState.startFrame = requestedStartFrame;
+    currentRenderAnimationBlendState.endFrame = requestedEndFrame;
     if (!applyingRenderTransformUndoRedo) {
         RenderEditUndoEntry entry{};
         entry.kind = RenderEditUndoEntry::Kind::AnimationDrafts;
@@ -9764,6 +12524,12 @@ void MainWindow::applyRenderAnimationPivotOverride() {
         renderTransformRedoStack.clear();
     }
     setDirty(true);
+    if (appliedBaseFrameRate > 0.0f) {
+        currentRenderAnimationPlayback.timeSeconds = std::clamp(
+            currentRenderAnimationPlayback.timeSeconds,
+            0.0f,
+            AnimationClipDurationSeconds(*baseClip, baseDraft));
+    }
     syncRenderAnimationUi();
 
     if (!skippedPivotNames.isEmpty()) {
@@ -9773,6 +12539,13 @@ void MainWindow::applyRenderAnimationPivotOverride() {
             tr("Some Pivots Were Skipped"),
             tr("These pivots could not be matched by name in the source clip hierarchy:\n%1")
                 .arg(skippedPivotNames.join(QStringLiteral("\n"))));
+    }
+    if (!skippedHandPinReasons.isEmpty()) {
+        skippedHandPinReasons.removeDuplicates();
+        QMessageBox::information(
+            this,
+            tr("Some Hand Pins Were Skipped"),
+            skippedHandPinReasons.join(QStringLiteral("\n")));
     }
 }
 
@@ -9787,6 +12560,30 @@ void MainWindow::handleViewportAnimationPlaybackPauseRequested() {
     }
     renderAnimationPlaybackElapsed.invalidate();
     syncRenderAnimationUi();
+}
+
+void MainWindow::handleRenderAnimationPivotSheetCellClicked(int row, int) {
+    if (suppressRenderAnimationPivotSheetSignals
+        || !renderAnimationPivotSheetTable
+        || !renderAnimationFrameSlider
+        || row < 0
+        || row >= renderAnimationPivotSheetTable->rowCount()) {
+        return;
+    }
+
+    int frameIndex = row;
+    if (const QTableWidgetItem* frameItem = renderAnimationPivotSheetTable->item(row, 0);
+        frameItem != nullptr) {
+        frameIndex = frameItem->data(Qt::UserRole).toInt();
+    }
+
+    frameIndex = std::max(frameIndex, 0);
+    if (renderAnimationFrameSlider->value() == frameIndex) {
+        refreshRenderAnimationPivotSheetFrameHighlight();
+        return;
+    }
+
+    renderAnimationFrameSlider->setValue(frameIndex);
 }
 
 void MainWindow::toggleRenderAnimationPlayback() {
@@ -9840,6 +12637,311 @@ void MainWindow::stopRenderAnimationPlayback() {
     syncRenderAnimationUi();
 }
 
+void MainWindow::exportActiveRenderAnimationGif() {
+    const int activeIndex = currentRenderAnimationPlayback.activeAnimationIndex;
+    const auto& animations = currentRenderSceneResult.scene.animations;
+    if (activeIndex < 0 || activeIndex >= static_cast<int>(animations.size())) {
+        QMessageBox::information(
+            this,
+            tr("Export Current Animation GIF"),
+            tr("Select an active animation clip first."));
+        return;
+    }
+    if (!SceneHasRenderableMeshData(currentRenderSceneResult)) {
+        QMessageBox::warning(
+            this,
+            tr("Export Current Animation GIF"),
+            tr("The current scene does not build a renderable model for export."));
+        return;
+    }
+
+    const auto& clip = animations[static_cast<std::size_t>(activeIndex)];
+    if (!clip.supportedForPlayback) {
+        QMessageBox::warning(
+            this,
+            tr("Export Current Animation GIF"),
+            tr("The active clip is not supported for playback sampling."));
+        return;
+    }
+
+    const OW3D::Render::RenderAnimationEditDraft* activeDraft =
+        findActiveRenderAnimationEditDraft();
+    const uint32_t frameCount = EffectiveRenderAnimationFrameCount(clip, activeDraft);
+    const float frameRate = EffectiveRenderAnimationFrameRate(clip, activeDraft);
+    if (frameCount == 0u) {
+        QMessageBox::warning(
+            this,
+            tr("Export Current Animation GIF"),
+            tr("The active clip reports zero frames."));
+        return;
+    }
+    if (frameCount > 1u && frameRate <= 0.0f) {
+        QMessageBox::warning(
+            this,
+            tr("Export Current Animation GIF"),
+            tr("The active clip has an invalid frame rate."));
+        return;
+    }
+
+    QString clipStem = SanitizePathComponent(QString::fromStdString(clip.fullName));
+    clipStem.replace(QLatin1Char('/'), QLatin1Char('_'));
+    clipStem.replace(QLatin1Char('\\'), QLatin1Char('_'));
+    if (clipStem.isEmpty()) {
+        clipStem = QStringLiteral("current_animation");
+    }
+    QString defaultDirectory = lastDirectory;
+    if (defaultDirectory.isEmpty()) {
+        if (!currentFilePath.isEmpty()) {
+            defaultDirectory = QFileInfo(currentFilePath).absolutePath();
+        }
+        else if (!currentArchiveRenderPath.isEmpty()) {
+            defaultDirectory = QFileInfo(currentArchiveRenderPath).absolutePath();
+        }
+        else {
+            defaultDirectory = QDir::homePath();
+        }
+    }
+    const QString selectedPath = QFileDialog::getSaveFileName(
+        this,
+        tr("Export Current Animation GIF"),
+        QDir(defaultDirectory).absoluteFilePath(clipStem + QStringLiteral(".gif")),
+        tr("GIF Files (*.gif)"));
+    if (selectedPath.isEmpty()) {
+        return;
+    }
+
+    QString outputGifPath = QDir::cleanPath(QDir::fromNativeSeparators(selectedPath));
+    if (QFileInfo(outputGifPath).suffix().compare(QStringLiteral("gif"), Qt::CaseInsensitive) != 0) {
+        outputGifPath += QStringLiteral(".gif");
+    }
+
+    const QString outputDir = QFileInfo(outputGifPath).absolutePath();
+    if (outputDir.isEmpty() || !QDir().mkpath(outputDir)) {
+        QMessageBox::warning(
+            this,
+            tr("Export Current Animation GIF"),
+            tr("Cannot create output directory: %1")
+                .arg(QDir::toNativeSeparators(outputDir)));
+        return;
+    }
+
+    const bool useCurrentEditorCamera = renderViewport != nullptr;
+    const OW3D::Render::CameraState fixedCamera = useCurrentEditorCamera
+        ? renderViewport->camera()
+        : OW3D::Render::CameraState{};
+    const std::optional<OW3D::Render::RenderAnimationEditDraft> exportDraft =
+        activeDraft ? std::optional<OW3D::Render::RenderAnimationEditDraft>(*activeDraft) : std::nullopt;
+
+    OW3D::Render::RenderSettings exportSettings{};
+    exportSettings.profile = OW3D::Render::ParityProfile::W3DViewD3D11Baseline;
+    exportSettings.enableFog = renderFogToggle ? renderFogToggle->isChecked() : true;
+    exportSettings.enableLod = renderLodToggle ? renderLodToggle->isChecked() : true;
+    exportSettings.lodBias = renderLodBiasSpin ? static_cast<float>(renderLodBiasSpin->value()) : 1.0f;
+    exportSettings.debugShowUv = renderUvDebugToggle ? renderUvDebugToggle->isChecked() : false;
+    exportSettings.lockLodLevel = renderLodLockToggle ? renderLodLockToggle->isChecked() : false;
+    exportSettings.lockedLodLevel = renderLodLevelSpin ? renderLodLevelSpin->value() : 0;
+    exportSettings.clearColor = { 0.86f, 0.86f, 0.86f, 1.0f };
+    exportSettings.showCameraGizmo = false;
+    exportSettings.showPivotMarkers = false;
+
+    const int effectiveFrameCount = (frameCount > 1u)
+        ? std::max(1, static_cast<int>(frameCount) - 1)
+        : 1;
+    const int frameDelayCentiseconds = GifDelayCentisecondsFromClipFrameRate(frameRate);
+
+    QDialog exportDialog(this);
+    exportDialog.setWindowTitle(tr("Export Current Animation GIF"));
+    exportDialog.setModal(true);
+    auto* exportLayout = new QVBoxLayout(&exportDialog);
+    auto* exportViewport = new OW3D::Render::RenderViewportWidget(&exportDialog);
+    exportViewport->setFixedSize(512, 512);
+    exportViewport->SetContinuousRenderingEnabled(false);
+    exportViewport->SetOverlayUiEnabled(false);
+    exportLayout->addWidget(exportViewport, 0, Qt::AlignCenter);
+    auto* exportStatusLabel = new QLabel(
+        tr("Preparing `%1` for export...")
+            .arg(QString::fromStdString(clip.fullName)),
+        &exportDialog);
+    exportStatusLabel->setWordWrap(true);
+    exportLayout->addWidget(exportStatusLabel);
+    auto* exportProgressBar = new QProgressBar(&exportDialog);
+    exportProgressBar->setRange(0, effectiveFrameCount);
+    exportProgressBar->setValue(0);
+    exportLayout->addWidget(exportProgressBar);
+    auto* cancelExportButton = new QPushButton(tr("Cancel"), &exportDialog);
+    exportLayout->addWidget(cancelExportButton, 0, Qt::AlignRight);
+
+    bool cancelRequested = false;
+    bool exportDialogClosing = false;
+    auto requestCancel = [&]() {
+        if (cancelRequested || exportDialogClosing) {
+            return;
+        }
+        cancelRequested = true;
+        cancelExportButton->setEnabled(false);
+        exportStatusLabel->setText(tr("Cancel requested. Finishing the current frame..."));
+    };
+    connect(cancelExportButton, &QPushButton::clicked, &exportDialog, requestCancel);
+    connect(&exportDialog, &QDialog::rejected, &exportDialog, requestCancel);
+
+    exportDialog.show();
+    QCoreApplication::processEvents();
+
+    exportViewport->SetRenderSettings(exportSettings);
+    exportViewport->SetSceneResult(currentRenderSceneResult);
+    exportViewport->SetAnimationEditDraft(exportDraft);
+    exportViewport->SetAnimationEditingState(false, false, QString());
+    if (useCurrentEditorCamera) {
+        exportViewport->SetCameraState(fixedCamera);
+    }
+    else {
+        exportViewport->FocusScene();
+    }
+
+    OW3D::Gif::Writer gifWriter;
+    QString gifError;
+    if (!gifWriter.Open(outputGifPath, 512, 512, &gifError)) {
+        exportDialogClosing = true;
+        exportDialog.close();
+        QMessageBox::warning(
+            this,
+            tr("Export Current Animation GIF"),
+            gifError.isEmpty() ? tr("Failed to open the output GIF for writing.") : gifError);
+        return;
+    }
+
+    bool exportFailed = false;
+    int framesWritten = 0;
+    QString exportError;
+    for (int frameIndex = 0; frameIndex < effectiveFrameCount; ++frameIndex) {
+        exportProgressBar->setValue(frameIndex);
+        exportStatusLabel->setText(
+            tr("Exporting `%1` frame %2 / %3")
+                .arg(QString::fromStdString(clip.fullName))
+                .arg(frameIndex + 1)
+                .arg(effectiveFrameCount));
+
+        OW3D::Render::AnimationPlaybackState playback{};
+        playback.activeAnimationIndex = activeIndex;
+        playback.timeSeconds = frameRate > 0.0f
+            ? static_cast<float>(frameIndex) / frameRate
+            : 0.0f;
+        playback.loop = true;
+        playback.playing = false;
+        playback.speed = 1.0f;
+
+        exportViewport->SetAnimationPlayback(playback);
+        exportViewport->RenderOnce();
+
+        QImage frameImage;
+        if (!exportViewport->CaptureCurrentFrame(frameImage)) {
+            exportFailed = true;
+            exportError = tr("Failed to capture a rendered frame.");
+            break;
+        }
+        if (!gifWriter.AddFrame(frameImage, frameDelayCentiseconds, &gifError)) {
+            exportFailed = true;
+            exportError = gifError.isEmpty()
+                ? tr("Failed to append a frame to the output GIF.")
+                : gifError;
+            break;
+        }
+
+        ++framesWritten;
+        exportProgressBar->setValue(frameIndex + 1);
+        QCoreApplication::processEvents();
+        if (cancelRequested) {
+            break;
+        }
+    }
+
+    QString closeError;
+    if (!gifWriter.Close(&closeError) && !exportFailed) {
+        exportFailed = true;
+        exportError = closeError.isEmpty()
+            ? tr("Failed to finalize the output GIF.")
+            : closeError;
+    }
+
+    exportDialogClosing = true;
+    exportDialog.close();
+
+    if (exportFailed || cancelRequested || framesWritten <= 0) {
+        QFile::remove(outputGifPath);
+    }
+
+    if (exportFailed) {
+        QMessageBox::warning(
+            this,
+            tr("Export Current Animation GIF"),
+            exportError);
+        return;
+    }
+    if (cancelRequested) {
+        QMessageBox::information(
+            this,
+            tr("Export Current Animation GIF"),
+            tr("Export canceled."));
+        return;
+    }
+    if (framesWritten <= 0) {
+        QMessageBox::warning(
+            this,
+            tr("Export Current Animation GIF"),
+            tr("No frames were written for the active clip."));
+        return;
+    }
+
+    lastDirectory = outputDir;
+    QMessageBox::information(
+        this,
+        tr("Export Current Animation GIF"),
+        tr("Exported `%1` to:\n%2")
+            .arg(QString::fromStdString(clip.fullName))
+            .arg(QDir::toNativeSeparators(outputGifPath)));
+}
+
+void MainWindow::resetActiveRenderAnimationDraft() {
+    const int activeIndex = currentRenderAnimationPlayback.activeAnimationIndex;
+    const auto& animations = currentRenderSceneResult.scene.animations;
+    if (activeIndex < 0 || activeIndex >= static_cast<int>(animations.size())) {
+        return;
+    }
+
+    const auto& clip = animations[static_cast<std::size_t>(activeIndex)];
+    const OW3D::Render::RenderAnimationEditDraft* activeDraft =
+        findRenderAnimationEditDraftForClip(clip);
+    if (!HasPendingRenderAnimationDraftChanges(&clip, activeDraft)) {
+        return;
+    }
+
+    const QString clipLabel = QString::fromStdString(clip.fullName);
+    const auto choice = QMessageBox::question(
+        this,
+        tr("Reset Draft"),
+        tr("Discard all pending draft edits for `%1` and restore the base clip?")
+            .arg(clipLabel.isEmpty() ? tr("(unnamed)") : clipLabel),
+        QMessageBox::Yes | QMessageBox::Cancel,
+        QMessageBox::Cancel);
+    if (choice != QMessageBox::Yes) {
+        return;
+    }
+
+    const auto beforeDrafts = currentRenderAnimationDrafts;
+    currentRenderAnimationDrafts.erase(clip.sourceAnimationChunk);
+
+    if (!applyingRenderTransformUndoRedo) {
+        RenderEditUndoEntry entry{};
+        entry.kind = RenderEditUndoEntry::Kind::AnimationDrafts;
+        entry.beforeDrafts = beforeDrafts;
+        entry.afterDrafts = currentRenderAnimationDrafts;
+        renderTransformUndoStack.push_back(std::move(entry));
+        renderTransformRedoStack.clear();
+    }
+
+    syncRenderAnimationUi();
+}
+
 void MainWindow::handleRenderAnimationLoopChanged(bool checked) {
     currentRenderAnimationPlayback.loop = checked;
     syncRenderAnimationUi();
@@ -9865,12 +12967,16 @@ void MainWindow::handleRenderAnimationFrameSliderChanged(int value) {
     }
 
     const auto& clip = animations[static_cast<std::size_t>(activeIndex)];
-    if (clip.frameRate <= 0.0f) {
+    const OW3D::Render::RenderAnimationEditDraft* activeDraft =
+        findRenderAnimationEditDraftForClip(clip);
+    const uint32_t frameCount = EffectiveRenderAnimationFrameCount(clip, activeDraft);
+    const float frameRate = EffectiveRenderAnimationFrameRate(clip, activeDraft);
+    if (frameRate <= 0.0f || frameCount == 0u) {
         currentRenderAnimationPlayback.timeSeconds = 0.0f;
     }
     else {
         currentRenderAnimationPlayback.timeSeconds =
-            static_cast<float>(value) / clip.frameRate;
+            static_cast<float>(value) / frameRate;
     }
     if (currentRenderAnimationPlayback.playing) {
         renderAnimationPlaybackElapsed.restart();
@@ -9913,7 +13019,9 @@ void MainWindow::handleRenderAnimationPlaybackTimerTick() {
     }
 
     const auto& clip = animations[static_cast<std::size_t>(activeIndex)];
-    const float duration = AnimationClipDurationSeconds(clip);
+    const OW3D::Render::RenderAnimationEditDraft* activeDraft =
+        findRenderAnimationEditDraftForClip(clip);
+    const float duration = AnimationClipDurationSeconds(clip, activeDraft);
     currentRenderAnimationPlayback.timeSeconds +=
         deltaSeconds * currentRenderAnimationPlayback.speed;
 
@@ -10692,7 +13800,9 @@ void MainWindow::rebuildRenderScene() {
             currentRenderAnimationPlayback.activeAnimationIndex = remappedIndex;
             const auto& clip =
                 currentRenderSceneResult.scene.animations[static_cast<std::size_t>(remappedIndex)];
-            const float duration = AnimationClipDurationSeconds(clip);
+            const OW3D::Render::RenderAnimationEditDraft* activeDraft =
+                findRenderAnimationEditDraftForClip(clip);
+            const float duration = AnimationClipDurationSeconds(clip, activeDraft);
             if (duration <= 0.0f) {
                 currentRenderAnimationPlayback.timeSeconds = 0.0f;
                 currentRenderAnimationPlayback.playing = false;
@@ -11569,6 +14679,16 @@ static QString CsvEscape(const QString& value) {
     return out;
 }
 
+static void WriteCsvLine(QTextStream& out, const QStringList& columns) {
+    for (int i = 0; i < columns.size(); ++i) {
+        if (i > 0) {
+            out << ',';
+        }
+        out << CsvEscape(columns[i]);
+    }
+    out << '\n';
+}
+
 static QString NumberOrBlank(qint64 value) {
     return value < 0 ? QString() : QString::number(value);
 }
@@ -12229,6 +15349,439 @@ static void DiscoverBatchInputs(
         }
         ++seenCount;
     }
+}
+
+struct AnimationGifFileMetadata {
+    bool parsed = false;
+    QString clipName;
+    QString hierarchyName;
+    QString skeletonCode;
+    int numFrames = 0;
+    double frameRate = 0.0;
+    bool compressed = false;
+    bool supportedForPlayback = true;
+    QString errorMessage;
+};
+
+struct AnimationGifSource {
+    QString clipStem;
+    QString resolvedW3dPath;
+    QString resolvedJsonPath;
+    AnimationGifFileMetadata metadata;
+};
+
+struct AnimationGifDiscoverySummary {
+    int scannedW3dCount = 0;
+    int parsedMetadataCount = 0;
+    int unsupportedCount = 0;
+    int unreadableCount = 0;
+    int unclassifiedCount = 0;
+    QSet<QString> discoveredSkeletonCodes;
+};
+
+struct AnimationGifReportRow {
+    QString status;
+    QString selectedSkeletonCode;
+    QString detectedSkeletonCode;
+    QString clipStem;
+    QString clipName;
+    QString resolvedW3dPath;
+    QString resolvedJsonPath;
+    QString hierarchyName;
+    QString numFrames;
+    QString frameRate;
+    QString outputGifPath;
+    QString errorMessage;
+};
+
+static QString FindOptionalAnimationGifJsonSidecar(const QString& w3dPath)
+{
+    const QFileInfo info(w3dPath);
+    const QString stem = info.completeBaseName();
+    if (stem.isEmpty()) {
+        return QString();
+    }
+
+    const QDir dir(info.absolutePath());
+    const QString lowerCasePath = QDir::cleanPath(
+        dir.absoluteFilePath(stem + QStringLiteral(".json")));
+    if (QFileInfo::exists(lowerCasePath)) {
+        return lowerCasePath;
+    }
+
+    const QString upperCasePath = QDir::cleanPath(
+        dir.absoluteFilePath(stem + QStringLiteral(".JSON")));
+    if (QFileInfo::exists(upperCasePath)) {
+        return upperCasePath;
+    }
+
+    return QString();
+}
+
+static QString ExtractAnimationGifSkeletonCode(const QString& hierarchyName)
+{
+    const QString normalized = hierarchyName.trimmed().toUpper();
+    if (!normalized.startsWith(QStringLiteral("S_"))) {
+        return QString();
+    }
+
+    const int nextUnderscore = normalized.indexOf(QLatin1Char('_'), 2);
+    if (nextUnderscore <= 2) {
+        return QString();
+    }
+
+    return normalized.mid(2, nextUnderscore - 2).trimmed();
+}
+
+static bool TryExtractAnimationGifMetadataFromRoots(
+    const std::vector<std::shared_ptr<ChunkItem>>& roots,
+    AnimationGifFileMetadata& outMetadata,
+    QString& outError)
+{
+    outMetadata = {};
+    outError.clear();
+
+    std::vector<std::shared_ptr<ChunkItem>> rawAnimationChunks;
+    std::vector<std::shared_ptr<ChunkItem>> compressedAnimationChunks;
+    for (const auto& root : roots) {
+        CollectChunksByIdRecursive(root, kChunkAnimation, rawAnimationChunks);
+        CollectChunksByIdRecursive(root, kChunkCompressedAnimation, compressedAnimationChunks);
+    }
+
+    const int animationChunkCount =
+        static_cast<int>(rawAnimationChunks.size() + compressedAnimationChunks.size());
+    if (animationChunkCount <= 0) {
+        outError = QObject::tr("The W3D file does not contain raw or compressed animation chunks.");
+        return false;
+    }
+    if (animationChunkCount > 1) {
+        outError =
+            QObject::tr("The W3D file contains multiple animation chunks and cannot be exported as a single clip.");
+        return false;
+    }
+
+    if (!rawAnimationChunks.empty()) {
+        const auto headerChunk = FindFirstChildById(rawAnimationChunks.front(), kChunkAnimationHeader);
+        if (!headerChunk) {
+            outError = QObject::tr("Animation header chunk is missing.");
+            return false;
+        }
+
+        auto parsed = ParseChunkStruct<W3dAnimHeaderStruct>(headerChunk);
+        if (const auto* header = std::get_if<W3dAnimHeaderStruct>(&parsed)) {
+            outMetadata.clipName = ReadFixedString(header->Name, W3D_NAME_LEN).trimmed();
+            outMetadata.hierarchyName = ReadFixedString(header->HierarchyName, W3D_NAME_LEN).trimmed();
+            outMetadata.numFrames = static_cast<int>(header->NumFrames);
+            outMetadata.frameRate = static_cast<double>(header->FrameRate);
+            outMetadata.compressed = false;
+            outMetadata.supportedForPlayback = true;
+            outMetadata.skeletonCode =
+                ExtractAnimationGifSkeletonCode(outMetadata.hierarchyName);
+            outMetadata.parsed = true;
+            return true;
+        }
+
+        outError = QObject::tr("Failed to parse raw animation header.");
+        return false;
+    }
+
+    const auto headerChunk = FindFirstChildById(
+        compressedAnimationChunks.front(),
+        kChunkCompressedAnimationHeader);
+    if (!headerChunk) {
+        outError = QObject::tr("Compressed animation header chunk is missing.");
+        return false;
+    }
+
+    auto parsed = ParseChunkStruct<W3dCompressedAnimHeaderStruct>(headerChunk);
+    if (const auto* header = std::get_if<W3dCompressedAnimHeaderStruct>(&parsed)) {
+        outMetadata.clipName = ReadFixedString(header->Name, W3D_NAME_LEN).trimmed();
+        outMetadata.hierarchyName = ReadFixedString(header->HierarchyName, W3D_NAME_LEN).trimmed();
+        outMetadata.numFrames = static_cast<int>(header->NumFrames);
+        outMetadata.frameRate = static_cast<double>(header->FrameRate);
+        outMetadata.compressed = true;
+        outMetadata.supportedForPlayback = header->Flavor != 1u;
+        outMetadata.skeletonCode =
+            ExtractAnimationGifSkeletonCode(outMetadata.hierarchyName);
+        outMetadata.parsed = true;
+        if (!outMetadata.supportedForPlayback) {
+            outMetadata.errorMessage =
+                QObject::tr("Adaptive-delta compressed animation is not supported for rendering yet.");
+        }
+        return true;
+    }
+
+    outError = QObject::tr("Failed to parse compressed animation header.");
+    return false;
+}
+
+static bool DiscoverAnimationGifSources(
+    const QString& animationRoot,
+    std::vector<AnimationGifSource>& outSources,
+    AnimationGifDiscoverySummary& outSummary,
+    std::vector<AnimationGifReportRow>& outSkippedRows,
+    QString& outError)
+{
+    outSources.clear();
+    outSummary = {};
+    outSkippedRows.clear();
+    outError.clear();
+
+    QDirIterator fileIt(
+        animationRoot,
+        QStringList{ QStringLiteral("*.w3d"), QStringLiteral("*.W3D") },
+        QDir::Files | QDir::NoSymLinks,
+        QDirIterator::Subdirectories);
+
+    while (fileIt.hasNext()) {
+        const QString absolutePath = QDir::cleanPath(fileIt.next());
+        ++outSummary.scannedW3dCount;
+
+        AnimationGifSource source;
+        source.clipStem = QFileInfo(absolutePath).completeBaseName().trimmed();
+        source.resolvedW3dPath = absolutePath;
+        source.resolvedJsonPath = FindOptionalAnimationGifJsonSidecar(absolutePath);
+
+        std::vector<std::shared_ptr<ChunkItem>> loadedRoots;
+        QString loadError;
+        if (!LoadSupplementalRenderRootsFromFile(absolutePath, loadedRoots, &loadError)) {
+            ++outSummary.unreadableCount;
+
+            AnimationGifReportRow skippedRow;
+            skippedRow.status = QStringLiteral("SKIP");
+            skippedRow.clipStem = source.clipStem;
+            skippedRow.resolvedW3dPath = QDir::toNativeSeparators(source.resolvedW3dPath);
+            skippedRow.resolvedJsonPath = source.resolvedJsonPath.isEmpty()
+                ? QString()
+                : QDir::toNativeSeparators(source.resolvedJsonPath);
+            skippedRow.errorMessage = loadError.isEmpty()
+                ? QObject::tr("Failed to load the animation W3D.")
+                : loadError;
+            outSkippedRows.push_back(std::move(skippedRow));
+            continue;
+        }
+
+        QString parseError;
+        if (!TryExtractAnimationGifMetadataFromRoots(loadedRoots, source.metadata, parseError)) {
+            ++outSummary.unreadableCount;
+
+            AnimationGifReportRow skippedRow;
+            skippedRow.status = QStringLiteral("SKIP");
+            skippedRow.clipStem = source.clipStem;
+            skippedRow.resolvedW3dPath = QDir::toNativeSeparators(source.resolvedW3dPath);
+            skippedRow.resolvedJsonPath = source.resolvedJsonPath.isEmpty()
+                ? QString()
+                : QDir::toNativeSeparators(source.resolvedJsonPath);
+            skippedRow.errorMessage = parseError;
+            outSkippedRows.push_back(std::move(skippedRow));
+            continue;
+        }
+
+        ++outSummary.parsedMetadataCount;
+
+        if (source.metadata.skeletonCode.isEmpty()) {
+            ++outSummary.unclassifiedCount;
+
+            AnimationGifReportRow skippedRow;
+            skippedRow.status = QStringLiteral("SKIP");
+            skippedRow.clipStem = source.clipStem;
+            skippedRow.clipName = source.metadata.clipName;
+            skippedRow.resolvedW3dPath = QDir::toNativeSeparators(source.resolvedW3dPath);
+            skippedRow.resolvedJsonPath = source.resolvedJsonPath.isEmpty()
+                ? QString()
+                : QDir::toNativeSeparators(source.resolvedJsonPath);
+            skippedRow.hierarchyName = source.metadata.hierarchyName;
+            if (source.metadata.numFrames > 0) {
+                skippedRow.numFrames = QString::number(source.metadata.numFrames);
+            }
+            if (source.metadata.frameRate > 0.0) {
+                skippedRow.frameRate =
+                    QString::number(source.metadata.frameRate, 'f', 2);
+            }
+            skippedRow.errorMessage =
+                QObject::tr("Could not derive a skeleton code from hierarchy `%1`.")
+                    .arg(source.metadata.hierarchyName);
+            outSkippedRows.push_back(std::move(skippedRow));
+            continue;
+        }
+
+        outSummary.discoveredSkeletonCodes.insert(source.metadata.skeletonCode);
+        if (!source.metadata.supportedForPlayback) {
+            ++outSummary.unsupportedCount;
+        }
+
+        outSources.push_back(std::move(source));
+    }
+
+    if (outSummary.scannedW3dCount <= 0) {
+        outError = QObject::tr("No animation W3D files were found under %1.")
+            .arg(QDir::toNativeSeparators(animationRoot));
+        return false;
+    }
+    if (outSources.empty()) {
+        outError = QObject::tr("No animation clips with detectable skeleton codes were found under %1.")
+            .arg(QDir::toNativeSeparators(animationRoot));
+        return false;
+    }
+
+    std::sort(outSources.begin(), outSources.end(), [](const AnimationGifSource& lhs, const AnimationGifSource& rhs) {
+        const int skeletonCompare =
+            lhs.metadata.skeletonCode.compare(rhs.metadata.skeletonCode, Qt::CaseInsensitive);
+        if (skeletonCompare != 0) {
+            return skeletonCompare < 0;
+        }
+
+        const int stemCompare = lhs.clipStem.compare(rhs.clipStem, Qt::CaseInsensitive);
+        if (stemCompare != 0) {
+            return stemCompare < 0;
+        }
+
+        return lhs.resolvedW3dPath.compare(rhs.resolvedW3dPath, Qt::CaseInsensitive) < 0;
+    });
+
+    return true;
+}
+
+static void WriteAnimationGifReportCsvHeader(QTextStream& out)
+{
+    WriteCsvLine(
+        out,
+        {
+            QStringLiteral("status"),
+            QStringLiteral("selected_skeleton_code"),
+            QStringLiteral("detected_skeleton_code"),
+            QStringLiteral("clip_stem"),
+            QStringLiteral("clip_name"),
+            QStringLiteral("resolved_w3d_path"),
+            QStringLiteral("resolved_json_path"),
+            QStringLiteral("hierarchy_name"),
+            QStringLiteral("num_frames"),
+            QStringLiteral("frame_rate"),
+            QStringLiteral("output_gif_path"),
+            QStringLiteral("error_message")
+        });
+}
+
+static void WriteAnimationGifReportCsvRow(QTextStream& out, const AnimationGifReportRow& row)
+{
+    WriteCsvLine(
+        out,
+        {
+            row.status,
+            row.selectedSkeletonCode,
+            row.detectedSkeletonCode,
+            row.clipStem,
+            row.clipName,
+            row.resolvedW3dPath,
+            row.resolvedJsonPath,
+            row.hierarchyName,
+            row.numFrames,
+            row.frameRate,
+            row.outputGifPath,
+            row.errorMessage
+        });
+}
+
+static bool FindAnimationGifAnimationIndex(
+    const OW3D::Render::RenderScene& scene,
+    const QString& sourceFileLabel,
+    const AnimationGifSource& source,
+    int& outIndex,
+    QString& outError)
+{
+    outIndex = -1;
+    outError.clear();
+
+    std::vector<int> candidates;
+    const QString sourceLabelNormalized = sourceFileLabel.trimmed().toLower();
+    const QString clipStemNormalized = source.clipStem.trimmed().toLower();
+    const QString clipNameNormalized = source.metadata.clipName.trimmed().toLower();
+    const QString hierarchyNormalized =
+        source.metadata.hierarchyName.trimmed().toLower();
+
+    for (std::size_t i = 0; i < scene.animations.size(); ++i) {
+        const auto& clip = scene.animations[i];
+        if (QString::fromStdString(clip.sourceFileLabel).trimmed().toLower() != sourceLabelNormalized) {
+            continue;
+        }
+        if (!clip.supportedForPlayback
+            || !SceneHasCompatibleHierarchyForAnimation(scene, static_cast<int>(i)))
+        {
+            continue;
+        }
+        candidates.push_back(static_cast<int>(i));
+    }
+
+    if (candidates.empty()) {
+        outError = QObject::tr("The resolved animation file did not produce a compatible playable clip.");
+        return false;
+    }
+
+    auto nameMatches = [&](const QString& clipShortName) {
+        const QString normalized = clipShortName.trimmed().toLower();
+        if (!clipNameNormalized.isEmpty() && normalized == clipNameNormalized) {
+            return true;
+        }
+        if (!clipStemNormalized.isEmpty() && normalized == clipStemNormalized) {
+            return true;
+        }
+        return false;
+    };
+
+    auto candidateMatches = [&](int animationIndex, bool requireHierarchy, bool requireName) {
+        const auto& clip = scene.animations[static_cast<std::size_t>(animationIndex)];
+        const QString clipHierarchy =
+            QString::fromStdString(clip.hierarchyName).trimmed().toLower();
+        const QString clipFullName =
+            QString::fromStdString(clip.fullName).trimmed();
+        const QString clipShortName =
+            clipFullName.section(QLatin1Char('.'), -1).trimmed();
+
+        if (requireHierarchy && !hierarchyNormalized.isEmpty()
+            && clipHierarchy != hierarchyNormalized)
+        {
+            return false;
+        }
+        if (requireName && !nameMatches(clipShortName)) {
+            return false;
+        }
+        return true;
+    };
+
+    for (const int candidate : candidates) {
+        if (candidateMatches(candidate, true, true)) {
+            outIndex = candidate;
+            return true;
+        }
+    }
+
+    for (const int candidate : candidates) {
+        if (candidateMatches(candidate, false, true)) {
+            outIndex = candidate;
+            return true;
+        }
+    }
+
+    for (const int candidate : candidates) {
+        if (candidateMatches(candidate, true, false)) {
+            outIndex = candidate;
+            return true;
+        }
+    }
+
+    if (candidates.size() == 1u) {
+        outIndex = candidates.front();
+        return true;
+    }
+
+    outError = QObject::tr(
+        "The resolved animation file contains multiple compatible clips and could not be disambiguated.");
+    return false;
+}
+
+static int GifDelayCentisecondsFromClipFrameRate(float frameRate) {
+    const float safeFrameRate = frameRate > 0.0f ? frameRate : 10.0f;
+    return std::max(1, static_cast<int>(std::round(100.0f / safeFrameRate)));
 }
 
 } // namespace
@@ -13193,6 +16746,812 @@ void MainWindow::on_actionCopyPureHumanAnimationsBySkeleton_triggered()
     }
     else {
         QMessageBox::information(this, tr("Copy Pure Human Animations by Skeleton"), summary);
+    }
+}
+
+void MainWindow::on_actionExportSkeletonAAnimationGifs_triggered()
+{
+    if (!chunkData || (currentFilePath.isEmpty() && currentArchiveRenderPath.isEmpty())) {
+        QMessageBox::information(
+            this,
+            tr("Export Animation GIFs"),
+            tr("Open a renderable model or aggregate file first."));
+        return;
+    }
+
+    auto findPathUpward = [](const QString& startDirectory, const QString& relativePath, bool requireDirectory) {
+        QDir dir(startDirectory);
+        while (dir.exists()) {
+            const QString candidate = QDir::cleanPath(dir.absoluteFilePath(relativePath));
+            const QFileInfo info(candidate);
+            if ((requireDirectory && info.isDir()) || (!requireDirectory && info.isFile())) {
+                return candidate;
+            }
+            if (!dir.cdUp()) {
+                break;
+            }
+        }
+        return QString();
+    };
+
+    const QString searchStart = !currentFilePath.isEmpty()
+        ? QFileInfo(currentFilePath).absolutePath()
+        : QDir::currentPath();
+    QString animationRoot = findPathUpward(searchStart, QStringLiteral("animation"), true);
+    if (animationRoot.isEmpty()) {
+        animationRoot = findPathUpward(QDir::currentPath(), QStringLiteral("animation"), true);
+    }
+    if (animationRoot.isEmpty()) {
+        animationRoot = searchStart;
+    }
+    if (animationRoot.isEmpty()) {
+        animationRoot = lastDirectory;
+    }
+
+    QString modelDisplayPath;
+    QString modelStem;
+    if (!currentArchiveRenderPath.isEmpty() && !currentArchiveRenderEntryPath.isEmpty()) {
+        modelDisplayPath =
+            BuildArchiveEntryDisplayPath(currentArchiveRenderPath, currentArchiveRenderEntryPath);
+        modelStem = QFileInfo(currentArchiveRenderEntryPath).completeBaseName();
+    }
+    else {
+        modelDisplayPath = QDir::toNativeSeparators(QDir::cleanPath(currentFilePath));
+        modelStem = QFileInfo(currentFilePath).completeBaseName();
+    }
+    if (modelStem.isEmpty()) {
+        modelStem = QStringLiteral("current_model");
+    }
+    modelStem = SanitizePathComponent(modelStem);
+    if (modelStem.isEmpty()) {
+        modelStem = QStringLiteral("current_model");
+    }
+
+    const bool useCurrentEditorCamera = renderViewport != nullptr;
+    const OW3D::Render::CameraState fixedCamera = useCurrentEditorCamera
+        ? renderViewport->camera()
+        : OW3D::Render::CameraState{};
+
+    QDialog configDialog(this);
+    configDialog.setWindowTitle(tr("Export Animation GIFs"));
+    configDialog.setModal(true);
+    auto* configLayout = new QVBoxLayout(&configDialog);
+    auto* formLayout = new QFormLayout();
+    configLayout->addLayout(formLayout);
+
+    auto* modelPathEdit = new QLineEdit(modelDisplayPath, &configDialog);
+    modelPathEdit->setReadOnly(true);
+    formLayout->addRow(tr("Current Model"), modelPathEdit);
+
+    auto* animationRootRow = new QWidget(&configDialog);
+    auto* animationRootLayout = new QHBoxLayout(animationRootRow);
+    animationRootLayout->setContentsMargins(0, 0, 0, 0);
+    animationRootLayout->setSpacing(6);
+    auto* animationRootEdit = new QLineEdit(QDir::toNativeSeparators(animationRoot), animationRootRow);
+    auto* browseAnimationRootButton = new QPushButton(tr("Browse..."), animationRootRow);
+    animationRootLayout->addWidget(animationRootEdit, 1);
+    animationRootLayout->addWidget(browseAnimationRootButton);
+    formLayout->addRow(tr("Animation Root"), animationRootRow);
+
+    auto* skeletonCombo = new QComboBox(&configDialog);
+    formLayout->addRow(tr("Skeleton"), skeletonCombo);
+
+    auto* outputRow = new QWidget(&configDialog);
+    auto* outputRowLayout = new QHBoxLayout(outputRow);
+    outputRowLayout->setContentsMargins(0, 0, 0, 0);
+    outputRowLayout->setSpacing(6);
+    auto* outputPathEdit = new QLineEdit(outputRow);
+    auto* browseOutputButton = new QPushButton(tr("Browse..."), outputRow);
+    outputRowLayout->addWidget(outputPathEdit, 1);
+    outputRowLayout->addWidget(browseOutputButton);
+    formLayout->addRow(tr("Output Folder"), outputRow);
+
+    auto* summaryLabel = new QLabel(&configDialog);
+    summaryLabel->setWordWrap(true);
+    configLayout->addWidget(summaryLabel);
+
+    auto* cameraLabel = new QLabel(
+        tr("This batch uses the current main render viewport camera as-is."),
+        &configDialog);
+    cameraLabel->setWordWrap(true);
+    configLayout->addWidget(cameraLabel);
+
+    auto* configButtons = new QDialogButtonBox(
+        QDialogButtonBox::Ok | QDialogButtonBox::Cancel,
+        Qt::Horizontal,
+        &configDialog);
+    configButtons->button(QDialogButtonBox::Ok)->setText(tr("Export"));
+    configLayout->addWidget(configButtons);
+
+    std::vector<AnimationGifSource> allDiscoveredSources;
+    AnimationGifDiscoverySummary discoverySummary;
+    std::vector<AnimationGifReportRow> discoverySkippedRows;
+    QString discoveryError;
+    bool outputPathCustomized = false;
+
+    auto buildDefaultOutputDir = [&](const QString& rootPath, const QString& skeletonCode) {
+        const QString normalizedRoot = QDir::cleanPath(QDir::fromNativeSeparators(rootPath.trimmed()));
+        if (normalizedRoot.isEmpty()) {
+            return QString();
+        }
+
+        const QString normalizedSkeleton = skeletonCode.trimmed().toUpper();
+        const QString relativeOutputPath = normalizedSkeleton.isEmpty()
+            ? QStringLiteral("gifs/%1").arg(modelStem)
+            : QStringLiteral("gifs/%1/%2").arg(modelStem, normalizedSkeleton);
+        return QDir(normalizedRoot).absoluteFilePath(relativeOutputPath);
+    };
+
+    auto refreshSelectionSummary = [&]() {
+        auto* okButton = configButtons->button(QDialogButtonBox::Ok);
+        const QString normalizedRoot =
+            QDir::cleanPath(QDir::fromNativeSeparators(animationRootEdit->text().trimmed()));
+        if (!outputPathCustomized) {
+            outputPathEdit->setText(QDir::toNativeSeparators(
+                buildDefaultOutputDir(normalizedRoot, skeletonCombo->currentText())));
+        }
+
+        if (!discoveryError.isEmpty()) {
+            summaryLabel->setText(discoveryError);
+            skeletonCombo->setEnabled(false);
+            okButton->setEnabled(false);
+            return;
+        }
+
+        QStringList detectedCodes = discoverySummary.discoveredSkeletonCodes.values();
+        std::sort(
+            detectedCodes.begin(),
+            detectedCodes.end(),
+            [](const QString& lhs, const QString& rhs) {
+                return lhs.compare(rhs, Qt::CaseInsensitive) < 0;
+            });
+
+        const QString selectedSkeletonCode = skeletonCombo->currentText().trimmed().toUpper();
+        int matchingCount = 0;
+        int exportableCount = 0;
+        for (const AnimationGifSource& source : allDiscoveredSources) {
+            if (source.metadata.skeletonCode.compare(selectedSkeletonCode, Qt::CaseInsensitive) != 0) {
+                continue;
+            }
+
+            ++matchingCount;
+            if (source.metadata.supportedForPlayback
+                && source.metadata.numFrames > 0
+                && (source.metadata.numFrames <= 1 || source.metadata.frameRate > 0.0))
+            {
+                ++exportableCount;
+            }
+        }
+
+        const int selectedMetadataSkipCount = std::max(0, matchingCount - exportableCount);
+        summaryLabel->setText(
+            tr("Scanned W3D files: %1\n"
+               "Detected skeleton codes: %2\n"
+               "Selected skeleton files: %3\n"
+               "Exportable by metadata: %4\n"
+               "Selected-skeleton metadata skips: %5\n"
+               "Unreadable files: %6\n"
+               "Unclassified files: %7")
+                .arg(discoverySummary.scannedW3dCount)
+                .arg(detectedCodes.isEmpty() ? tr("(none)") : detectedCodes.join(QStringLiteral(", ")))
+                .arg(matchingCount)
+                .arg(exportableCount)
+                .arg(selectedMetadataSkipCount)
+                .arg(discoverySummary.unreadableCount)
+                .arg(discoverySummary.unclassifiedCount));
+        skeletonCombo->setEnabled(!detectedCodes.isEmpty());
+        okButton->setEnabled(!selectedSkeletonCode.isEmpty() && exportableCount > 0);
+    };
+
+    auto rescanAnimationRoot = [&]() {
+        allDiscoveredSources.clear();
+        discoverySummary = {};
+        discoverySkippedRows.clear();
+        discoveryError.clear();
+
+        const QString normalizedRoot =
+            QDir::cleanPath(QDir::fromNativeSeparators(animationRootEdit->text().trimmed()));
+        if (normalizedRoot.isEmpty()) {
+            discoveryError = tr("Select an animation root folder.");
+        }
+        else if (!QFileInfo(normalizedRoot).isDir()) {
+            discoveryError = tr("Animation root does not exist: %1")
+                .arg(QDir::toNativeSeparators(normalizedRoot));
+        }
+        else if (!DiscoverAnimationGifSources(
+            normalizedRoot,
+            allDiscoveredSources,
+            discoverySummary,
+            discoverySkippedRows,
+            discoveryError))
+        {
+        }
+
+        const QString previousSelection = skeletonCombo->currentText().trimmed().toUpper();
+        QStringList detectedCodes = discoverySummary.discoveredSkeletonCodes.values();
+        std::sort(
+            detectedCodes.begin(),
+            detectedCodes.end(),
+            [](const QString& lhs, const QString& rhs) {
+                return lhs.compare(rhs, Qt::CaseInsensitive) < 0;
+            });
+
+        {
+            QSignalBlocker blocker(skeletonCombo);
+            skeletonCombo->clear();
+            skeletonCombo->addItems(detectedCodes);
+            int selectedIndex = detectedCodes.indexOf(previousSelection);
+            if (selectedIndex < 0 && !detectedCodes.isEmpty()) {
+                selectedIndex = 0;
+            }
+            if (selectedIndex >= 0) {
+                skeletonCombo->setCurrentIndex(selectedIndex);
+            }
+        }
+
+        refreshSelectionSummary();
+    };
+
+    connect(browseAnimationRootButton, &QPushButton::clicked, &configDialog, [&]() {
+        const QString startDir = animationRootEdit->text().trimmed().isEmpty()
+            ? (lastDirectory.isEmpty() ? QDir::homePath() : lastDirectory)
+            : animationRootEdit->text().trimmed();
+        const QString selectedDir = QFileDialog::getExistingDirectory(
+            this,
+            tr("Select Animation Root"),
+            startDir,
+            QFileDialog::ShowDirsOnly | QFileDialog::DontResolveSymlinks);
+        if (!selectedDir.isEmpty()) {
+            animationRootEdit->setText(QDir::toNativeSeparators(selectedDir));
+            rescanAnimationRoot();
+        }
+    });
+    connect(animationRootEdit, &QLineEdit::editingFinished, &configDialog, rescanAnimationRoot);
+    connect(
+        skeletonCombo,
+        qOverload<const QString&>(&QComboBox::currentTextChanged),
+        &configDialog,
+        refreshSelectionSummary);
+    connect(outputPathEdit, &QLineEdit::textEdited, &configDialog, [&]() {
+        outputPathCustomized = true;
+    });
+    connect(browseOutputButton, &QPushButton::clicked, &configDialog, [this, outputPathEdit, &outputPathCustomized]() {
+        const QString startDir = outputPathEdit->text().trimmed().isEmpty()
+            ? (lastDirectory.isEmpty() ? QDir::homePath() : lastDirectory)
+            : outputPathEdit->text().trimmed();
+        const QString selectedDir = QFileDialog::getExistingDirectory(
+            this,
+            tr("Select Output Directory"),
+            startDir,
+            QFileDialog::ShowDirsOnly | QFileDialog::DontResolveSymlinks);
+        if (!selectedDir.isEmpty()) {
+            outputPathEdit->setText(QDir::toNativeSeparators(selectedDir));
+            outputPathCustomized = true;
+        }
+    });
+    connect(configButtons, &QDialogButtonBox::accepted, &configDialog, [&]() {
+        const QString normalizedAnimationRoot =
+            QDir::cleanPath(QDir::fromNativeSeparators(animationRootEdit->text().trimmed()));
+        if (normalizedAnimationRoot.isEmpty() || !QFileInfo(normalizedAnimationRoot).isDir()) {
+            QMessageBox::warning(
+                &configDialog,
+                tr("Export Animation GIFs"),
+                tr("Select a valid animation root folder first."));
+            return;
+        }
+        if (skeletonCombo->currentText().trimmed().isEmpty()) {
+            QMessageBox::warning(
+                &configDialog,
+                tr("Export Animation GIFs"),
+                tr("Select a skeleton code first."));
+            return;
+        }
+        if (outputPathEdit->text().trimmed().isEmpty()) {
+            QMessageBox::warning(
+                &configDialog,
+                tr("Export Animation GIFs"),
+                tr("Select an output folder first."));
+            return;
+        }
+        configDialog.accept();
+    });
+    connect(configButtons, &QDialogButtonBox::rejected, &configDialog, &QDialog::reject);
+
+    rescanAnimationRoot();
+    if (configDialog.exec() != QDialog::Accepted) {
+        return;
+    }
+
+    const QString selectedSkeletonCode = skeletonCombo->currentText().trimmed().toUpper();
+    const QString normalizedAnimationRoot =
+        QDir::cleanPath(QDir::fromNativeSeparators(animationRootEdit->text().trimmed()));
+    const QString outputDir = QDir::cleanPath(QDir::fromNativeSeparators(outputPathEdit->text().trimmed()));
+    if (outputDir.isEmpty()) {
+        QMessageBox::warning(
+            this,
+            tr("Export Animation GIFs"),
+            tr("Select an output folder first."));
+        return;
+    }
+
+    std::vector<AnimationGifSource> selectedSources;
+    selectedSources.reserve(allDiscoveredSources.size());
+    for (const AnimationGifSource& source : allDiscoveredSources) {
+        if (source.metadata.skeletonCode.compare(selectedSkeletonCode, Qt::CaseInsensitive) == 0) {
+            selectedSources.push_back(source);
+        }
+    }
+
+    std::vector<AnimationGifReportRow> filteredDiscoverySkippedRows;
+    filteredDiscoverySkippedRows.reserve(discoverySkippedRows.size());
+    for (const AnimationGifReportRow& skippedRow : discoverySkippedRows) {
+        const QString detectedSkeletonCode = skippedRow.detectedSkeletonCode.trimmed().toUpper();
+        if (!detectedSkeletonCode.isEmpty()
+            && detectedSkeletonCode.compare(selectedSkeletonCode, Qt::CaseInsensitive) != 0)
+        {
+            continue;
+        }
+
+        AnimationGifReportRow filteredRow = skippedRow;
+        filteredRow.selectedSkeletonCode = selectedSkeletonCode;
+        filteredDiscoverySkippedRows.push_back(std::move(filteredRow));
+    }
+
+    if (selectedSources.empty()) {
+        QMessageBox::warning(
+            this,
+            tr("Export Animation GIFs"),
+            tr("No animation clips matched skeleton `%1` under %2.")
+                .arg(selectedSkeletonCode, QDir::toNativeSeparators(normalizedAnimationRoot)));
+        return;
+    }
+
+    struct RenderExportStateSnapshot {
+        std::vector<RenderSessionAsset> externalAssets;
+        QSet<QString> externalAssetPaths;
+        std::vector<AggregateRenderDependencyAsset> aggregateDependencyAssets;
+        bool renderTriedSkeletonAutoload = false;
+        QString suppressedMissingHierarchyKey;
+        QString suppressedMissingMeshKey;
+        QString textureDirectory;
+        QString suppressedMissingTextureKey;
+        QString aggregateDependencyAttemptKey;
+        QString hierarchyDependencyAttemptKey;
+        OW3D::Render::AnimationPlaybackState playback;
+        std::unordered_map<const void*, OW3D::Render::RenderAnimationEditDraft> animationDrafts;
+        std::optional<RenderAnimationClipIdentity> activeClipIdentity;
+        bool animationEditKeysEnabled = false;
+        RenderAnimationPrepState prepState;
+        RenderAnimationBlendState blendState;
+    };
+
+    const RenderExportStateSnapshot savedState{
+        currentExternalRenderAssets,
+        currentExternalRenderAssetPaths,
+        currentAggregateRenderDependencyAssets,
+        currentRenderTriedSkeletonAutoload,
+        currentRenderSuppressedMissingHierarchyKey,
+        currentRenderSuppressedMissingMeshKey,
+        currentRenderTextureDirectory,
+        currentRenderSuppressedMissingTextureKey,
+        currentRenderAggregateDependencyAttemptKey,
+        currentRenderHierarchyDependencyAttemptKey,
+        currentRenderAnimationPlayback,
+        currentRenderAnimationDrafts,
+        currentRenderActiveClipIdentity,
+        currentRenderAnimationEditKeysEnabled,
+        currentRenderAnimationPrepState,
+        currentRenderAnimationBlendState
+    };
+
+    auto rebuildExternalPathSet = [](const std::vector<RenderSessionAsset>& assets) {
+        QSet<QString> outPaths;
+        for (const auto& asset : assets) {
+            const QString sourceKey = RenderSessionAssetSourceKey(asset);
+            if (!sourceKey.isEmpty()) {
+                outPaths.insert(sourceKey);
+            }
+        }
+        return outPaths;
+    };
+
+    auto restoreRenderState = [&]() {
+        currentExternalRenderAssets = savedState.externalAssets;
+        currentExternalRenderAssetPaths = savedState.externalAssetPaths;
+        currentAggregateRenderDependencyAssets = savedState.aggregateDependencyAssets;
+        currentRenderTriedSkeletonAutoload = savedState.renderTriedSkeletonAutoload;
+        currentRenderSuppressedMissingHierarchyKey = savedState.suppressedMissingHierarchyKey;
+        currentRenderSuppressedMissingMeshKey = savedState.suppressedMissingMeshKey;
+        currentRenderTextureDirectory = savedState.textureDirectory;
+        currentRenderSuppressedMissingTextureKey = savedState.suppressedMissingTextureKey;
+        currentRenderAggregateDependencyAttemptKey = savedState.aggregateDependencyAttemptKey;
+        currentRenderHierarchyDependencyAttemptKey = savedState.hierarchyDependencyAttemptKey;
+        currentRenderAnimationPlayback = savedState.playback;
+        currentRenderAnimationDrafts = savedState.animationDrafts;
+        currentRenderActiveClipIdentity = savedState.activeClipIdentity;
+        currentRenderAnimationEditKeysEnabled = savedState.animationEditKeysEnabled;
+        currentRenderAnimationPrepState = savedState.prepState;
+        currentRenderAnimationBlendState = savedState.blendState;
+        rebuildRenderScene();
+    };
+
+    std::vector<RenderSessionAsset> exportBaseAssets;
+    exportBaseAssets.reserve(savedState.externalAssets.size());
+    for (const auto& asset : savedState.externalAssets) {
+        if (asset.role != RenderSessionAssetRole::AnimationLibrary) {
+            exportBaseAssets.push_back(asset);
+        }
+    }
+
+    OW3D::Render::RenderSettings exportSettings{};
+    exportSettings.profile = OW3D::Render::ParityProfile::W3DViewD3D11Baseline;
+    exportSettings.enableFog = renderFogToggle ? renderFogToggle->isChecked() : true;
+    exportSettings.enableLod = renderLodToggle ? renderLodToggle->isChecked() : true;
+    exportSettings.lodBias = renderLodBiasSpin ? static_cast<float>(renderLodBiasSpin->value()) : 1.0f;
+    exportSettings.debugShowUv = renderUvDebugToggle ? renderUvDebugToggle->isChecked() : false;
+    exportSettings.lockLodLevel = renderLodLockToggle ? renderLodLockToggle->isChecked() : false;
+    exportSettings.lockedLodLevel = renderLodLevelSpin ? renderLodLevelSpin->value() : 0;
+    exportSettings.clearColor = { 0.86f, 0.86f, 0.86f, 1.0f };
+    exportSettings.showCameraGizmo = false;
+    exportSettings.showPivotMarkers = false;
+
+    currentExternalRenderAssets = exportBaseAssets;
+    currentExternalRenderAssetPaths = rebuildExternalPathSet(exportBaseAssets);
+    currentRenderAnimationDrafts.clear();
+    currentRenderAnimationEditKeysEnabled = false;
+    currentRenderAnimationBlendState = {};
+    resetRenderAnimationPlayback();
+    rebuildRenderScene();
+
+    if (!SceneHasRenderableMeshData(currentRenderSceneResult)) {
+        restoreRenderState();
+        QMessageBox::warning(
+            this,
+            tr("Export Animation GIFs"),
+            tr("The current file does not build a renderable scene for export."));
+        return;
+    }
+
+    int exportedCount = 0;
+    int skippedCount = static_cast<int>(filteredDiscoverySkippedRows.size());
+    int failedCount = 0;
+    bool canceled = false;
+    QString reportPath = QDir(outputDir).absoluteFilePath(QStringLiteral("report.csv"));
+
+    if (!QDir().mkpath(outputDir)) {
+        restoreRenderState();
+        QMessageBox::warning(
+            this,
+            tr("Export Animation GIFs"),
+            tr("Cannot create output directory: %1").arg(QDir::toNativeSeparators(outputDir)));
+        return;
+    }
+
+    QFile reportFile(reportPath);
+    if (!reportFile.open(QIODevice::WriteOnly | QIODevice::Truncate | QIODevice::Text)) {
+        restoreRenderState();
+        QMessageBox::warning(
+            this,
+            tr("Export Animation GIFs"),
+            tr("Cannot write report file: %1").arg(QDir::toNativeSeparators(reportPath)));
+        return;
+    }
+
+    QTextStream reportStream(&reportFile);
+    WriteAnimationGifReportCsvHeader(reportStream);
+    for (const AnimationGifReportRow& skippedRow : filteredDiscoverySkippedRows) {
+        WriteAnimationGifReportCsvRow(reportStream, skippedRow);
+    }
+    reportStream.flush();
+
+    QDialog exportDialog(this);
+    exportDialog.setWindowTitle(tr("Export Animation GIFs"));
+    exportDialog.setModal(true);
+    auto* exportLayout = new QVBoxLayout(&exportDialog);
+    auto* exportViewport = new OW3D::Render::RenderViewportWidget(&exportDialog);
+    exportViewport->setFixedSize(512, 512);
+    exportViewport->SetContinuousRenderingEnabled(false);
+    exportViewport->SetOverlayUiEnabled(false);
+    exportLayout->addWidget(exportViewport, 0, Qt::AlignCenter);
+    auto* exportStatusLabel = new QLabel(tr("Preparing export..."), &exportDialog);
+    exportStatusLabel->setWordWrap(true);
+    exportLayout->addWidget(exportStatusLabel);
+    auto* exportProgressBar = new QProgressBar(&exportDialog);
+    exportProgressBar->setRange(0, static_cast<int>(selectedSources.size()));
+    exportProgressBar->setValue(0);
+    exportLayout->addWidget(exportProgressBar);
+    auto* cancelExportButton = new QPushButton(tr("Cancel"), &exportDialog);
+    exportLayout->addWidget(cancelExportButton, 0, Qt::AlignRight);
+
+    bool cancelRequested = false;
+    bool exportDialogClosing = false;
+    auto requestCancel = [&]() {
+        if (cancelRequested || exportDialogClosing) {
+            return;
+        }
+        cancelRequested = true;
+        cancelExportButton->setEnabled(false);
+        exportStatusLabel->setText(tr("Cancel requested. Finishing the current clip..."));
+    };
+    connect(cancelExportButton, &QPushButton::clicked, &exportDialog, requestCancel);
+    connect(&exportDialog, &QDialog::rejected, &exportDialog, requestCancel);
+
+    exportDialog.show();
+    QCoreApplication::processEvents();
+    exportViewport->SetRenderSettings(exportSettings);
+
+    exportViewport->SetSceneResult(currentRenderSceneResult);
+    exportViewport->SetAnimationPlayback({});
+    exportViewport->SetAnimationEditDraft(std::nullopt);
+    exportViewport->SetAnimationEditingState(false, false, QString());
+    if (useCurrentEditorCamera) {
+        exportViewport->SetCameraState(fixedCamera);
+    }
+    else {
+        exportViewport->FocusScene();
+    }
+
+    for (int i = 0; i < static_cast<int>(selectedSources.size()); ++i) {
+        const AnimationGifSource& source = selectedSources[static_cast<std::size_t>(i)];
+        exportProgressBar->setValue(i);
+        exportStatusLabel->setText(tr("Exporting %1 (%2/%3)")
+            .arg(source.clipStem)
+            .arg(i + 1)
+            .arg(static_cast<int>(selectedSources.size())));
+        QCoreApplication::processEvents();
+        if (cancelRequested) {
+            canceled = true;
+            break;
+        }
+
+        AnimationGifReportRow row;
+        row.selectedSkeletonCode = selectedSkeletonCode;
+        row.detectedSkeletonCode = source.metadata.skeletonCode.toUpper();
+        row.clipStem = source.clipStem;
+        row.clipName = source.metadata.clipName;
+        row.resolvedW3dPath = QDir::toNativeSeparators(source.resolvedW3dPath);
+        row.resolvedJsonPath = source.resolvedJsonPath.isEmpty()
+            ? QString()
+            : QDir::toNativeSeparators(source.resolvedJsonPath);
+        row.hierarchyName = source.metadata.hierarchyName;
+        if (source.metadata.parsed) {
+            row.numFrames = QString::number(source.metadata.numFrames);
+            row.frameRate = QString::number(source.metadata.frameRate, 'f', 2);
+        }
+
+        if (!source.metadata.supportedForPlayback) {
+            row.status = QStringLiteral("SKIP");
+            row.errorMessage = source.metadata.errorMessage.isEmpty()
+                ? tr("Animation metadata indicates unsupported playback.")
+                : source.metadata.errorMessage;
+            ++skippedCount;
+            WriteAnimationGifReportCsvRow(reportStream, row);
+            reportStream.flush();
+            continue;
+        }
+        if (source.metadata.numFrames <= 0) {
+            row.status = QStringLiteral("SKIP");
+            row.errorMessage = tr("The animation metadata reports zero frames.");
+            ++skippedCount;
+            WriteAnimationGifReportCsvRow(reportStream, row);
+            reportStream.flush();
+            continue;
+        }
+        if (source.metadata.numFrames > 1 && source.metadata.frameRate <= 0.0) {
+            row.status = QStringLiteral("SKIP");
+            row.errorMessage = tr("The animation metadata reports an invalid frame rate.");
+            ++skippedCount;
+            WriteAnimationGifReportCsvRow(reportStream, row);
+            reportStream.flush();
+            continue;
+        }
+
+        currentExternalRenderAssets = exportBaseAssets;
+        currentExternalRenderAssetPaths = rebuildExternalPathSet(exportBaseAssets);
+
+        RenderSessionAsset clipAsset;
+        QString loadError;
+        if (!tryLoadRenderSessionAsset(
+            source.resolvedW3dPath,
+            RenderSessionAssetRole::AnimationLibrary,
+            clipAsset,
+            &loadError))
+        {
+            row.status = QStringLiteral("FAIL");
+            row.errorMessage = loadError.isEmpty()
+                ? tr("Failed to load the resolved animation W3D.")
+                : loadError;
+            ++failedCount;
+            WriteAnimationGifReportCsvRow(reportStream, row);
+            reportStream.flush();
+            continue;
+        }
+        if (clipAsset.animationCount <= 0) {
+            row.status = QStringLiteral("SKIP");
+            row.errorMessage = tr("Resolved source file does not contain animation data.");
+            ++skippedCount;
+            WriteAnimationGifReportCsvRow(reportStream, row);
+            reportStream.flush();
+            continue;
+        }
+
+        currentExternalRenderAssets = exportBaseAssets;
+        currentExternalRenderAssets.push_back(clipAsset);
+        currentExternalRenderAssetPaths = rebuildExternalPathSet(currentExternalRenderAssets);
+        currentRenderAnimationDrafts.clear();
+        currentRenderAnimationEditKeysEnabled = false;
+        currentRenderAnimationBlendState = {};
+        resetRenderAnimationPlayback();
+        rebuildRenderScene();
+
+        int animationIndex = -1;
+        QString resolveError;
+        if (!FindAnimationGifAnimationIndex(
+            currentRenderSceneResult.scene,
+            clipAsset.displayLabel,
+            source,
+            animationIndex,
+            resolveError))
+        {
+            row.status = QStringLiteral("SKIP");
+            row.errorMessage = resolveError;
+            ++skippedCount;
+            WriteAnimationGifReportCsvRow(reportStream, row);
+            reportStream.flush();
+            continue;
+        }
+
+        const auto& clip = currentRenderSceneResult.scene.animations[static_cast<std::size_t>(animationIndex)];
+        row.hierarchyName = QString::fromStdString(clip.hierarchyName);
+        row.numFrames = QString::number(clip.numFrames);
+        row.frameRate = QString::number(clip.frameRate, 'f', 2);
+
+        if (clip.numFrames == 0u) {
+            row.status = QStringLiteral("SKIP");
+            row.errorMessage = tr("The selected clip reports zero frames.");
+            ++skippedCount;
+            WriteAnimationGifReportCsvRow(reportStream, row);
+            reportStream.flush();
+            continue;
+        }
+        if (clip.numFrames > 1u && clip.frameRate <= 0.0f) {
+            row.status = QStringLiteral("SKIP");
+            row.errorMessage = tr("The selected clip has an invalid frame rate.");
+            ++skippedCount;
+            WriteAnimationGifReportCsvRow(reportStream, row);
+            reportStream.flush();
+            continue;
+        }
+
+        currentRenderAnimationPlayback = {};
+        currentRenderAnimationPlayback.activeAnimationIndex = animationIndex;
+        currentRenderAnimationPlayback.loop = true;
+        currentRenderAnimationPlayback.speed = 1.0f;
+        currentRenderActiveClipIdentity = BuildRenderAnimationClipIdentity(clip);
+        syncRenderAnimationUi();
+
+        exportViewport->SetSceneResult(currentRenderSceneResult);
+        exportViewport->SetAnimationEditDraft(std::nullopt);
+        exportViewport->SetAnimationEditingState(false, false, QString());
+        if (useCurrentEditorCamera) {
+            exportViewport->SetCameraState(fixedCamera);
+        }
+        else {
+            exportViewport->FocusScene();
+        }
+
+        const QString outputGifPath = QDir(outputDir).absoluteFilePath(
+            QFileInfo(source.resolvedW3dPath).completeBaseName() + QStringLiteral(".gif"));
+        row.outputGifPath = QDir::toNativeSeparators(outputGifPath);
+
+        OW3D::Gif::Writer gifWriter;
+        QString gifError;
+        if (!gifWriter.Open(outputGifPath, 512, 512, &gifError)) {
+            row.status = QStringLiteral("FAIL");
+            row.errorMessage = gifError;
+            ++failedCount;
+            WriteAnimationGifReportCsvRow(reportStream, row);
+            reportStream.flush();
+            continue;
+        }
+
+        const int effectiveFrameCount = (clip.numFrames > 1u)
+            ? std::max(1, static_cast<int>(clip.numFrames) - 1)
+            : 1;
+        const int frameDelayCentiseconds = GifDelayCentisecondsFromClipFrameRate(clip.frameRate);
+
+        bool clipFailed = false;
+        int framesWritten = 0;
+        for (int frameIndex = 0; frameIndex < effectiveFrameCount; ++frameIndex) {
+            OW3D::Render::AnimationPlaybackState playback{};
+            playback.activeAnimationIndex = animationIndex;
+            playback.timeSeconds = (clip.frameRate > 0.0f)
+                ? static_cast<float>(frameIndex) / clip.frameRate
+                : 0.0f;
+            playback.loop = true;
+            playback.playing = false;
+            playback.speed = 1.0f;
+
+            exportViewport->SetAnimationPlayback(playback);
+            exportViewport->RenderOnce();
+
+            QImage frameImage;
+            if (!exportViewport->CaptureCurrentFrame(frameImage)) {
+                clipFailed = true;
+                row.status = QStringLiteral("FAIL");
+                row.errorMessage = tr("Failed to capture a rendered frame.");
+                ++failedCount;
+                break;
+            }
+            if (!gifWriter.AddFrame(frameImage, frameDelayCentiseconds, &gifError)) {
+                clipFailed = true;
+                row.status = QStringLiteral("FAIL");
+                row.errorMessage = gifError;
+                ++failedCount;
+                break;
+            }
+
+            ++framesWritten;
+            QCoreApplication::processEvents();
+            if (cancelRequested) {
+                canceled = true;
+            }
+        }
+
+        QString closeError;
+        if (!gifWriter.Close(&closeError) && !clipFailed) {
+            clipFailed = true;
+            row.status = QStringLiteral("FAIL");
+            row.errorMessage = closeError;
+            ++failedCount;
+        }
+
+        if (clipFailed) {
+            QFile::remove(outputGifPath);
+        }
+        else if (framesWritten <= 0) {
+            row.status = QStringLiteral("SKIP");
+            row.errorMessage = tr("No frames were written for the selected clip.");
+            ++skippedCount;
+            QFile::remove(outputGifPath);
+        }
+        else {
+            row.status = QStringLiteral("EXPORTED");
+            ++exportedCount;
+        }
+
+        WriteAnimationGifReportCsvRow(reportStream, row);
+        reportStream.flush();
+
+        if (cancelRequested) {
+            canceled = true;
+            break;
+        }
+    }
+
+    exportProgressBar->setValue(static_cast<int>(selectedSources.size()));
+    reportFile.close();
+    exportDialogClosing = true;
+    exportDialog.close();
+
+    restoreRenderState();
+    lastDirectory = outputDir;
+
+    const QString summary = tr(
+        "%1\n\nSkeleton: %2\nMatching clips: %3\nExported: %4\nSkipped: %5\nFailed: %6\nReport: %7")
+        .arg(canceled ? tr("Export canceled.") : tr("Export completed."))
+        .arg(selectedSkeletonCode)
+        .arg(static_cast<int>(selectedSources.size()))
+        .arg(exportedCount)
+        .arg(skippedCount)
+        .arg(failedCount)
+        .arg(QDir::toNativeSeparators(reportPath));
+
+    if (canceled || failedCount > 0) {
+        QMessageBox::warning(this, tr("Export Animation GIFs"), summary);
+    }
+    else {
+        QMessageBox::information(this, tr("Export Animation GIFs"), summary);
     }
 }
 

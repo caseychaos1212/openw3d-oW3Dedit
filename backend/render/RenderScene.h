@@ -117,6 +117,8 @@ struct RenderHierarchy {
     std::string name;
     std::vector<RenderPivot> pivots;
     std::vector<int> compatibleAnimationIndices;
+    int attachedHierarchyIndex = -1;
+    int attachedPivotIndex = -1;
     const ::ChunkItem* sourceHierarchyChunk = nullptr;
     const ::ChunkItem* sourcePivotsChunk = nullptr;
 };
@@ -163,6 +165,7 @@ struct RenderAnimationClip {
 struct RenderAnimationEditDraft {
     const ::ChunkItem* sourceAnimationChunk = nullptr;
     uint32_t numFrames = 0;
+    float frameRate = 0.0f;
     std::unordered_map<int, RenderDensePivotAnimationSamples> pivotSamples;
 };
 

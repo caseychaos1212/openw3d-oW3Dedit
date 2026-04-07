@@ -9,6 +9,8 @@
 #include "../../backend/render/RenderScene.h"
 #include "../../backend/render/RenderTypes.h"
 
+class QImage;
+
 namespace OW3D::Render {
 
 struct CameraState {
@@ -29,6 +31,7 @@ struct RenderSettings {
     bool debugShowUv = false;
     bool lockLodLevel = false;
     int lockedLodLevel = 0;
+    Vec4 clearColor{ 0.08f, 0.09f, 0.12f, 1.0f };
     bool showCameraGizmo = true;
     bool showPivotMarkers = true;
 };
@@ -60,6 +63,21 @@ struct RenderInstanceKeyHash {
     }
 };
 
+struct RenderPivotOverrideKey {
+    int hierarchyIndex = -1;
+    int pivotIndex = -1;
+
+    bool operator==(const RenderPivotOverrideKey& other) const = default;
+};
+
+struct RenderPivotOverrideKeyHash {
+    std::size_t operator()(const RenderPivotOverrideKey& key) const noexcept {
+        std::size_t h = static_cast<std::size_t>(key.hierarchyIndex + 0x9E3779B9);
+        h = (h * 16777619u) ^ static_cast<std::size_t>(key.pivotIndex + 0x7F4A7C15);
+        return h;
+    }
+};
+
 class IRenderBackend {
 public:
     virtual ~IRenderBackend() = default;
@@ -75,9 +93,12 @@ public:
     virtual void SetSelectedInstance(const std::optional<RenderInstanceKey>& selected) = 0;
     virtual void SetTransformOverrides(
         const std::unordered_map<RenderInstanceKey, Mat4, RenderInstanceKeyHash>& overrides) = 0;
+    virtual void SetPivotLocalOverrides(
+        const std::unordered_map<RenderPivotOverrideKey, Mat4, RenderPivotOverrideKeyHash>& overrides) = 0;
     virtual void SetHiddenInstances(
         const std::unordered_set<RenderInstanceKey, RenderInstanceKeyHash>& hidden) = 0;
     virtual void RenderFrame(const std::function<void()>& overlayCallback = {}) = 0;
+    virtual bool CaptureFrame(QImage& outImage) = 0;
     virtual FrameStats GetFrameStats() const = 0;
     virtual void* NativeDeviceHandle() const = 0;
     virtual void* NativeDeviceContextHandle() const = 0;

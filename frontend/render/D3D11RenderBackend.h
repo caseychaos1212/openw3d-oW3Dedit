@@ -35,9 +35,12 @@ public:
     void SetSelectedInstance(const std::optional<RenderInstanceKey>& selected) override;
     void SetTransformOverrides(
         const std::unordered_map<RenderInstanceKey, Mat4, RenderInstanceKeyHash>& overrides) override;
+    void SetPivotLocalOverrides(
+        const std::unordered_map<RenderPivotOverrideKey, Mat4, RenderPivotOverrideKeyHash>& overrides) override;
     void SetHiddenInstances(
         const std::unordered_set<RenderInstanceKey, RenderInstanceKeyHash>& hidden) override;
     void RenderFrame(const std::function<void()>& overlayCallback = {}) override;
+    bool CaptureFrame(QImage& outImage) override;
     FrameStats GetFrameStats() const override;
     void* NativeDeviceHandle() const override { return m_device.Get(); }
     void* NativeDeviceContextHandle() const override { return m_context.Get(); }
@@ -123,6 +126,7 @@ private:
     Microsoft::WRL::ComPtr<ID3D11RenderTargetView> m_rtv;
     Microsoft::WRL::ComPtr<ID3D11DepthStencilView> m_dsv;
     Microsoft::WRL::ComPtr<ID3D11Texture2D> m_depthTexture;
+    Microsoft::WRL::ComPtr<ID3D11Texture2D> m_captureTexture;
 
     Microsoft::WRL::ComPtr<ID3D11VertexShader> m_vs;
     Microsoft::WRL::ComPtr<ID3D11PixelShader> m_ps;
@@ -150,6 +154,7 @@ private:
     FrameStats m_lastFrameStats{};
     std::optional<RenderInstanceKey> m_selectedInstance;
     std::unordered_map<RenderInstanceKey, Mat4, RenderInstanceKeyHash> m_transformOverrides;
+    std::unordered_map<RenderPivotOverrideKey, Mat4, RenderPivotOverrideKeyHash> m_pivotLocalOverrides;
     std::unordered_set<RenderInstanceKey, RenderInstanceKeyHash> m_hiddenInstances;
 
     uint32_t m_viewWidth = 1;

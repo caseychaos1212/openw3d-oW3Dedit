@@ -2466,11 +2466,8 @@ std::optional<AttachedHierarchyBinding> CreateAttachedHierarchyBinding(
         ctx.result.scene.hierarchies[static_cast<std::size_t>(sourceHierarchyIndex)];
     const auto& attachmentHierarchy =
         ctx.result.scene.hierarchies[static_cast<std::size_t>(attachmentHierarchyIndex)];
-
-    const auto sourceWorlds = BuildStaticHierarchyWorldTransforms(sourceHierarchy);
-    const auto attachmentWorlds = BuildStaticHierarchyWorldTransforms(attachmentHierarchy);
     if (attachmentPivotIndex < 0
-        || attachmentPivotIndex >= static_cast<int>(attachmentWorlds.size()))
+        || attachmentPivotIndex >= static_cast<int>(attachmentHierarchy.pivots.size()))
     {
         ctx.result.warnings.push_back({
             SceneBuildWarningCode::InvalidIndex,
@@ -2481,9 +2478,6 @@ std::optional<AttachedHierarchyBinding> CreateAttachedHierarchyBinding(
         return std::nullopt;
     }
 
-    Mat4 attachmentRootTransform =
-        attachmentWorlds[static_cast<std::size_t>(attachmentPivotIndex)];
-
     RenderHierarchy attachedHierarchy = sourceHierarchy;
     attachedHierarchy.name =
         (!sourceHierarchy.name.empty() ? sourceHierarchy.name : sourceFallbackName);
@@ -2491,11 +2485,8 @@ std::optional<AttachedHierarchyBinding> CreateAttachedHierarchyBinding(
         attachedHierarchy.name += " [attached " + sourceFallbackName;
         attachedHierarchy.name += "]";
     }
-    for (auto& pivot : attachedHierarchy.pivots) {
-        if (pivot.parentIndex < 0) {
-            pivot.localTransform = Multiply(attachmentRootTransform, pivot.localTransform);
-        }
-    }
+    attachedHierarchy.attachedHierarchyIndex = attachmentHierarchyIndex;
+    attachedHierarchy.attachedPivotIndex = attachmentPivotIndex;
 
     AttachedHierarchyBinding binding{};
     binding.hierarchyIndex = static_cast<int>(ctx.result.scene.hierarchies.size());

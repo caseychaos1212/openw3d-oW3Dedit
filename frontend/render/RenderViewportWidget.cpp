@@ -170,29 +170,29 @@ Quaternion QuaternionFromMatrix(const Mat4& m) {
     if (trace > 0.0f) {
         const float s = std::sqrt(trace + 1.0f) * 2.0f;
         q.w = 0.25f * s;
-        q.x = (m.m[9] - m.m[6]) / s;
-        q.y = (m.m[2] - m.m[8]) / s;
-        q.z = (m.m[4] - m.m[1]) / s;
+        q.x = (m.m[6] - m.m[9]) / s;
+        q.y = (m.m[8] - m.m[2]) / s;
+        q.z = (m.m[1] - m.m[4]) / s;
     }
     else if (m.m[0] > m.m[5] && m.m[0] > m.m[10]) {
         const float s = std::sqrt(1.0f + m.m[0] - m.m[5] - m.m[10]) * 2.0f;
-        q.w = (m.m[9] - m.m[6]) / s;
+        q.w = (m.m[6] - m.m[9]) / s;
         q.x = 0.25f * s;
-        q.y = (m.m[1] + m.m[4]) / s;
-        q.z = (m.m[2] + m.m[8]) / s;
+        q.y = (m.m[4] + m.m[1]) / s;
+        q.z = (m.m[8] + m.m[2]) / s;
     }
     else if (m.m[5] > m.m[10]) {
         const float s = std::sqrt(1.0f + m.m[5] - m.m[0] - m.m[10]) * 2.0f;
-        q.w = (m.m[2] - m.m[8]) / s;
-        q.x = (m.m[1] + m.m[4]) / s;
+        q.w = (m.m[8] - m.m[2]) / s;
+        q.x = (m.m[4] + m.m[1]) / s;
         q.y = 0.25f * s;
-        q.z = (m.m[6] + m.m[9]) / s;
+        q.z = (m.m[9] + m.m[6]) / s;
     }
     else {
         const float s = std::sqrt(1.0f + m.m[10] - m.m[0] - m.m[5]) * 2.0f;
-        q.w = (m.m[4] - m.m[1]) / s;
-        q.x = (m.m[2] + m.m[8]) / s;
-        q.y = (m.m[6] + m.m[9]) / s;
+        q.w = (m.m[1] - m.m[4]) / s;
+        q.x = (m.m[8] + m.m[2]) / s;
+        q.y = (m.m[9] + m.m[6]) / s;
         q.z = 0.25f * s;
     }
 
@@ -275,6 +275,25 @@ Quaternion QuaternionFromEulerDegrees(const Vec3& eulerDegrees) {
     return NormalizeQuaternion(q);
 }
 
+bool RigidTransformsNearlyEqual(
+    const Mat4& a,
+    const Mat4& b,
+    float epsilon = 1.0e-4f)
+{
+    constexpr int indices[] = {
+        0, 1, 2,
+        4, 5, 6,
+        8, 9, 10,
+        12, 13, 14
+    };
+    for (const int index : indices) {
+        if (std::fabs(a.m[index] - b.m[index]) > epsilon) {
+            return false;
+        }
+    }
+    return true;
+}
+
 } // namespace
 
 RenderViewportWidget::RenderViewportWidget(QWidget* parent)
@@ -342,6 +361,7 @@ void RenderViewportWidget::SetSceneResult(const SceneBuildResult& sceneResult) {
     if (m_backend) {
         m_backend->SetSelectedInstance(m_selectedInstance);
         m_backend->SetTransformOverrides({});
+        m_backend->SetPivotLocalOverrides({});
         m_backend->SetHiddenInstances({});
     }
 
@@ -374,6 +394,40 @@ void RenderViewportWidget::SetAnimationEditDraft(
     m_animationEditDraft = draft;
     if (m_backendInitialized && m_backend) {
         m_backend->SetAnimationEditDraft(m_animationEditDraft);
+    }
+}
+
+void RenderViewportWidget::SetCameraState(const CameraState& camera) {
+    m_camera = camera;
+    SyncCameraInspectorStateFromCamera();
+    if (m_backendInitialized && m_backend) {
+        m_backend->SetCamera(m_camera);
+    }
+}
+
+void RenderViewportWidget::SetContinuousRenderingEnabled(bool enabled) {
+    m_continuousRenderingEnabled = enabled;
+    if (!m_frameTimer) {
+        return;
+    }
+    if (!enabled && m_frameTimer->isActive()) {
+        m_frameTimer->stop();
+    }
+    else if (enabled && isVisible() && !m_frameTimer->isActive()) {
+        m_frameTimer->start();
+    }
+}
+
+void RenderViewportWidget::SetOverlayUiEnabled(bool enabled) {
+    m_overlayUiEnabled = enabled;
+    if (!enabled) {
+        m_gizmoOver = false;
+        m_gizmoUsing = false;
+        m_gizmoWasUsing = false;
+        m_pendingPick = false;
+    }
+    else {
+        EnsureBackendInitialized();
     }
 }
 
@@ -412,6 +466,19 @@ void RenderViewportWidget::FocusScene() {
     SyncCameraInspectorStateFromCamera();
 }
 
+void RenderViewportWidget::RenderOnce() {
+    TickFrame();
+}
+
+bool RenderViewportWidget::CaptureCurrentFrame(QImage& outImage) {
+    EnsureBackendInitialized();
+    if (!m_backendInitialized || !m_backend) {
+        outImage = QImage();
+        return false;
+    }
+    return m_backend->CaptureFrame(outImage);
+}
+
 const RenderAnimationClip* RenderViewportWidget::CurrentActiveAnimationClip() const {
     const int activeIndex = m_animationPlayback.activeAnimationIndex;
     if (activeIndex < 0 || activeIndex >= static_cast<int>(m_sceneResult.scene.animations.size())) {
@@ -438,7 +505,8 @@ const RenderAnimationClip* RenderViewportWidget::ActiveClipForHierarchy(
         m_sceneResult.scene.hierarchies[static_cast<std::size_t>(hierarchyIndex)],
         m_animationPlayback,
         m_animationPlayback.timeSeconds,
-        animationFrame);
+        animationFrame,
+        m_animationEditDraft);
     if (outAnimationFrame) {
         *outAnimationFrame = animationFrame;
     }
@@ -447,12 +515,16 @@ const RenderAnimationClip* RenderViewportWidget::ActiveClipForHierarchy(
 
 int RenderViewportWidget::CurrentAnimationFrameIndex() const {
     const RenderAnimationClip* clip = CurrentActiveAnimationClip();
-    if (!clip || clip->numFrames == 0u || clip->frameRate <= 0.0f) {
+    const RenderAnimationEditDraft* activeDraft =
+        ResolveAnimationEditDraftForClip(m_animationEditDraft, clip);
+    const uint32_t numFrames = ResolveAnimationFrameCount(clip, activeDraft);
+    const float frameRate = ResolveAnimationFrameRate(clip, activeDraft);
+    if (!clip || numFrames == 0u || frameRate <= 0.0f) {
         return 0;
     }
 
-    const int maxFrame = std::max(0, static_cast<int>(clip->numFrames) - 1);
-    const float frameFloat = m_animationPlayback.timeSeconds * clip->frameRate;
+    const int maxFrame = std::max(0, static_cast<int>(numFrames) - 1);
+    const float frameFloat = m_animationPlayback.timeSeconds * frameRate;
     return std::clamp(static_cast<int>(std::round(frameFloat)), 0, maxFrame);
 }
 
@@ -571,6 +643,15 @@ void RenderViewportWidget::CommitDisplayedLocalTransform(
     MaybePauseAnimationForEditing();
 
     const Mat4 local = OrthonormalizeRigidTransform(displayedLocal);
+    const bool hadPreviewOverride = m_pivotLocalOverrides.find(key) != m_pivotLocalOverrides.end();
+    const Mat4 currentDisplayedLocal =
+        ComputeDisplayedLocalTransform(key.hierarchyIndex, key.pivotIndex);
+    if (!hadPreviewOverride
+        && RigidTransformsNearlyEqual(local, currentDisplayedLocal))
+    {
+        ClearPivotOverrides();
+        return;
+    }
 
     if (IsAnimationEditModeActive()) {
         const Mat4 baseLocal = hierarchy.pivots[static_cast<std::size_t>(key.pivotIndex)].localTransform;
@@ -820,6 +901,14 @@ void RenderViewportWidget::ApplyTransformInspectorEdits() {
         newRotation.y,
         newRotation.z,
         newRotation.w);
+    const bool hadPreviewOverride = m_pivotLocalOverrides.find(key) != m_pivotLocalOverrides.end();
+    if (!hadPreviewOverride
+        && RigidTransformsNearlyEqual(
+            OrthonormalizeRigidTransform(committedLocal),
+            local))
+    {
+        return;
+    }
     CommitDisplayedLocalTransform(key, committedLocal);
 }
 
@@ -844,12 +933,17 @@ void RenderViewportWidget::PreviewTransformInspectorEdits() {
     (void)representativeVisibleIndex;
     MaybePauseAnimationForEditing();
     const Quaternion newRotation = QuaternionFromEulerDegrees(m_transformInspectorRotationDegrees);
-    m_pivotLocalOverrides[key] = TransformFromTranslationRotation(
+    const Mat4 previewLocal = OrthonormalizeRigidTransform(TransformFromTranslationRotation(
         m_transformInspectorTranslation,
         newRotation.x,
         newRotation.y,
         newRotation.z,
-        newRotation.w);
+        newRotation.w));
+    const bool hadPreviewOverride = m_pivotLocalOverrides.find(key) != m_pivotLocalOverrides.end();
+    if (!hadPreviewOverride && RigidTransformsNearlyEqual(previewLocal, local)) {
+        return;
+    }
+    m_pivotLocalOverrides[key] = previewLocal;
     RebuildBackendOverrides();
 }
 
@@ -906,7 +1000,7 @@ QPaintEngine* RenderViewportWidget::paintEngine() const {
 void RenderViewportWidget::showEvent(QShowEvent* event) {
     QWidget::showEvent(event);
     EnsureBackendInitialized();
-    if (m_frameTimer && !m_frameTimer->isActive()) {
+    if (m_continuousRenderingEnabled && m_frameTimer && !m_frameTimer->isActive()) {
         m_frameTimer->start();
     }
 }
@@ -929,7 +1023,7 @@ void RenderViewportWidget::resizeEvent(QResizeEvent* event) {
 }
 
 void RenderViewportWidget::mousePressEvent(QMouseEvent* event) {
-    if (m_imguiInitialized) {
+    if (m_overlayUiEnabled && m_imguiInitialized) {
         ImGuiIO& io = ImGui::GetIO();
         io.AddMousePosEvent(static_cast<float>(event->position().x()), static_cast<float>(event->position().y()));
         if (event->button() == Qt::LeftButton) {
@@ -969,7 +1063,7 @@ void RenderViewportWidget::mousePressEvent(QMouseEvent* event) {
 }
 
 void RenderViewportWidget::mouseMoveEvent(QMouseEvent* event) {
-    if (m_imguiInitialized) {
+    if (m_overlayUiEnabled && m_imguiInitialized) {
         ImGuiIO& io = ImGui::GetIO();
         io.AddMousePosEvent(static_cast<float>(event->position().x()), static_cast<float>(event->position().y()));
         if (io.WantCaptureMouse && m_dragMode == DragMode::None) {
@@ -1010,7 +1104,7 @@ void RenderViewportWidget::mouseMoveEvent(QMouseEvent* event) {
 }
 
 void RenderViewportWidget::mouseReleaseEvent(QMouseEvent* event) {
-    if (m_imguiInitialized) {
+    if (m_overlayUiEnabled && m_imguiInitialized) {
         ImGuiIO& io = ImGui::GetIO();
         io.AddMousePosEvent(static_cast<float>(event->position().x()), static_cast<float>(event->position().y()));
         if (event->button() == Qt::LeftButton) {
@@ -1051,7 +1145,7 @@ void RenderViewportWidget::mouseReleaseEvent(QMouseEvent* event) {
 }
 
 void RenderViewportWidget::wheelEvent(QWheelEvent* event) {
-    if (m_imguiInitialized) {
+    if (m_overlayUiEnabled && m_imguiInitialized) {
         ImGuiIO& io = ImGui::GetIO();
         const QPoint angle = event->angleDelta();
         io.AddMouseWheelEvent(0.0f, static_cast<float>(angle.y()) / 120.0f);
@@ -1096,31 +1190,43 @@ void RenderViewportWidget::keyPressEvent(QKeyEvent* event) {
 }
 
 void RenderViewportWidget::EnsureBackendInitialized() {
-    if (m_backendInitialized || !m_backend) {
+    if (!m_backend) {
         return;
     }
 
-    if (!windowHandle()) {
-        return;
+    if (!m_backendInitialized) {
+        if (!windowHandle()) {
+            return;
+        }
+
+        const bool ok = m_backend->Initialize(
+            reinterpret_cast<void*>(winId()),
+            static_cast<uint32_t>(std::max(1, width())),
+            static_cast<uint32_t>(std::max(1, height())));
+        if (!ok) {
+            return;
+        }
+
+        m_backendInitialized = true;
+        m_backend->SetRenderSettings(m_settings);
+        m_backend->SetAnimationPlayback(m_animationPlayback);
+        m_backend->SetAnimationEditDraft(m_animationEditDraft);
+        m_backend->SetCamera(m_camera);
+        m_sceneDirty = true;
+        m_deltaTimer.restart();
     }
 
-    const bool ok = m_backend->Initialize(
-        reinterpret_cast<void*>(winId()),
-        static_cast<uint32_t>(std::max(1, width())),
-        static_cast<uint32_t>(std::max(1, height())));
-    if (!ok) {
-        return;
-    }
-
-    if (!m_imguiInitialized) {
+    if (m_overlayUiEnabled && !m_imguiInitialized) {
         auto* d3dBackend = dynamic_cast<D3D11RenderBackend*>(m_backend.get());
         if (d3dBackend) {
             auto* device = static_cast<ID3D11Device*>(d3dBackend->NativeDeviceHandle());
             auto* context = static_cast<ID3D11DeviceContext*>(d3dBackend->NativeDeviceContextHandle());
             if (device && context) {
                 IMGUI_CHECKVERSION();
-                ImGui::CreateContext();
-                ImGui::StyleColorsDark();
+                if (ImGui::GetCurrentContext() == nullptr) {
+                    ImGui::CreateContext();
+                    ImGui::StyleColorsDark();
+                }
                 ImGuiIO& io = ImGui::GetIO();
                 io.IniFilename = nullptr;
                 io.LogFilename = nullptr;
@@ -1128,14 +1234,6 @@ void RenderViewportWidget::EnsureBackendInitialized() {
             }
         }
     }
-
-    m_backendInitialized = true;
-    m_backend->SetRenderSettings(m_settings);
-    m_backend->SetAnimationPlayback(m_animationPlayback);
-    m_backend->SetAnimationEditDraft(m_animationEditDraft);
-    m_backend->SetCamera(m_camera);
-    m_sceneDirty = true;
-    m_deltaTimer.restart();
 }
 
 void RenderViewportWidget::ShutdownImGui() {
@@ -1167,7 +1265,7 @@ void RenderViewportWidget::TickFrame() {
     SyncSelectedInstanceToVisibleList();
 
     bool viewOrTransformChanged = false;
-    if (m_imguiInitialized) {
+    if (m_overlayUiEnabled && m_imguiInitialized) {
         ImGuiIO& io = ImGui::GetIO();
         io.DisplaySize = ImVec2(static_cast<float>(std::max(1, width())), static_cast<float>(std::max(1, height())));
         const float dt = std::max(1.0e-4f, static_cast<float>(m_deltaTimer.nsecsElapsed()) / 1.0e9f);
@@ -1211,7 +1309,7 @@ void RenderViewportWidget::TickFrame() {
     m_backend->SetAnimationPlayback(m_animationPlayback);
     m_backend->SetCamera(m_camera);
 
-    if (m_imguiInitialized) {
+    if (m_overlayUiEnabled && m_imguiInitialized) {
         m_backend->RenderFrame([this]() {
             ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
         });
@@ -1396,16 +1494,24 @@ void RenderViewportWidget::BuildVisibleInstances(const Vec3& cameraPos) {
 
 void RenderViewportWidget::RebuildBackendOverrides() {
     m_backendWorldOverrides.clear();
+    std::unordered_map<RenderPivotOverrideKey, Mat4, RenderPivotOverrideKeyHash> pivotOverrides;
+    pivotOverrides.reserve(m_pivotLocalOverrides.size());
 
     if (!m_pivotLocalOverrides.empty()) {
         for (const auto& instance : m_visibleInstances) {
             m_backendWorldOverrides[instance.key] = instance.world;
+        }
+        for (const auto& [key, local] : m_pivotLocalOverrides) {
+            pivotOverrides.emplace(
+                RenderPivotOverrideKey{ key.hierarchyIndex, key.pivotIndex },
+                local);
         }
     }
 
     if (m_backend) {
         m_backend->SetSelectedInstance(m_selectedInstance);
         m_backend->SetTransformOverrides(m_backendWorldOverrides);
+        m_backend->SetPivotLocalOverrides(pivotOverrides);
         m_backend->SetHiddenInstances(m_hiddenInstances);
     }
 }
@@ -2384,6 +2490,7 @@ void RenderViewportWidget::ClearPivotOverrides() {
     m_backendWorldOverrides.clear();
     if (m_backend) {
         m_backend->SetTransformOverrides({});
+        m_backend->SetPivotLocalOverrides({});
     }
 }
 
@@ -2397,6 +2504,7 @@ void RenderViewportWidget::SyncSelectedInstanceToVisibleList() {
             m_selectedPivotRepresentativeVisibleIndex = -1;
             m_selectedVisibleIndex = -1;
             m_selectedInstance.reset();
+            emit pivotSelectionChanged(-1, -1);
             EmitSelectionStatus(QStringLiteral("Selection: none"));
             return;
         }
@@ -2426,6 +2534,7 @@ void RenderViewportWidget::SyncSelectedInstanceToVisibleList() {
 
 void RenderViewportWidget::SetSelectedVisibleInstance(int index, bool emitChunkSignal) {
     if (index < 0 || index >= static_cast<int>(m_visibleInstances.size())) {
+        const bool hadPivotSelection = m_selectedPivot.has_value();
         m_selectedVisibleIndex = -1;
         m_selectedInstance.reset();
         m_selectedPivot.reset();
@@ -2433,6 +2542,9 @@ void RenderViewportWidget::SetSelectedVisibleInstance(int index, bool emitChunkS
         m_selectedPivotRepresentativeVisibleIndex = -1;
         m_gizmoWasUsing = false;
         ClearPivotOverrides();
+        if (hadPivotSelection) {
+            emit pivotSelectionChanged(-1, -1);
+        }
         EmitSelectionStatus(QStringLiteral("Selection: none"));
         return;
     }
@@ -2457,9 +2569,13 @@ void RenderViewportWidget::SetSelectedVisibleInstance(int index, bool emitChunkS
 
     m_selectedVisibleIndex = index;
     m_selectedInstance = selected.key;
+    const bool hadPivotSelection = m_selectedPivot.has_value();
     m_selectedPivot.reset();
     m_selectedPivotsChunk = nullptr;
     m_selectedPivotRepresentativeVisibleIndex = -1;
+    if (hadPivotSelection) {
+        emit pivotSelectionChanged(-1, -1);
+    }
 
     if (emitChunkSignal && selected.meshChunk) {
         emit sceneChunkActivated(const_cast<::ChunkItem*>(selected.meshChunk));
@@ -2510,6 +2626,10 @@ void RenderViewportWidget::SetSelectedPivot(
     }
     else {
         m_selectedInstance.reset();
+    }
+
+    if (pivotChanged) {
+        emit pivotSelectionChanged(key.hierarchyIndex, key.pivotIndex);
     }
 
     if (emitChunkSignal) {

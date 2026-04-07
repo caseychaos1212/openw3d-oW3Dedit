@@ -326,7 +326,9 @@
     <ClCompile Include="thirdparty\imgui\backends\imgui_impl_dx11.cpp" />
     <ClCompile Include="thirdparty\ImGuizmo\ImGuizmo.cpp" />
     <ClCompile Include="Main.cpp" />
-    <ClCompile Include="mainWindow.cpp" />
+    <ClCompile Include="mainWindow.cpp">
+      <AdditionalOptions>/bigobj %(AdditionalOptions)</AdditionalOptions>
+    </ClCompile>
     <ClInclude Include="backend\ChunkInterpreter.h" />
     <ClInclude Include="backend\ChunkJson.h" />
     <ClInclude Include="backend\ChunkNames.h" />

@@ -431,6 +431,12 @@ void D3D11RenderBackend::SetTransformOverrides(
     m_transformOverrides = overrides;
 }
 
+void D3D11RenderBackend::SetPivotLocalOverrides(
+    const std::unordered_map<RenderPivotOverrideKey, Mat4, RenderPivotOverrideKeyHash>& overrides)
+{
+    m_pivotLocalOverrides = overrides;
+}
+
 void D3D11RenderBackend::SetHiddenInstances(
     const std::unordered_set<RenderInstanceKey, RenderInstanceKeyHash>& hidden)
 {
@@ -451,7 +457,12 @@ void D3D11RenderBackend::RenderFrame(const std::function<void()>& overlayCallbac
     viewport.MaxDepth = 1.0f;
     m_context->RSSetViewports(1, &viewport);
 
-    const float clearColor[4] = { 0.08f, 0.09f, 0.12f, 1.0f };
+    const float clearColor[4] = {
+        m_settings.clearColor.x,
+        m_settings.clearColor.y,
+        m_settings.clearColor.z,
+        m_settings.clearColor.w
+    };
     m_context->ClearRenderTargetView(m_rtv.Get(), clearColor);
     m_context->ClearDepthStencilView(m_dsv.Get(), D3D11_CLEAR_DEPTH, 1.0f, 0);
 
@@ -649,7 +660,51 @@ void D3D11RenderBackend::RenderFrame(const std::function<void()>& overlayCallbac
     if (overlayCallback) {
         overlayCallback();
     }
+    if (m_captureTexture) {
+        Microsoft::WRL::ComPtr<ID3D11Texture2D> backBuffer;
+        if (SUCCEEDED(m_swapChain->GetBuffer(0, IID_PPV_ARGS(backBuffer.GetAddressOf()))) && backBuffer) {
+            m_context->CopyResource(m_captureTexture.Get(), backBuffer.Get());
+        }
+    }
     (void)m_swapChain->Present(1, 0);
+}
+
+bool D3D11RenderBackend::CaptureFrame(QImage& outImage) {
+    outImage = QImage();
+    if (!m_initialized || !m_context || !m_captureTexture || m_viewWidth == 0 || m_viewHeight == 0) {
+        return false;
+    }
+
+    D3D11_MAPPED_SUBRESOURCE mapped{};
+    const HRESULT hr = m_context->Map(
+        m_captureTexture.Get(),
+        0,
+        D3D11_MAP_READ,
+        0,
+        &mapped);
+    if (FAILED(hr) || !mapped.pData) {
+        return false;
+    }
+
+    QImage image(
+        static_cast<int>(m_viewWidth),
+        static_cast<int>(m_viewHeight),
+        QImage::Format_RGBA8888);
+    if (image.isNull()) {
+        m_context->Unmap(m_captureTexture.Get(), 0);
+        return false;
+    }
+
+    const int copyWidthBytes = static_cast<int>(m_viewWidth) * 4;
+    for (uint32_t y = 0; y < m_viewHeight; ++y) {
+        const auto* srcRow =
+            reinterpret_cast<const char*>(mapped.pData) + (static_cast<std::size_t>(y) * mapped.RowPitch);
+        std::memcpy(image.scanLine(static_cast<int>(y)), srcRow, static_cast<std::size_t>(copyWidthBytes));
+    }
+
+    m_context->Unmap(m_captureTexture.Get(), 0);
+    outImage = image;
+    return true;
 }
 
 FrameStats D3D11RenderBackend::GetFrameStats() const {
@@ -752,6 +807,21 @@ bool D3D11RenderBackend::CreateRenderTargets(uint32_t width, uint32_t height) {
     }
 
     hr = m_device->CreateDepthStencilView(m_depthTexture.Get(), nullptr, m_dsv.GetAddressOf());
+    if (FAILED(hr)) {
+        return false;
+    }
+
+    D3D11_TEXTURE2D_DESC captureDesc{};
+    captureDesc.Width = std::max<uint32_t>(1, width);
+    captureDesc.Height = std::max<uint32_t>(1, height);
+    captureDesc.MipLevels = 1;
+    captureDesc.ArraySize = 1;
+    captureDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+    captureDesc.SampleDesc.Count = 1;
+    captureDesc.Usage = D3D11_USAGE_STAGING;
+    captureDesc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+
+    hr = m_device->CreateTexture2D(&captureDesc, nullptr, m_captureTexture.GetAddressOf());
     return SUCCEEDED(hr);
 }
 
@@ -1048,6 +1118,7 @@ bool D3D11RenderBackend::CreateConstantBuffers() {
 }
 
 void D3D11RenderBackend::ReleaseRenderTargets() {
+    m_captureTexture.Reset();
     m_dsv.Reset();
     m_depthTexture.Reset();
     m_rtv.Reset();
@@ -1172,7 +1243,16 @@ std::vector<std::vector<Mat4>> D3D11RenderBackend::BuildAnimatedHierarchyWorldTr
         m_scene,
         m_animationPlayback,
         timeSeconds,
-        m_animationEditDraft);
+        m_animationEditDraft,
+        [this](int hierarchyIndex, int pivotIndex, const Mat4&) -> std::optional<Mat4> {
+            const RenderPivotOverrideKey key{ hierarchyIndex, pivotIndex };
+            if (const auto it = m_pivotLocalOverrides.find(key);
+                it != m_pivotLocalOverrides.end())
+            {
+                return it->second;
+            }
+            return std::nullopt;
+        });
 }
 
 std::vector<std::vector<Mat4>> D3D11RenderBackend::BuildCpuSkinHierarchyWorldTransforms(
@@ -1182,7 +1262,16 @@ std::vector<std::vector<Mat4>> D3D11RenderBackend::BuildCpuSkinHierarchyWorldTra
         m_scene,
         m_animationPlayback,
         timeSeconds,
-        m_animationEditDraft);
+        m_animationEditDraft,
+        [this](int hierarchyIndex, int pivotIndex, const Mat4&) -> std::optional<Mat4> {
+            const RenderPivotOverrideKey key{ hierarchyIndex, pivotIndex };
+            if (const auto it = m_pivotLocalOverrides.find(key);
+                it != m_pivotLocalOverrides.end())
+            {
+                return it->second;
+            }
+            return std::nullopt;
+        });
 }
 
 bool D3D11RenderBackend::UpdateSkinnedMeshVertices(

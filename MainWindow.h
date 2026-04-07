@@ -3,6 +3,7 @@
 #include <QMainWindow>
 #include <QElapsedTimer>
 #include <QSet>
+#include <array>
 #include <memory>
 #include <cstdint>
 #include <optional>
@@ -127,6 +128,7 @@ private slots:
     void on_actionExportJsonBatch_triggered();
     void on_actionValidateRoundTripBatch_triggered();
     void on_actionCopyPureHumanAnimationsBySkeleton_triggered();
+    void on_actionExportSkeletonAAnimationGifs_triggered();
     void exportJson();
     void importJson();
     void showHierarchyBrowser();
@@ -146,19 +148,35 @@ private slots:
     void clearRenderAnimationLibraries();
     void handleRenderAnimationSelectionChanged();
     void handleRenderAnimationEditKeysChanged(bool checked);
+    void handleRenderPrepSourceClipChanged(int index);
+    void handleRenderPrepStaticPoseFrameChanged(int value);
+    void applyRenderAnimationClipPrep();
     void handleRenderBlendSourceClipChanged(int index);
     void handleRenderBlendTimingModeChanged(int index);
     void handleRenderBlendPivotItemChanged(QTreeWidgetItem* item, int column);
+    void handleRenderBlendPivotCurrentItemChanged(QTreeWidgetItem* current, QTreeWidgetItem* previous);
     void handleRenderBlendIncludeDescendantsChanged(bool checked);
+    void handleRenderBlendTruncateChanged(bool checked);
+    void handleRenderBlendNormalizeFrameRateChanged(bool checked);
+    void handleRenderBlendPinLeftHandChanged(bool checked);
+    void handleRenderBlendPinRightHandChanged(bool checked);
+    void handleRenderBlendHandPinReferenceFrameChanged(int value);
+    void handleRenderBlendTranslationPercentChanged(int value);
+    void handleRenderBlendRotationPercentChanged(int value);
+    void handleRenderBlendPivotAxisWeightChanged(int value);
+    void resetRenderBlendSelectedPivotWeights();
     void handleRenderBlendStartFrameChanged(int value);
     void handleRenderBlendEndFrameChanged(int value);
     void applyRenderAnimationPivotOverride();
     void toggleRenderAnimationPlayback();
     void stopRenderAnimationPlayback();
+    void exportActiveRenderAnimationGif();
+    void resetActiveRenderAnimationDraft();
     void handleRenderAnimationLoopChanged(bool checked);
     void handleRenderAnimationSpeedChanged(double value);
     void handleRenderAnimationFrameSliderChanged(int value);
     void handleRenderAnimationPlaybackTimerTick();
+    void handleViewportPivotSelectionChanged(int hierarchyIndex, int pivotIndex);
     void handleViewportAnimationKeyframeCommit(
         int hierarchyIndex,
         int pivotIndex,
@@ -172,6 +190,7 @@ private slots:
         float qw);
     void handleViewportAnimationKeyframeDelete(int hierarchyIndex, int pivotIndex, int frameIndex);
     void handleViewportAnimationPlaybackPauseRequested();
+    void handleRenderAnimationPivotSheetCellClicked(int row, int column);
     void selectChunkInTree(void* chunkPtr);
     void handleChunkSourceTabChanged(int index);
 
@@ -208,7 +227,11 @@ private:
     void refreshRenderAnimationList();
     void refreshRenderPlaybackControls();
     void refreshRenderPlaybackSelection();
+    void refreshRenderAnimationPivotSheet();
+    void refreshRenderAnimationPivotSheetFrameHighlight();
+    void refreshRenderAnimationPrepControls();
     void refreshRenderBlendControls();
+    void refreshRenderBlendPivotWeightEditor();
     void refreshRenderBlendStatus();
     void setRenderActiveAnimationIndex(int animationIndex, bool startPlaying, bool resetTime);
     int findRenderAnimationIndexByIdentity(const RenderAnimationClipIdentity& identity) const;
@@ -303,6 +326,8 @@ private:
     QPushButton* renderClearAnimationsButton = nullptr;
     QPushButton* renderPlayPauseButton = nullptr;
     QPushButton* renderStopButton = nullptr;
+    QPushButton* renderAnimationExportGifButton = nullptr;
+    QPushButton* renderAnimationResetDraftButton = nullptr;
     QCheckBox* renderAnimationLoopToggle = nullptr;
     QCheckBox* renderAnimationEditKeysToggle = nullptr;
     QDoubleSpinBox* renderAnimationSpeedSpin = nullptr;
@@ -311,11 +336,31 @@ private:
     QLabel* renderAnimationClipLabel = nullptr;
     QLabel* renderAnimationMetadataLabel = nullptr;
     QLabel* renderAnimationEditStatusLabel = nullptr;
+    QGroupBox* renderAnimationPrepGroup = nullptr;
+    QComboBox* renderAnimationPrepSourceCombo = nullptr;
+    QSpinBox* renderAnimationPrepStaticPoseFrameSpin = nullptr;
+    QPushButton* renderAnimationPrepApplyButton = nullptr;
+    QLabel* renderAnimationPrepStatusLabel = nullptr;
+    QGroupBox* renderAnimationPivotSheetGroup = nullptr;
+    QLabel* renderAnimationPivotSheetLabel = nullptr;
+    QLabel* renderAnimationPivotSheetStatusLabel = nullptr;
+    QTableWidget* renderAnimationPivotSheetTable = nullptr;
     QGroupBox* renderAnimationBlendGroup = nullptr;
     QComboBox* renderAnimationBlendSourceCombo = nullptr;
     QComboBox* renderAnimationBlendTimingCombo = nullptr;
     QTreeWidget* renderAnimationBlendPivotTree = nullptr;
+    QGroupBox* renderAnimationBlendPivotWeightsGroup = nullptr;
+    QLabel* renderAnimationBlendPivotWeightsLabel = nullptr;
+    std::array<QSpinBox*, 6> renderAnimationBlendPivotAxisPercentSpins{};
+    QPushButton* renderAnimationBlendResetPivotWeightsButton = nullptr;
     QCheckBox* renderAnimationBlendIncludeDescendantsToggle = nullptr;
+    QCheckBox* renderAnimationBlendTruncateToggle = nullptr;
+    QCheckBox* renderAnimationBlendNormalizeFrameRateToggle = nullptr;
+    QCheckBox* renderAnimationBlendPinLeftHandToggle = nullptr;
+    QCheckBox* renderAnimationBlendPinRightHandToggle = nullptr;
+    QSpinBox* renderAnimationBlendHandPinReferenceFrameSpin = nullptr;
+    QSpinBox* renderAnimationBlendTranslationPercentSpin = nullptr;
+    QSpinBox* renderAnimationBlendRotationPercentSpin = nullptr;
     QSpinBox* renderAnimationBlendStartFrameSpin = nullptr;
     QSpinBox* renderAnimationBlendEndFrameSpin = nullptr;
     QPushButton* renderAnimationBlendApplyButton = nullptr;
@@ -354,6 +399,17 @@ private:
     bool currentRenderAnimationEditKeysEnabled = false;
     bool suppressRenderAnimationFrameSliderChange = false;
     bool suppressRenderAnimationBlendUiSignals = false;
+    bool suppressRenderAnimationPrepUiSignals = false;
+    bool suppressRenderAnimationPivotSheetSignals = false;
+    int currentRenderSelectedPivotHierarchyIndex = -1;
+    int currentRenderSelectedPivotIndex = -1;
+
+    struct RenderAnimationPrepState {
+        int targetAnimationIndex = -1;
+        std::optional<RenderAnimationClipIdentity> targetClipIdentity;
+        int staticPoseFrame = 0;
+    };
+    RenderAnimationPrepState currentRenderAnimationPrepState;
 
     struct RenderAnimationBlendState {
         enum class TimingMode {
@@ -367,6 +423,15 @@ private:
         QSet<int> pivotIndices;
         TimingMode timingMode = TimingMode::PreserveSourceRate;
         bool includeDescendants = true;
+        bool truncateToShorter = false;
+        bool normalizeBaseToSourceFrameRate = false;
+        bool pinLeftHand = false;
+        bool pinRightHand = false;
+        int handPinReferenceFrame = 0;
+        int translationBlendPercent = 100;
+        int rotationBlendPercent = 100;
+        std::unordered_map<int, std::array<int, 6>> pivotAxisBlendPercents;
+        int selectedPivotIndex = -1;
         int startFrame = 0;
         int endFrame = 0;
         bool frameRangeInitialized = false;

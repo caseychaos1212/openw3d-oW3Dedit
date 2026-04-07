@@ -7,6 +7,7 @@
 #include <vector>
 
 #include <QElapsedTimer>
+#include <QImage>
 #include <QPoint>
 #include <QStringList>
 #include <QWidget>
@@ -32,8 +33,13 @@ public:
     void SetAnimationPlayback(const AnimationPlaybackState& playback);
     void SetAnimationEditDraft(const std::optional<RenderAnimationEditDraft>& draft);
     void SetAnimationEditingState(bool editKeysEnabled, bool clipEditable, const QString& readOnlyReason);
+    void SetCameraState(const CameraState& camera);
+    void SetContinuousRenderingEnabled(bool enabled);
+    void SetOverlayUiEnabled(bool enabled);
     void FocusScene();
     void OpenManualPivotRotationDialog();
+    void RenderOnce();
+    bool CaptureCurrentFrame(QImage& outImage);
 
     const CameraState& camera() const { return m_camera; }
 
@@ -42,6 +48,7 @@ signals:
     void frameStatsChanged(const QString& statsText);
     void sceneChunkActivated(void* chunkPtr);
     void selectionStatusChanged(const QString& statusText);
+    void pivotSelectionChanged(int hierarchyIndex, int pivotIndex);
     void pivotTransformCommitRequested(
         void* pivotsChunkPtr,
         int pivotIndex,
@@ -202,6 +209,8 @@ private:
     bool m_backendInitialized = false;
     bool m_sceneDirty = false;
     QTimer* m_frameTimer = nullptr;
+    bool m_continuousRenderingEnabled = true;
+    bool m_overlayUiEnabled = true;
 
     bool m_imguiInitialized = false;
     bool m_pendingPick = false;
