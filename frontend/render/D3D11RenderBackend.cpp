@@ -325,10 +325,14 @@ void D3D11RenderBackend::Shutdown() {
     m_objectCBuffer.Reset();
     m_frameCBuffer.Reset();
     m_blendOpaque.Reset();
-    m_depthState.Reset();
+    m_depthStateCache.clear();
+    m_blendStateCache.clear();
     m_rsCullNone.Reset();
     m_rsCullBack.Reset();
-    m_sampler.Reset();
+    m_samplerWrapWrap.Reset();
+    m_samplerClampWrap.Reset();
+    m_samplerWrapClamp.Reset();
+    m_samplerClampClamp.Reset();
     m_inputLayout.Reset();
     m_ps.Reset();
     m_vs.Reset();
@@ -340,6 +344,144 @@ void D3D11RenderBackend::Shutdown() {
     m_device.Reset();
 
     m_initialized = false;
+}
+
+ID3D11SamplerState* D3D11RenderBackend::ResolveSamplerState(const RenderMaterial* material) const {
+    const bool clampU = material && material->clampU;
+    const bool clampV = material && material->clampV;
+    if (clampU && clampV) {
+        return m_samplerClampClamp.Get();
+    }
+    if (clampU) {
+        return m_samplerClampWrap.Get();
+    }
+    if (clampV) {
+        return m_samplerWrapClamp.Get();
+    }
+    return m_samplerWrapWrap.Get();
+}
+
+bool D3D11RenderBackend::IsMaterialTransparent(const RenderMaterial* material) {
+    return material && material->translucent;
+}
+
+D3D11_BLEND D3D11RenderBackend::ToD3D11Blend(uint8_t factor, bool sourceFactor) {
+    switch (factor) {
+    case 0:
+        return D3D11_BLEND_ZERO;
+    case 1:
+        return D3D11_BLEND_ONE;
+    case 2:
+        return sourceFactor ? D3D11_BLEND_SRC_ALPHA : D3D11_BLEND_SRC_COLOR;
+    case 3:
+        return sourceFactor ? D3D11_BLEND_INV_SRC_ALPHA : D3D11_BLEND_INV_SRC_COLOR;
+    case 4:
+        return D3D11_BLEND_SRC_ALPHA;
+    case 5:
+        return D3D11_BLEND_INV_SRC_ALPHA;
+    case 6:
+        return D3D11_BLEND_SRC_COLOR;
+    default:
+        return D3D11_BLEND_ONE;
+    }
+}
+
+D3D11_COMPARISON_FUNC D3D11RenderBackend::ToD3D11ComparisonFunc(uint8_t compareMode) {
+    switch (compareMode) {
+    case 0:
+        return D3D11_COMPARISON_NEVER;
+    case 1:
+        return D3D11_COMPARISON_LESS;
+    case 2:
+        return D3D11_COMPARISON_EQUAL;
+    case 3:
+        return D3D11_COMPARISON_LESS_EQUAL;
+    case 4:
+        return D3D11_COMPARISON_GREATER;
+    case 5:
+        return D3D11_COMPARISON_NOT_EQUAL;
+    case 6:
+        return D3D11_COMPARISON_GREATER_EQUAL;
+    case 7:
+        return D3D11_COMPARISON_ALWAYS;
+    default:
+        return D3D11_COMPARISON_LESS_EQUAL;
+    }
+}
+
+ID3D11BlendState* D3D11RenderBackend::ResolveBlendState(const RenderMaterial* material) {
+    if (!m_device) {
+        return nullptr;
+    }
+
+    const bool transparent = IsMaterialTransparent(material);
+    const uint8_t srcBlend = material ? material->srcBlend : 1;
+    const uint8_t destBlend = material ? material->destBlend : 0;
+    const uint8_t colorWriteMask = material
+        ? static_cast<uint8_t>(material->colorWriteMask & 0x0F)
+        : static_cast<uint8_t>(0x0F);
+
+    if (!transparent && colorWriteMask == 0x0F) {
+        return m_blendOpaque.Get();
+    }
+
+    const uint32_t key =
+        static_cast<uint32_t>(srcBlend)
+        | (static_cast<uint32_t>(destBlend) << 8)
+        | (static_cast<uint32_t>(colorWriteMask) << 16)
+        | (transparent ? (1u << 24) : 0u);
+    if (const auto it = m_blendStateCache.find(key); it != m_blendStateCache.end()) {
+        return it->second.Get();
+    }
+
+    D3D11_BLEND_DESC blendDesc{};
+    auto& rt = blendDesc.RenderTarget[0];
+    rt.BlendEnable = transparent ? TRUE : FALSE;
+    rt.SrcBlend = ToD3D11Blend(srcBlend, true);
+    rt.DestBlend = ToD3D11Blend(destBlend, false);
+    rt.BlendOp = D3D11_BLEND_OP_ADD;
+    rt.SrcBlendAlpha = ToD3D11Blend(srcBlend, true);
+    rt.DestBlendAlpha = ToD3D11Blend(destBlend, false);
+    rt.BlendOpAlpha = D3D11_BLEND_OP_ADD;
+    rt.RenderTargetWriteMask = colorWriteMask;
+
+    Microsoft::WRL::ComPtr<ID3D11BlendState> state;
+    if (FAILED(m_device->CreateBlendState(&blendDesc, state.GetAddressOf()))) {
+        return m_blendOpaque.Get();
+    }
+
+    auto [it, inserted] = m_blendStateCache.emplace(key, std::move(state));
+    return it->second.Get();
+}
+
+ID3D11DepthStencilState* D3D11RenderBackend::ResolveDepthState(const RenderMaterial* material) {
+    if (!m_device) {
+        return nullptr;
+    }
+
+    const uint8_t depthCompare = material ? material->depthCompare : 3;
+    const bool depthWrite = material ? material->depthWrite : true;
+    const uint32_t key =
+        static_cast<uint32_t>(depthCompare)
+        | (depthWrite ? (1u << 8) : 0u);
+    if (const auto it = m_depthStateCache.find(key); it != m_depthStateCache.end()) {
+        return it->second.Get();
+    }
+
+    D3D11_DEPTH_STENCIL_DESC depthDesc{};
+    depthDesc.DepthEnable = TRUE;
+    depthDesc.DepthWriteMask = depthWrite
+        ? D3D11_DEPTH_WRITE_MASK_ALL
+        : D3D11_DEPTH_WRITE_MASK_ZERO;
+    depthDesc.DepthFunc = ToD3D11ComparisonFunc(depthCompare);
+
+    Microsoft::WRL::ComPtr<ID3D11DepthStencilState> state;
+    if (FAILED(m_device->CreateDepthStencilState(&depthDesc, state.GetAddressOf()))) {
+        return nullptr;
+    }
+
+    auto [it, inserted] = m_depthStateCache.emplace(key, std::move(state));
+    return it->second.Get();
 }
 
 bool D3D11RenderBackend::UploadScene(const RenderScene& scene) {
@@ -471,8 +613,10 @@ void D3D11RenderBackend::RenderFrame(const std::function<void()>& overlayCallbac
     m_context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
     m_context->VSSetShader(m_vs.Get(), nullptr, 0);
     m_context->PSSetShader(m_ps.Get(), nullptr, 0);
-    m_context->PSSetSamplers(0, 1, m_sampler.GetAddressOf());
-    m_context->OMSetDepthStencilState(m_depthState.Get(), 0);
+    ID3D11DepthStencilState* defaultDepthState = ResolveDepthState(nullptr);
+    if (defaultDepthState) {
+        m_context->OMSetDepthStencilState(defaultDepthState, 0);
+    }
     const float blendFactors[4] = { 0, 0, 0, 0 };
     m_context->OMSetBlendState(m_blendOpaque.Get(), blendFactors, 0xFFFFFFFFu);
 
@@ -518,6 +662,34 @@ void D3D11RenderBackend::RenderFrame(const std::function<void()>& overlayCallbac
     m_context->PSSetConstantBuffers(0, 1, &frameCB);
 
     FrameStats stats{};
+    struct DrawCommand {
+        GpuMesh* mesh = nullptr;
+        Mat4 world = Mat4::Identity();
+        const RenderMaterial* material = nullptr;
+        bool selected = false;
+        float distanceToCamera = 0.0f;
+    };
+    std::vector<DrawCommand> opaqueDraws;
+    std::vector<DrawCommand> transparentDraws;
+    auto enqueueDraw = [&](GpuMesh& gpuMesh,
+        const Mat4& world,
+        const RenderMaterial* material,
+        bool selected,
+        float distanceToCamera)
+    {
+        DrawCommand command{};
+        command.mesh = &gpuMesh;
+        command.world = world;
+        command.material = material;
+        command.selected = selected;
+        command.distanceToCamera = distanceToCamera;
+        if (IsMaterialTransparent(material)) {
+            transparentDraws.push_back(command);
+        }
+        else {
+            opaqueDraws.push_back(command);
+        }
+    };
     const float timeSeconds = std::max(0.0f, m_animationPlayback.timeSeconds);
     const std::vector<std::vector<Mat4>> hierarchyWorld =
         BuildAnimatedHierarchyWorldTransforms(timeSeconds);
@@ -608,7 +780,7 @@ void D3D11RenderBackend::RenderFrame(const std::function<void()>& overlayCallbac
             }
 
             const bool selected = m_selectedInstance.has_value() && *m_selectedInstance == key;
-            DrawMesh(gpuMesh, world, material, frameData, timeSeconds, selected, stats);
+            enqueueDraw(gpuMesh, world, material, selected, distanceToCamera);
         }
     }
 
@@ -637,6 +809,16 @@ void D3D11RenderBackend::RenderFrame(const std::function<void()>& overlayCallbac
         if (const auto overrideIt = m_transformOverrides.find(key); overrideIt != m_transformOverrides.end()) {
             world = overrideIt->second;
         }
+        Mat4 boundsWorld = world;
+        if (gpuMesh.skinned
+            && node.hierarchyIndex >= 0
+            && node.hierarchyIndex < static_cast<int>(hierarchyWorld.size())
+            && !hierarchyWorld[static_cast<std::size_t>(node.hierarchyIndex)].empty())
+        {
+            boundsWorld = hierarchyWorld[static_cast<std::size_t>(node.hierarchyIndex)].front();
+        }
+        const Vec3 worldCenter = TransformPoint(boundsWorld, gpuMesh.boundsCenter);
+        const float distanceToCamera = Length(worldCenter - cameraPos);
         const RenderMaterial* material = nullptr;
         if (gpuMesh.materialIndex >= 0 && gpuMesh.materialIndex < static_cast<int>(m_scene.materials.size())) {
             material = &m_scene.materials[gpuMesh.materialIndex];
@@ -653,7 +835,27 @@ void D3D11RenderBackend::RenderFrame(const std::function<void()>& overlayCallbac
         }
 
         const bool selected = m_selectedInstance.has_value() && *m_selectedInstance == key;
-        DrawMesh(gpuMesh, world, material, frameData, timeSeconds, selected, stats);
+        enqueueDraw(gpuMesh, world, material, selected, distanceToCamera);
+    }
+
+    for (const DrawCommand& draw : opaqueDraws) {
+        if (!draw.mesh) {
+            continue;
+        }
+        DrawMesh(*draw.mesh, draw.world, draw.material, frameData, timeSeconds, draw.selected, stats);
+    }
+
+    std::sort(
+        transparentDraws.begin(),
+        transparentDraws.end(),
+        [](const DrawCommand& a, const DrawCommand& b) {
+            return a.distanceToCamera > b.distanceToCamera;
+        });
+    for (const DrawCommand& draw : transparentDraws) {
+        if (!draw.mesh) {
+            continue;
+        }
+        DrawMesh(*draw.mesh, draw.world, draw.material, frameData, timeSeconds, draw.selected, stats);
     }
 
     m_lastFrameStats = stats;
@@ -845,8 +1047,12 @@ cbuffer FrameCB : register(b0)
 cbuffer ObjectCB : register(b1)
 {
     row_major float4x4 gWorld;
-    float4 gBaseColor;
+    float4 gDiffuseColor;
+    float4 gAmbientColor;
+    float4 gSpecularShininess;
+    float4 gEmissiveOpacity;
     float4 gFlags;
+    float4 gFlags2;
     float4 gUvAnim0;
     float4 gUvAnim1;
     float4 gUvAnim2;
@@ -907,14 +1113,34 @@ float4 PSMain(VSOut input) : SV_TARGET
         mappedUv = rotated + gUvAnim2.zw + gUvAnim1.xy;
     }
 
-    float4 texColor = (gFlags.x > 0.5) ? gTexture.Sample(gSampler, mappedUv) : float4(1.0, 1.0, 1.0, 1.0);
-    if (gFlags.x > 0.5 && texColor.a <= 0.001)
+    float4 texColor = (gFlags.x > 0.5 && gFlags.w > 0.5)
+        ? gTexture.Sample(gSampler, mappedUv)
+        : float4(1.0, 1.0, 1.0, 1.0);
+    if (gFlags2.x > 0.5 && texColor.a <= 0.5)
     {
         discard;
     }
-    float4 baseColor = texColor * input.color * gBaseColor;
 
-    float3 lit = baseColor.rgb * (gAmbient.rgb + gDirectionalLightColor.rgb * ndotl);
+    float alpha = saturate(
+        texColor.a
+        * input.color.a
+        * gDiffuseColor.a
+        * gEmissiveOpacity.a
+        * (1.0 - gFlags2.z));
+    float3 baseColor = texColor.rgb * input.color.rgb * gDiffuseColor.rgb;
+
+    float3 lit = baseColor;
+    if (gFlags2.y <= 0.5)
+    {
+        float3 V = normalize(gCameraWorldPos.xyz - input.worldPos);
+        float3 H = normalize(L + V);
+        float specularAmount = pow(saturate(dot(N, H)), max(1.0, gSpecularShininess.w));
+        float3 ambient = baseColor * (gAmbient.rgb * gAmbientColor.rgb);
+        float3 diffuse = baseColor * (gDirectionalLightColor.rgb * ndotl);
+        float3 specular = gSpecularShininess.rgb * gDirectionalLightColor.rgb * specularAmount;
+        lit = ambient + diffuse + specular;
+    }
+    lit += gEmissiveOpacity.rgb;
 
     if (gFlags.z > 0.5)
     {
@@ -938,7 +1164,7 @@ float4 PSMain(VSOut input) : SV_TARGET
         lit = lerp(lit, gFogColor.rgb, fog);
     }
 
-    return float4(lit, baseColor.a);
+    return float4(lit, alpha);
 }
 )";
 
@@ -1013,14 +1239,24 @@ float4 PSMain(VSOut input) : SV_TARGET
         return false;
     }
 
-    D3D11_SAMPLER_DESC samplerDesc{};
-    samplerDesc.Filter = D3D11_FILTER_MIN_MAG_MIP_LINEAR;
-    samplerDesc.AddressU = D3D11_TEXTURE_ADDRESS_WRAP;
-    samplerDesc.AddressV = D3D11_TEXTURE_ADDRESS_WRAP;
-    samplerDesc.AddressW = D3D11_TEXTURE_ADDRESS_WRAP;
-    samplerDesc.MaxLOD = D3D11_FLOAT32_MAX;
-    hr = m_device->CreateSamplerState(&samplerDesc, m_sampler.GetAddressOf());
-    if (FAILED(hr)) {
+    auto createSampler = [this](D3D11_TEXTURE_ADDRESS_MODE addressU,
+        D3D11_TEXTURE_ADDRESS_MODE addressV,
+        Microsoft::WRL::ComPtr<ID3D11SamplerState>& outSampler) -> bool
+    {
+        D3D11_SAMPLER_DESC samplerDesc{};
+        samplerDesc.Filter = D3D11_FILTER_MIN_MAG_MIP_LINEAR;
+        samplerDesc.AddressU = addressU;
+        samplerDesc.AddressV = addressV;
+        samplerDesc.AddressW = D3D11_TEXTURE_ADDRESS_WRAP;
+        samplerDesc.MaxLOD = D3D11_FLOAT32_MAX;
+        return SUCCEEDED(m_device->CreateSamplerState(&samplerDesc, outSampler.GetAddressOf()));
+    };
+
+    if (!createSampler(D3D11_TEXTURE_ADDRESS_WRAP, D3D11_TEXTURE_ADDRESS_WRAP, m_samplerWrapWrap)
+        || !createSampler(D3D11_TEXTURE_ADDRESS_CLAMP, D3D11_TEXTURE_ADDRESS_WRAP, m_samplerClampWrap)
+        || !createSampler(D3D11_TEXTURE_ADDRESS_WRAP, D3D11_TEXTURE_ADDRESS_CLAMP, m_samplerWrapClamp)
+        || !createSampler(D3D11_TEXTURE_ADDRESS_CLAMP, D3D11_TEXTURE_ADDRESS_CLAMP, m_samplerClampClamp))
+    {
         return false;
     }
 
@@ -1036,15 +1272,6 @@ float4 PSMain(VSOut input) : SV_TARGET
 
     rsDesc.CullMode = D3D11_CULL_NONE;
     hr = m_device->CreateRasterizerState(&rsDesc, m_rsCullNone.GetAddressOf());
-    if (FAILED(hr)) {
-        return false;
-    }
-
-    D3D11_DEPTH_STENCIL_DESC depthDesc{};
-    depthDesc.DepthEnable = TRUE;
-    depthDesc.DepthWriteMask = D3D11_DEPTH_WRITE_MASK_ALL;
-    depthDesc.DepthFunc = D3D11_COMPARISON_LESS_EQUAL;
-    hr = m_device->CreateDepthStencilState(&depthDesc, m_depthState.GetAddressOf());
     if (FAILED(hr)) {
         return false;
     }
@@ -1379,14 +1606,41 @@ void D3D11RenderBackend::DrawMesh(
     ID3D11RasterizerState* rs = mesh.twoSided ? m_rsCullNone.Get() : m_rsCullBack.Get();
     m_context->RSSetState(rs);
 
+    ID3D11SamplerState* sampler = ResolveSamplerState(material);
+    if (sampler) {
+        m_context->PSSetSamplers(0, 1, &sampler);
+    }
+    if (ID3D11DepthStencilState* depthState = ResolveDepthState(material)) {
+        m_context->OMSetDepthStencilState(depthState, 0);
+    }
+    const float blendFactors[4] = { 0, 0, 0, 0 };
+    if (ID3D11BlendState* blendState = ResolveBlendState(material)) {
+        m_context->OMSetBlendState(blendState, blendFactors, 0xFFFFFFFFu);
+    }
+
     CBufferObject objectData{};
     objectData.world = world;
-    objectData.baseColor = material
+    objectData.diffuseColor = material
         ? material->diffuseColor
         : Vec4{ 1.0f, 1.0f, 1.0f, 1.0f };
+    objectData.ambientColor = material
+        ? Vec4{ material->ambientColor.x, material->ambientColor.y, material->ambientColor.z, 1.0f }
+        : Vec4{ 1.0f, 1.0f, 1.0f, 1.0f };
+    objectData.specularShininess = material
+        ? Vec4{ material->specularColor.x, material->specularColor.y, material->specularColor.z, material->shininess }
+        : Vec4{ 0.0f, 0.0f, 0.0f, 1.0f };
+    objectData.emissiveOpacity = material
+        ? Vec4{ material->emissiveColor.x, material->emissiveColor.y, material->emissiveColor.z, material->opacity }
+        : Vec4{ 0.0f, 0.0f, 0.0f, 1.0f };
 
     ID3D11ShaderResourceView* srv = m_defaultTexture.srv.Get();
     objectData.flags = { 0.0f, 0.0f, 0.0f, 0.0f };
+    objectData.flags2 = {
+        material && material->alphaTest ? 1.0f : 0.0f,
+        material && material->unlit ? 1.0f : 0.0f,
+        material ? material->translucency : 0.0f,
+        0.0f
+    };
 
     if (material && material->textureIndex >= 0
         && material->textureIndex < static_cast<int>(m_gpuTextures.size())) {
@@ -1398,6 +1652,7 @@ void D3D11RenderBackend::DrawMesh(
     }
     objectData.flags.y = selected ? 1.0f : 0.0f;
     objectData.flags.z = m_settings.debugShowUv ? 1.0f : 0.0f;
+    objectData.flags.w = (!material || material->texturingEnabled) ? 1.0f : 0.0f;
     if (material) {
         objectData.uvAnim0 = {
             static_cast<float>(material->uvAnimMode),

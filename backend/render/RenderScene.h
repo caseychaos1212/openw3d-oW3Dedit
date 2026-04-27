@@ -60,10 +60,25 @@ struct RenderTexture {
 struct RenderMaterial {
     std::string name;
     Vec4 diffuseColor{ 1.0f, 1.0f, 1.0f, 1.0f };
+    Vec3 ambientColor{ 1.0f, 1.0f, 1.0f };
+    Vec3 specularColor{ 0.0f, 0.0f, 0.0f };
+    Vec3 emissiveColor{ 0.0f, 0.0f, 0.0f };
+    float shininess = 1.0f;
+    float opacity = 1.0f;
+    float translucency = 0.0f;
     int textureIndex = -1;
     bool alphaTest = false;
     bool translucent = false;
+    bool texturingEnabled = true;
     bool twoSided = false;
+    bool unlit = false;
+    bool clampU = false;
+    bool clampV = false;
+    uint8_t depthCompare = 3; // PASS_LEQUAL
+    bool depthWrite = true;
+    uint8_t srcBlend = 1; // ONE
+    uint8_t destBlend = 0; // ZERO
+    uint8_t colorWriteMask = 0x0F;
     uint8_t uvAnimMode = 0; // 0=none, 1=scroll, 2=rotate
     float uvOffsetU = 0.0f;
     float uvOffsetV = 0.0f;

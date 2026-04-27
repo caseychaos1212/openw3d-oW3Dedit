@@ -12,6 +12,7 @@
 #include <limits>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -30,10 +31,13 @@ constexpr uint32_t kChunkTexCoords = 0x0005;
 constexpr uint32_t kChunkVertexInfluences = 0x000E;
 constexpr uint32_t kChunkMeshHeader3 = 0x001F;
 constexpr uint32_t kChunkTriangles = 0x0020;
+constexpr uint32_t kChunkShaders = 0x0029;
 constexpr uint32_t kChunkTextureWrapper = 0x0031;
 constexpr uint32_t kChunkTextureName = 0x0032;
+constexpr uint32_t kChunkTextureInfo = 0x0033;
 constexpr uint32_t kChunkMaterialPass = 0x0038;
 constexpr uint32_t kChunkVertexMaterialIds = 0x0039;
+constexpr uint32_t kChunkShaderIds = 0x003A;
 constexpr uint32_t kChunkTextureStage = 0x0048;
 constexpr uint32_t kChunkTextureIds = 0x0049;
 constexpr uint32_t kChunkStageTexCoords = 0x004A;
@@ -405,82 +409,15 @@ bool FileExists(const std::filesystem::path& path) {
     return std::filesystem::exists(path, ec) && !ec;
 }
 
-std::string ResolveTexturePath(const std::string& textureName, const SceneBuildOptions& options) {
-    if (textureName.empty()) {
-        return {};
-    }
-
-    std::filesystem::path input(textureName);
-    if (input.is_absolute() && FileExists(input)) {
-        return input.string();
-    }
-
-    std::vector<std::filesystem::path> searchRoots;
-    if (!options.textureSearchDirectory.empty()) {
-        searchRoots.emplace_back(options.textureSearchDirectory);
-    }
-    for (const auto& directory : options.additionalTextureSearchDirectories) {
-        if (directory.empty()) {
-            continue;
-        }
-        const std::filesystem::path candidate(directory);
-        if (std::find(searchRoots.begin(), searchRoots.end(), candidate) == searchRoots.end()) {
-            searchRoots.push_back(candidate);
-        }
-    }
-    if (searchRoots.empty()) {
-        searchRoots.push_back(std::filesystem::current_path());
-    }
-
-    auto tryCandidate = [](const std::filesystem::path& candidate) -> std::string {
-        if (FileExists(candidate)) {
-            return candidate.string();
-        }
-        return {};
+bool IsSupportedTextureExtension(std::string_view extension) {
+    static constexpr std::array<std::string_view, 6> kTextureExtensions = {
+        ".dds", ".tga", ".png", ".jpg", ".jpeg", ".bmp"
     };
-
-    auto tryRelativePath = [&](const std::filesystem::path& base, const std::filesystem::path& relative) -> std::string {
-        if (relative.empty()) {
-            return {};
-        }
-
-        if (const std::string resolved = tryCandidate(base / relative); !resolved.empty()) {
-            return resolved;
-        }
-
-        const std::filesystem::path fileName = relative.filename();
-        if (!fileName.empty() && fileName != relative) {
-            if (const std::string resolved = tryCandidate(base / fileName); !resolved.empty()) {
-                return resolved;
-            }
-        }
-
-        return {};
-    };
-
-    if (input.has_extension()) {
-        for (const auto& base : searchRoots) {
-            if (const std::string resolved = tryRelativePath(base, input); !resolved.empty()) {
-                return resolved;
-            }
-        }
-    }
-    else {
-        static const std::array<const char*, 6> kTextureExtensions = {
-            ".dds", ".tga", ".png", ".jpg", ".jpeg", ".bmp"
-        };
-        for (const auto& base : searchRoots) {
-            for (const char* ext : kTextureExtensions) {
-                auto relative = input;
-                relative += ext;
-                if (const std::string resolved = tryRelativePath(base, relative); !resolved.empty()) {
-                    return resolved;
-                }
-            }
-        }
-    }
-
-    return {};
+    const std::string normalized = NormalizeName(std::string(extension));
+    return std::find(
+        kTextureExtensions.begin(),
+        kTextureExtensions.end(),
+        std::string_view(normalized)) != kTextureExtensions.end();
 }
 
 std::string NormalizePathKey(std::string input) {
@@ -597,6 +534,47 @@ std::string FormatFloatKey(float value) {
     std::snprintf(buffer, sizeof(buffer), "%.6g", value);
     return std::string(buffer);
 }
+
+float NormalizeColorComponent(uint8_t value) {
+    return static_cast<float>(value) / 255.0f;
+}
+
+Vec3 ToRenderColor(const W3dRGBStruct& color) {
+    return {
+        NormalizeColorComponent(color.R),
+        NormalizeColorComponent(color.G),
+        NormalizeColorComponent(color.B)
+    };
+}
+
+bool IsOpaqueBlend(uint8_t srcBlend, uint8_t destBlend) {
+    return srcBlend == 1 && destBlend == 0;
+}
+
+void FinalizeRenderMaterial(RenderMaterial& material) {
+    material.shininess = std::max(1.0f, material.shininess);
+    material.opacity = std::clamp(material.opacity, 0.0f, 1.0f);
+    material.translucency = std::clamp(material.translucency, 0.0f, 1.0f);
+
+    if ((material.opacity < 0.999f || material.translucency > 0.001f)
+        && IsOpaqueBlend(material.srcBlend, material.destBlend))
+    {
+        material.srcBlend = 2;  // SRC_ALPHA
+        material.destBlend = 5; // ONE_MINUS_SRC_ALPHA
+    }
+
+    material.translucent =
+        !IsOpaqueBlend(material.srcBlend, material.destBlend)
+        || material.opacity < 0.999f
+        || material.translucency > 0.001f;
+}
+
+struct LocalTextureSlot {
+    int textureIndex = -1;
+    bool alphaBitmap = false;
+    bool clampU = false;
+    bool clampV = false;
+};
 
 struct UvAnimationParams {
     uint8_t mode = 0; // 0=none, 1=scroll, 2=rotate
@@ -847,6 +825,11 @@ struct BuildContext {
     std::unordered_set<std::string> externalTextureByPath;
     std::unordered_set<std::string> externalTextureByBaseName;
     std::unordered_set<uint32_t> externalTextureHashes;
+    std::vector<std::filesystem::path> textureSearchRoots;
+    std::unordered_map<std::string, std::string> recursiveTextureByRelativePath;
+    std::unordered_map<std::string, std::string> recursiveTextureByBaseName;
+    bool textureSearchRootsInitialized = false;
+    bool recursiveTextureLookupBuilt = false;
 
     void InitializeExternalTextures() {
         externalTextureByPath.clear();
@@ -866,6 +849,200 @@ struct BuildContext {
         for (const uint32_t hash : options.externalTextureHashes) {
             externalTextureHashes.insert(hash);
         }
+    }
+
+    void InitializeTextureSearchRoots() {
+        if (textureSearchRootsInitialized) {
+            return;
+        }
+
+        textureSearchRootsInitialized = true;
+        if (!options.textureSearchDirectory.empty()) {
+            textureSearchRoots.emplace_back(options.textureSearchDirectory);
+        }
+        for (const auto& directory : options.additionalTextureSearchDirectories) {
+            if (directory.empty()) {
+                continue;
+            }
+            const std::filesystem::path candidate(directory);
+            if (std::find(textureSearchRoots.begin(), textureSearchRoots.end(), candidate)
+                == textureSearchRoots.end())
+            {
+                textureSearchRoots.push_back(candidate);
+            }
+        }
+        if (textureSearchRoots.empty()) {
+            textureSearchRoots.push_back(std::filesystem::current_path());
+        }
+    }
+
+    void BuildRecursiveTextureLookup() {
+        if (recursiveTextureLookupBuilt) {
+            return;
+        }
+
+        recursiveTextureLookupBuilt = true;
+        InitializeTextureSearchRoots();
+
+        for (const auto& root : textureSearchRoots) {
+            std::error_code rootEc;
+            if (!std::filesystem::exists(root, rootEc)
+                || rootEc
+                || !std::filesystem::is_directory(root, rootEc)
+                || rootEc)
+            {
+                continue;
+            }
+
+            std::error_code iterEc;
+            std::filesystem::recursive_directory_iterator it(
+                root,
+                std::filesystem::directory_options::skip_permission_denied,
+                iterEc);
+            const std::filesystem::recursive_directory_iterator end;
+            while (!iterEc && it != end) {
+                const std::filesystem::directory_entry& entry = *it;
+                std::error_code entryEc;
+                if (entry.is_regular_file(entryEc) && !entryEc) {
+                    const std::filesystem::path path = entry.path();
+                    if (IsSupportedTextureExtension(path.extension().string())) {
+                        const std::string fullPath = path.string();
+                        std::error_code relativeEc;
+                        const std::filesystem::path relativePath =
+                            std::filesystem::relative(path, root, relativeEc);
+                        if (!relativeEc && !relativePath.empty()) {
+                            recursiveTextureByRelativePath.emplace(
+                                NormalizePathKey(relativePath.generic_string()),
+                                fullPath);
+                        }
+                        recursiveTextureByBaseName.emplace(
+                            BaseNameKey(path.filename().string()),
+                            fullPath);
+                    }
+                }
+                it.increment(iterEc);
+            }
+        }
+    }
+
+    std::string ResolveTexturePath(const std::string& textureName) {
+        if (textureName.empty()) {
+            return {};
+        }
+
+        static const std::array<const char*, 6> kTextureExtensions = {
+            ".dds", ".tga", ".png", ".jpg", ".jpeg", ".bmp"
+        };
+
+        std::filesystem::path input(textureName);
+
+        InitializeTextureSearchRoots();
+
+        auto tryCandidate = [](const std::filesystem::path& candidate) -> std::string {
+            if (FileExists(candidate)) {
+                return candidate.string();
+            }
+            return {};
+        };
+
+        auto tryRelativePath = [&](const std::filesystem::path& base, const std::filesystem::path& relative) -> std::string {
+            if (relative.empty()) {
+                return {};
+            }
+
+            if (const std::string resolved = tryCandidate(base / relative); !resolved.empty()) {
+                return resolved;
+            }
+
+            const std::filesystem::path fileName = relative.filename();
+            if (!fileName.empty() && fileName != relative) {
+                if (const std::string resolved = tryCandidate(base / fileName); !resolved.empty()) {
+                    return resolved;
+                }
+            }
+
+            return {};
+        };
+
+        std::vector<std::filesystem::path> explicitCandidates;
+        explicitCandidates.push_back(input);
+        if (input.has_extension()
+            && NormalizeName(input.extension().string()) != std::string(".dds"))
+        {
+            std::filesystem::path ddsFallback = input;
+            ddsFallback.replace_extension(".dds");
+            if (ddsFallback != input) {
+                explicitCandidates.push_back(std::move(ddsFallback));
+            }
+        }
+
+        if (input.is_absolute()) {
+            for (const auto& candidate : explicitCandidates) {
+                if (const std::string resolved = tryCandidate(candidate); !resolved.empty()) {
+                    return resolved;
+                }
+            }
+        }
+
+        if (input.has_extension()) {
+            for (const auto& base : textureSearchRoots) {
+                for (const auto& candidate : explicitCandidates) {
+                    if (const std::string resolved = tryRelativePath(base, candidate); !resolved.empty()) {
+                        return resolved;
+                    }
+                }
+            }
+        }
+        else {
+            for (const auto& base : textureSearchRoots) {
+                for (const char* ext : kTextureExtensions) {
+                    auto relative = input;
+                    relative += ext;
+                    if (const std::string resolved = tryRelativePath(base, relative); !resolved.empty()) {
+                        return resolved;
+                    }
+                }
+            }
+        }
+
+        BuildRecursiveTextureLookup();
+
+        auto tryRecursiveLookup = [&](const std::string& keyText) -> std::string {
+            const std::string relativeKey = NormalizePathKey(keyText);
+            if (const auto found = recursiveTextureByRelativePath.find(relativeKey);
+                found != recursiveTextureByRelativePath.end())
+            {
+                return found->second;
+            }
+
+            const std::string baseKey = BaseNameKey(relativeKey);
+            if (const auto found = recursiveTextureByBaseName.find(baseKey);
+                found != recursiveTextureByBaseName.end())
+            {
+                return found->second;
+            }
+
+            return {};
+        };
+
+        if (input.has_extension()) {
+            for (const auto& candidate : explicitCandidates) {
+                if (const std::string resolved = tryRecursiveLookup(candidate.generic_string());
+                    !resolved.empty())
+                {
+                    return resolved;
+                }
+            }
+            return {};
+        }
+
+        for (const char* ext : kTextureExtensions) {
+            if (const std::string resolved = tryRecursiveLookup(textureName + ext); !resolved.empty()) {
+                return resolved;
+            }
+        }
+
+        return {};
     }
 
     bool HasExternalTexture(const std::string& textureName) const {
@@ -962,7 +1139,7 @@ struct BuildContext {
 
         RenderTexture texture{};
         texture.name = textureName;
-        texture.resolvedPath = ResolveTexturePath(textureName, options);
+        texture.resolvedPath = ResolveTexturePath(textureName);
         if (texture.resolvedPath.empty() && HasExternalTexture(textureName)) {
             texture.resolvedPath = "archive:" + textureName;
         }
@@ -982,59 +1159,94 @@ struct BuildContext {
         return index;
     }
 
-    int EnsureMaterial(
-        int textureIndex,
-        bool twoSided,
-        const UvAnimationParams& uvAnim,
-        const std::string& nameHint)
-    {
+    int EnsureMaterial(const RenderMaterial& materialTemplate) {
         std::string key;
-        key.reserve(180);
-        key += std::to_string(textureIndex);
+        key.reserve(320);
+        key += std::to_string(materialTemplate.textureIndex);
         key += ':';
-        key += (twoSided ? '2' : '1');
+        key += (materialTemplate.alphaTest ? '1' : '0');
         key += ':';
-        key += std::to_string(uvAnim.mode);
+        key += (materialTemplate.translucent ? '1' : '0');
         key += ':';
-        key += FormatFloatKey(uvAnim.offsetU);
+        key += (materialTemplate.texturingEnabled ? '1' : '0');
         key += ':';
-        key += FormatFloatKey(uvAnim.offsetV);
+        key += (materialTemplate.twoSided ? '1' : '0');
         key += ':';
-        key += FormatFloatKey(uvAnim.scrollU);
+        key += (materialTemplate.unlit ? '1' : '0');
         key += ':';
-        key += FormatFloatKey(uvAnim.scrollV);
+        key += (materialTemplate.clampU ? '1' : '0');
         key += ':';
-        key += FormatFloatKey(uvAnim.scaleU);
+        key += (materialTemplate.clampV ? '1' : '0');
         key += ':';
-        key += FormatFloatKey(uvAnim.scaleV);
+        key += std::to_string(materialTemplate.depthCompare);
         key += ':';
-        key += FormatFloatKey(uvAnim.centerU);
+        key += (materialTemplate.depthWrite ? '1' : '0');
         key += ':';
-        key += FormatFloatKey(uvAnim.centerV);
+        key += std::to_string(materialTemplate.srcBlend);
         key += ':';
-        key += FormatFloatKey(uvAnim.rotateRadPerSec);
+        key += std::to_string(materialTemplate.destBlend);
+        key += ':';
+        key += std::to_string(materialTemplate.colorWriteMask);
+        key += ':';
+        key += FormatFloatKey(materialTemplate.diffuseColor.x);
+        key += ':';
+        key += FormatFloatKey(materialTemplate.diffuseColor.y);
+        key += ':';
+        key += FormatFloatKey(materialTemplate.diffuseColor.z);
+        key += ':';
+        key += FormatFloatKey(materialTemplate.diffuseColor.w);
+        key += ':';
+        key += FormatFloatKey(materialTemplate.ambientColor.x);
+        key += ':';
+        key += FormatFloatKey(materialTemplate.ambientColor.y);
+        key += ':';
+        key += FormatFloatKey(materialTemplate.ambientColor.z);
+        key += ':';
+        key += FormatFloatKey(materialTemplate.specularColor.x);
+        key += ':';
+        key += FormatFloatKey(materialTemplate.specularColor.y);
+        key += ':';
+        key += FormatFloatKey(materialTemplate.specularColor.z);
+        key += ':';
+        key += FormatFloatKey(materialTemplate.emissiveColor.x);
+        key += ':';
+        key += FormatFloatKey(materialTemplate.emissiveColor.y);
+        key += ':';
+        key += FormatFloatKey(materialTemplate.emissiveColor.z);
+        key += ':';
+        key += FormatFloatKey(materialTemplate.shininess);
+        key += ':';
+        key += FormatFloatKey(materialTemplate.opacity);
+        key += ':';
+        key += FormatFloatKey(materialTemplate.translucency);
+        key += ':';
+        key += std::to_string(materialTemplate.uvAnimMode);
+        key += ':';
+        key += FormatFloatKey(materialTemplate.uvOffsetU);
+        key += ':';
+        key += FormatFloatKey(materialTemplate.uvOffsetV);
+        key += ':';
+        key += FormatFloatKey(materialTemplate.uvScrollU);
+        key += ':';
+        key += FormatFloatKey(materialTemplate.uvScrollV);
+        key += ':';
+        key += FormatFloatKey(materialTemplate.uvScaleU);
+        key += ':';
+        key += FormatFloatKey(materialTemplate.uvScaleV);
+        key += ':';
+        key += FormatFloatKey(materialTemplate.uvCenterU);
+        key += ':';
+        key += FormatFloatKey(materialTemplate.uvCenterV);
+        key += ':';
+        key += FormatFloatKey(materialTemplate.uvRotateRadPerSec);
+
         const auto existing = materialByKey.find(key);
         if (existing != materialByKey.end()) {
             return existing->second;
         }
 
-        RenderMaterial material{};
-        material.name = nameHint;
-        material.textureIndex = textureIndex;
-        material.twoSided = twoSided;
-        material.uvAnimMode = uvAnim.mode;
-        material.uvOffsetU = uvAnim.offsetU;
-        material.uvOffsetV = uvAnim.offsetV;
-        material.uvScrollU = uvAnim.scrollU;
-        material.uvScrollV = uvAnim.scrollV;
-        material.uvScaleU = uvAnim.scaleU;
-        material.uvScaleV = uvAnim.scaleV;
-        material.uvCenterU = uvAnim.centerU;
-        material.uvCenterV = uvAnim.centerV;
-        material.uvRotateRadPerSec = uvAnim.rotateRadPerSec;
-
         const int index = static_cast<int>(result.scene.materials.size());
-        result.scene.materials.push_back(material);
+        result.scene.materials.push_back(materialTemplate);
         materialByKey.emplace(key, index);
         return index;
     }
@@ -1098,12 +1310,14 @@ std::optional<RenderMesh> BuildRenderMeshFromChunk(
     }
 
     const std::shared_ptr<ChunkItem> materialRoot = SelectMaterialSourceRoot(meshChunk);
+    std::vector<std::shared_ptr<ChunkItem>> materialPassChunks;
+    std::shared_ptr<ChunkItem> primaryMaterialPassChunk;
     std::shared_ptr<ChunkItem> primaryTextureStageChunk;
     if (materialRoot) {
-        std::vector<std::shared_ptr<ChunkItem>> materialPassChunks;
         CollectChunksByIdRecursive(materialRoot, kChunkMaterialPass, materialPassChunks);
         if (!materialPassChunks.empty()) {
-            const auto textureStages = FindChildrenById(materialPassChunks.front(), kChunkTextureStage);
+            primaryMaterialPassChunk = materialPassChunks.front();
+            const auto textureStages = FindChildrenById(primaryMaterialPassChunk, kChunkTextureStage);
             if (!textureStages.empty()) {
                 primaryTextureStageChunk = textureStages.front();
             }
@@ -1161,16 +1375,33 @@ std::optional<RenderMesh> BuildRenderMeshFromChunk(
         }
     }
 
-    std::vector<int> localTextureIndices;
+    std::vector<LocalTextureSlot> localTextures;
     std::vector<std::shared_ptr<ChunkItem>> textureWrappers;
     CollectChunksByIdRecursive(materialRoot ? materialRoot : meshChunk, kChunkTextureWrapper, textureWrappers);
+    localTextures.reserve(textureWrappers.size());
     for (const auto& textureWrapper : textureWrappers) {
         const auto texNameChunk = FindFirstChildById(textureWrapper, kChunkTextureName);
         if (!texNameChunk) {
             continue;
         }
+
+        LocalTextureSlot slot{};
         const std::string texName = ReadNullTerminatedChunkString(texNameChunk);
-        localTextureIndices.push_back(ctx.EnsureTexture(texName, texNameChunk.get()));
+        slot.textureIndex = ctx.EnsureTexture(texName, texNameChunk.get());
+        if (const auto textureInfoChunk = FindFirstChildById(textureWrapper, kChunkTextureInfo)) {
+            if (const auto parsed =
+                ParseStructWithWarning<W3dTextureInfoStruct>(textureInfoChunk, ctx.result.warnings))
+            {
+                const uint16_t attributes = parsed->Attributes;
+                slot.alphaBitmap =
+                    (attributes & static_cast<uint16_t>(TextureAttr::ALPHA_BITMAP)) != 0;
+                slot.clampU =
+                    (attributes & static_cast<uint16_t>(TextureAttr::CLAMP_U)) != 0;
+                slot.clampV =
+                    (attributes & static_cast<uint16_t>(TextureAttr::CLAMP_V)) != 0;
+            }
+        }
+        localTextures.push_back(slot);
     }
 
     std::vector<uint32_t> triTextureAssignments;
@@ -1198,6 +1429,99 @@ std::optional<RenderMesh> BuildRenderMeshFromChunk(
                     if (!triTextureAssignments.empty()) {
                         triTextureAssignments.resize(1);
                     }
+                }
+            }
+        }
+    }
+
+    std::vector<W3dShaderStruct> localShaders;
+    {
+        std::vector<std::shared_ptr<ChunkItem>> shaderChunks;
+        CollectChunksByIdRecursive(materialRoot ? materialRoot : meshChunk, kChunkShaders, shaderChunks);
+        if (!shaderChunks.empty()) {
+            if (const auto parsed =
+                ParseArrayWithWarning<W3dShaderStruct>(shaderChunks.front(), ctx.result.warnings))
+            {
+                localShaders = *parsed;
+            }
+        }
+    }
+
+    std::vector<uint32_t> triShaderAssignments;
+    {
+        std::shared_ptr<ChunkItem> shaderIdsChunk;
+        if (primaryMaterialPassChunk) {
+            shaderIdsChunk = FindFirstChildById(primaryMaterialPassChunk, kChunkShaderIds);
+        }
+        if (!shaderIdsChunk) {
+            std::vector<std::shared_ptr<ChunkItem>> shaderIdChunks;
+            CollectChunksByIdRecursive(materialRoot ? materialRoot : meshChunk, kChunkShaderIds, shaderIdChunks);
+            if (!shaderIdChunks.empty()) {
+                shaderIdsChunk = shaderIdChunks.front();
+            }
+        }
+        if (shaderIdsChunk) {
+            if (const auto ids = ParseArrayWithWarning<uint32_t>(shaderIdsChunk, ctx.result.warnings)) {
+                triShaderAssignments = *ids;
+                if (!(triShaderAssignments.size() == 1 || triShaderAssignments.size() == tris->size())) {
+                    ctx.result.warnings.push_back({
+                        SceneBuildWarningCode::InvalidIndex,
+                        BuildChunkPath(shaderIdsChunk.get()),
+                        "Shader ID count is neither one entry nor per-triangle; using first value only."
+                        });
+                    if (!triShaderAssignments.empty()) {
+                        triShaderAssignments.resize(1);
+                    }
+                }
+            }
+        }
+    }
+
+    W3dVertexMaterialStruct selectedVertexMaterial{};
+    bool hasSelectedVertexMaterial = false;
+    {
+        std::vector<std::shared_ptr<ChunkItem>> vertexMaterials;
+        CollectChunksByIdRecursive(materialRoot ? materialRoot : meshChunk, kChunkVertexMaterial, vertexMaterials);
+        int selectedVertexMaterialIndex = 0;
+
+        std::shared_ptr<ChunkItem> vertexMaterialIdsChunk;
+        if (primaryMaterialPassChunk) {
+            vertexMaterialIdsChunk = FindFirstChildById(primaryMaterialPassChunk, kChunkVertexMaterialIds);
+        }
+        if (vertexMaterialIdsChunk) {
+            if (const auto ids =
+                ParseArrayWithWarning<uint32_t>(vertexMaterialIdsChunk, ctx.result.warnings))
+            {
+                if (!ids->empty()) {
+                    selectedVertexMaterialIndex = static_cast<int>((*ids)[0]);
+                    const uint32_t firstId = (*ids)[0];
+                    const bool hasVaryingIds = std::any_of(
+                        ids->begin(),
+                        ids->end(),
+                        [firstId](uint32_t id) { return id != firstId; });
+                    if (hasVaryingIds) {
+                        ctx.result.warnings.push_back({
+                            SceneBuildWarningCode::UnsupportedChunk,
+                            BuildChunkPath(vertexMaterialIdsChunk.get()),
+                            "Per-vertex material IDs vary; renderer is using the first vertex material for the whole mesh."
+                            });
+                    }
+                }
+            }
+        }
+
+        if (selectedVertexMaterialIndex >= 0
+            && selectedVertexMaterialIndex < static_cast<int>(vertexMaterials.size()))
+        {
+            if (const auto infoChunk = FindFirstChildById(
+                vertexMaterials[static_cast<std::size_t>(selectedVertexMaterialIndex)],
+                kChunkVertexMaterialInfo))
+            {
+                if (const auto parsed =
+                    ParseStructWithWarning<W3dVertexMaterialStruct>(infoChunk, ctx.result.warnings))
+                {
+                    selectedVertexMaterial = *parsed;
+                    hasSelectedVertexMaterial = true;
                 }
             }
         }
@@ -1241,26 +1565,108 @@ std::optional<RenderMesh> BuildRenderMeshFromChunk(
     std::unordered_map<int, std::vector<uint32_t>> groupedIndices;
     groupedIndices.reserve(4);
 
-    auto resolveTextureIndexForTriangle = [&](std::size_t triIndex) -> int {
+    const bool twoSided =
+        (headerValue.Attributes & static_cast<uint32_t>(MeshAttr::W3D_MESH_FLAG_TWO_SIDED)) != 0;
+    const bool hidden =
+        (headerValue.Attributes & static_cast<uint32_t>(MeshAttr::W3D_MESH_FLAG_HIDDEN)) != 0;
+    const UvAnimationParams uvAnim = ParseUvAnimationParams(materialRoot ? materialRoot : meshChunk);
+
+    RenderMaterial baseMaterial{};
+    baseMaterial.name = fullName + "_mat";
+    baseMaterial.twoSided = twoSided;
+    baseMaterial.unlit = materialRoot && materialRoot->id == kChunkPrelitUnlit;
+    baseMaterial.uvAnimMode = uvAnim.mode;
+    baseMaterial.uvOffsetU = uvAnim.offsetU;
+    baseMaterial.uvOffsetV = uvAnim.offsetV;
+    baseMaterial.uvScrollU = uvAnim.scrollU;
+    baseMaterial.uvScrollV = uvAnim.scrollV;
+    baseMaterial.uvScaleU = uvAnim.scaleU;
+    baseMaterial.uvScaleV = uvAnim.scaleV;
+    baseMaterial.uvCenterU = uvAnim.centerU;
+    baseMaterial.uvCenterV = uvAnim.centerV;
+    baseMaterial.uvRotateRadPerSec = uvAnim.rotateRadPerSec;
+    if (hasSelectedVertexMaterial) {
+        baseMaterial.ambientColor = ToRenderColor(selectedVertexMaterial.Ambient);
+        baseMaterial.diffuseColor = {
+            NormalizeColorComponent(selectedVertexMaterial.Diffuse.R),
+            NormalizeColorComponent(selectedVertexMaterial.Diffuse.G),
+            NormalizeColorComponent(selectedVertexMaterial.Diffuse.B),
+            1.0f
+        };
+        baseMaterial.specularColor = ToRenderColor(selectedVertexMaterial.Specular);
+        baseMaterial.emissiveColor = ToRenderColor(selectedVertexMaterial.Emissive);
+        baseMaterial.shininess = selectedVertexMaterial.Shininess;
+        baseMaterial.opacity = selectedVertexMaterial.Opacity;
+        baseMaterial.translucency = selectedVertexMaterial.Translucency;
+    }
+
+    auto resolveTextureForTriangle = [&](std::size_t triIndex) -> std::optional<LocalTextureSlot> {
         if (triTextureAssignments.empty()) {
-            return -1;
+            return std::nullopt;
         }
         uint32_t texId = triTextureAssignments[0];
         if (triTextureAssignments.size() > 1 && triIndex < triTextureAssignments.size()) {
             texId = triTextureAssignments[triIndex];
         }
         if (texId == 0xFFFFFFFFu) {
-            return -1;
+            return std::nullopt;
         }
-        if (texId >= localTextureIndices.size()) {
+        if (texId >= localTextures.size()) {
             ctx.result.warnings.push_back({
                 SceneBuildWarningCode::InvalidIndex,
                 BuildChunkPath(trisChunk.get()),
                 "Triangle texture index is out of range."
                 });
-            return -1;
+            return std::nullopt;
         }
-        return localTextureIndices[texId];
+        return localTextures[texId];
+    };
+
+    auto resolveShaderForTriangle = [&](std::size_t triIndex) -> const W3dShaderStruct* {
+        if (triShaderAssignments.empty()) {
+            return nullptr;
+        }
+        uint32_t shaderId = triShaderAssignments[0];
+        if (triShaderAssignments.size() > 1 && triIndex < triShaderAssignments.size()) {
+            shaderId = triShaderAssignments[triIndex];
+        }
+        if (shaderId == 0xFFFFFFFFu || shaderId >= localShaders.size()) {
+            if (shaderId != 0xFFFFFFFFu) {
+                ctx.result.warnings.push_back({
+                    SceneBuildWarningCode::InvalidIndex,
+                    BuildChunkPath(trisChunk.get()),
+                    "Triangle shader index is out of range."
+                    });
+            }
+            return nullptr;
+        }
+        return &localShaders[shaderId];
+    };
+
+    auto buildMaterialIndexForTriangle = [&](std::size_t triIndex) -> int {
+        RenderMaterial material = baseMaterial;
+        material.name = fullName + "_mat";
+
+        if (const auto textureSlot = resolveTextureForTriangle(triIndex)) {
+            material.textureIndex = textureSlot->textureIndex;
+            material.alphaTest = material.alphaTest || textureSlot->alphaBitmap;
+            material.clampU = textureSlot->clampU;
+            material.clampV = textureSlot->clampV;
+        }
+
+        if (const W3dShaderStruct* shader = resolveShaderForTriangle(triIndex)) {
+            material.depthCompare = shader->DepthCompare;
+            material.depthWrite = shader->DepthMask != 0;
+            material.srcBlend = shader->SrcBlend;
+            material.destBlend = shader->DestBlend;
+            material.alphaTest = material.alphaTest || shader->AlphaTest != 0;
+            material.texturingEnabled = shader->Texturing != 0;
+            const uint8_t writeMask = static_cast<uint8_t>(shader->ColorMask & 0x0F);
+            material.colorWriteMask = (writeMask == 0) ? static_cast<uint8_t>(0x0F) : writeMask;
+        }
+
+        FinalizeRenderMaterial(material);
+        return ctx.EnsureMaterial(material);
     };
 
     std::vector<RenderVertex> baseVertices;
@@ -1356,8 +1762,8 @@ std::optional<RenderMesh> BuildRenderMeshFromChunk(
             continue;
         }
 
-        const int materialTextureIndex = resolveTextureIndexForTriangle(triIndex);
-        auto& indices = groupedIndices[materialTextureIndex];
+        const int materialIndex = buildMaterialIndexForTriangle(triIndex);
+        auto& indices = groupedIndices[materialIndex];
         indices.push_back(a);
         indices.push_back(b);
         indices.push_back(c);
@@ -1367,12 +1773,6 @@ std::optional<RenderMesh> BuildRenderMeshFromChunk(
         return std::nullopt;
     }
 
-    const bool twoSided =
-        (headerValue.Attributes & static_cast<uint32_t>(MeshAttr::W3D_MESH_FLAG_TWO_SIDED)) != 0;
-    const bool hidden =
-        (headerValue.Attributes & static_cast<uint32_t>(MeshAttr::W3D_MESH_FLAG_HIDDEN)) != 0;
-    const UvAnimationParams uvAnim = ParseUvAnimationParams(materialRoot ? materialRoot : meshChunk);
-
     const Vec3 boundsMin = { headerValue.Min.X, headerValue.Min.Y, headerValue.Min.Z };
     const Vec3 boundsMax = { headerValue.Max.X, headerValue.Max.Y, headerValue.Max.Z };
     const Vec3 boundsCenter = { headerValue.SphCenter.X, headerValue.SphCenter.Y, headerValue.SphCenter.Z };
@@ -1380,7 +1780,7 @@ std::optional<RenderMesh> BuildRenderMeshFromChunk(
     std::optional<RenderMesh> primaryMesh;
     int groupSuffix = 0;
     for (const auto& pair : groupedIndices) {
-        const int textureIndex = pair.first;
+        const int materialIndex = pair.first;
         const auto& grouped = pair.second;
         if (grouped.empty()) {
             continue;
@@ -1406,9 +1806,7 @@ std::optional<RenderMesh> BuildRenderMeshFromChunk(
         subMesh.skinned = skinned;
         subMesh.hasSecondaryVertexStream = !secondaryVertices.empty();
         subMesh.bonesPerVertex = bonesPerVertex;
-
-        const std::string materialNameHint = subMesh.fullName + "_mat";
-        subMesh.materialIndex = ctx.EnsureMaterial(textureIndex, twoSided, uvAnim, materialNameHint);
+        subMesh.materialIndex = materialIndex;
 
         if (!primaryMesh.has_value()) {
             primaryMesh = subMesh;

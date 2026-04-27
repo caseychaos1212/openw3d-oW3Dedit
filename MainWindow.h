@@ -36,6 +36,7 @@ class QTabWidget;
 class QLabel;
 class QTreeWidgetItem;
 class MeshEditorWidget;
+class RawTextEditorWidget;
 class StringEditorWidget;
 class HierarchyHeaderEditorWidget;
 class AnimationHierarchyEditorWidget;
@@ -151,6 +152,8 @@ private slots:
     void handleRenderPrepSourceClipChanged(int index);
     void handleRenderPrepStaticPoseFrameChanged(int value);
     void applyRenderAnimationClipPrep();
+    void applyRenderAnimationStaticPoseToClip();
+    void applyRenderAnimationFitSourceToClip();
     void handleRenderBlendSourceClipChanged(int index);
     void handleRenderBlendTimingModeChanged(int index);
     void handleRenderBlendPivotItemChanged(QTreeWidgetItem* item, int column);
@@ -289,6 +292,7 @@ private:
     QString lastDirectory;
     QStackedWidget* editorStack = nullptr;
     MeshEditorWidget* meshEditor = nullptr;
+    RawTextEditorWidget* meshUserTextEditor = nullptr;
     StringEditorWidget* textureNameEditor = nullptr;
     HierarchyHeaderEditorWidget* hierarchyHeaderEditor = nullptr;
     AnimationHierarchyEditorWidget* animationHierarchyEditor = nullptr;
@@ -340,6 +344,8 @@ private:
     QComboBox* renderAnimationPrepSourceCombo = nullptr;
     QSpinBox* renderAnimationPrepStaticPoseFrameSpin = nullptr;
     QPushButton* renderAnimationPrepApplyButton = nullptr;
+    QPushButton* renderAnimationPrepFreezePoseButton = nullptr;
+    QPushButton* renderAnimationPrepFitSourceButton = nullptr;
     QLabel* renderAnimationPrepStatusLabel = nullptr;
     QGroupBox* renderAnimationPivotSheetGroup = nullptr;
     QLabel* renderAnimationPivotSheetLabel = nullptr;

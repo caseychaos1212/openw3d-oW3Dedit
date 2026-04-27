@@ -83,8 +83,12 @@ private:
 
     struct CBufferObject {
         Mat4 world{};
-        Vec4 baseColor{};
-        Vec4 flags{}; // x=has texture, y=selected highlight, z=uv debug view
+        Vec4 diffuseColor{};
+        Vec4 ambientColor{};
+        Vec4 specularShininess{};
+        Vec4 emissiveOpacity{};
+        Vec4 flags{}; // x=has texture, y=selected highlight, z=uv debug view, w=texturing enabled
+        Vec4 flags2{}; // x=alpha test, y=unlit shading, z=translucency, w=unused
         Vec4 uvAnim0{}; // x=mode (0 none, 1 scroll, 2 rotate), y=timeSeconds, z=rotateRadPerSec
         Vec4 uvAnim1{}; // x=offsetU, y=offsetV, z=scrollU, w=scrollV
         Vec4 uvAnim2{}; // x=scaleU, y=scaleV, z=centerU, w=centerV
@@ -118,6 +122,12 @@ private:
         int hierarchyIndex,
         const std::vector<std::vector<Mat4>>& hierarchyWorld);
     bool ShouldRenderLodEntry(const RenderLodEntry& entry, const GpuMesh& mesh, float cameraDistance) const;
+    ID3D11SamplerState* ResolveSamplerState(const RenderMaterial* material) const;
+    ID3D11BlendState* ResolveBlendState(const RenderMaterial* material);
+    ID3D11DepthStencilState* ResolveDepthState(const RenderMaterial* material);
+    static bool IsMaterialTransparent(const RenderMaterial* material);
+    static D3D11_BLEND ToD3D11Blend(uint8_t factor, bool sourceFactor);
+    static D3D11_COMPARISON_FUNC ToD3D11ComparisonFunc(uint8_t compareMode);
 
     Microsoft::WRL::ComPtr<ID3D11Device> m_device;
     Microsoft::WRL::ComPtr<ID3D11DeviceContext> m_context;
@@ -132,11 +142,15 @@ private:
     Microsoft::WRL::ComPtr<ID3D11PixelShader> m_ps;
     Microsoft::WRL::ComPtr<ID3D11InputLayout> m_inputLayout;
 
-    Microsoft::WRL::ComPtr<ID3D11SamplerState> m_sampler;
+    Microsoft::WRL::ComPtr<ID3D11SamplerState> m_samplerWrapWrap;
+    Microsoft::WRL::ComPtr<ID3D11SamplerState> m_samplerClampWrap;
+    Microsoft::WRL::ComPtr<ID3D11SamplerState> m_samplerWrapClamp;
+    Microsoft::WRL::ComPtr<ID3D11SamplerState> m_samplerClampClamp;
     Microsoft::WRL::ComPtr<ID3D11RasterizerState> m_rsCullBack;
     Microsoft::WRL::ComPtr<ID3D11RasterizerState> m_rsCullNone;
-    Microsoft::WRL::ComPtr<ID3D11DepthStencilState> m_depthState;
     Microsoft::WRL::ComPtr<ID3D11BlendState> m_blendOpaque;
+    std::unordered_map<uint32_t, Microsoft::WRL::ComPtr<ID3D11DepthStencilState>> m_depthStateCache;
+    std::unordered_map<uint32_t, Microsoft::WRL::ComPtr<ID3D11BlendState>> m_blendStateCache;
 
     Microsoft::WRL::ComPtr<ID3D11Buffer> m_frameCBuffer;
     Microsoft::WRL::ComPtr<ID3D11Buffer> m_objectCBuffer;

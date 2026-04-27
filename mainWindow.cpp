@@ -856,6 +856,75 @@ static void PrepareAnimationEditDraftFromStaticPose(
     }
 }
 
+static void PrepareAnimationEditDraftFromFittedSourceClip(
+    const OW3D::Render::RenderAnimationClip& targetClip,
+    OW3D::Render::RenderAnimationEditDraft& targetDraft,
+    const OW3D::Render::RenderAnimationClip& sourceClip,
+    const OW3D::Render::RenderAnimationEditDraft* sourceDraft,
+    uint32_t targetNumFrames,
+    float targetFrameRate)
+{
+    const OW3D::Render::RenderAnimationEditDraft existingTargetDraft = targetDraft;
+    std::vector<int> pivotIndices =
+        CollectRenderAnimationDraftPivotIndices(targetClip, &existingTargetDraft);
+    std::vector<int> sourcePivotIndices =
+        CollectRenderAnimationDraftPivotIndices(sourceClip, sourceDraft);
+    pivotIndices.insert(
+        pivotIndices.end(),
+        sourcePivotIndices.begin(),
+        sourcePivotIndices.end());
+    std::sort(pivotIndices.begin(), pivotIndices.end());
+    pivotIndices.erase(std::unique(pivotIndices.begin(), pivotIndices.end()), pivotIndices.end());
+
+    const uint32_t sourceNumFrames =
+        EffectiveRenderAnimationFrameCount(sourceClip, sourceDraft);
+
+    targetDraft.sourceAnimationChunk = targetClip.sourceAnimationChunk;
+    targetDraft.numFrames = targetNumFrames;
+    targetDraft.frameRate = targetFrameRate;
+    targetDraft.pivotSamples.clear();
+
+    for (const int pivotIndex : pivotIndices) {
+        OW3D::Render::RenderDensePivotAnimationSamples samples{};
+        samples.translationX.resize(targetNumFrames, 0.0f);
+        samples.translationY.resize(targetNumFrames, 0.0f);
+        samples.translationZ.resize(targetNumFrames, 0.0f);
+        samples.rotation.resize(
+            targetNumFrames,
+            OW3D::Render::Vec4{ 0.0f, 0.0f, 0.0f, 1.0f });
+
+        for (uint32_t frameIndex = 0; frameIndex < targetNumFrames; ++frameIndex) {
+            const float progress = targetNumFrames <= 1u
+                ? 0.0f
+                : static_cast<float>(frameIndex) / static_cast<float>(targetNumFrames - 1u);
+            const float sourceFrame =
+                OW3D::Render::AnimationFrameFromNormalizedProgress(
+                    sourceNumFrames,
+                    progress);
+            const OW3D::Render::Vec3 translation =
+                OW3D::Render::SamplePivotAnimationTranslation(
+                    &sourceClip,
+                    pivotIndex,
+                    sourceFrame,
+                    sourceDraft);
+            const OW3D::Render::Vec4 rotation =
+                OW3D::Render::AnimationNormalizeQuat(
+                    OW3D::Render::SamplePivotAnimationRotation(
+                        &sourceClip,
+                        pivotIndex,
+                        sourceFrame,
+                        sourceDraft));
+
+            samples.translationX[frameIndex] = translation.x;
+            samples.translationY[frameIndex] = translation.y;
+            samples.translationZ[frameIndex] = translation.z;
+            samples.rotation[frameIndex] = rotation;
+        }
+
+        targetDraft.pivotSamples[pivotIndex] = std::move(samples);
+    }
+}
+
 struct RenderHandPinChain {
     QString label;
     int effectorPivotIndex = -1;
@@ -1062,6 +1131,20 @@ static bool SceneHasCompatibleHierarchyForAnimation(
         }
     }
     return false;
+}
+
+static int FindFirstPlayableAnimationIndex(
+    const OW3D::Render::RenderScene& scene)
+{
+    for (int i = 0; i < static_cast<int>(scene.animations.size()); ++i) {
+        const auto& clip = scene.animations[static_cast<std::size_t>(i)];
+        if (clip.supportedForPlayback
+            && SceneHasCompatibleHierarchyForAnimation(scene, i))
+        {
+            return i;
+        }
+    }
+    return -1;
 }
 
 static int FindCompatibleHierarchyIndexForAnimation(
@@ -5232,6 +5315,60 @@ void StringEditorWidget::applyChanges() {
     emit chunkEdited();
 }
 
+RawTextEditorWidget::RawTextEditorWidget(const QString& label, QWidget* parent)
+    : QWidget(parent) {
+    setEnabled(false);
+    auto* layout = new QVBoxLayout(this);
+    layout->setContentsMargins(0, 0, 0, 0);
+    layout->setSpacing(6);
+
+    auto* form = new QFormLayout();
+    textEdit = new QPlainTextEdit(this);
+    textEdit->setMinimumHeight(96);
+    form->addRow(label, textEdit);
+    layout->addLayout(form);
+
+    applyButton = new QPushButton(tr("Apply"), this);
+    connect(applyButton, &QPushButton::clicked,
+        this, &RawTextEditorWidget::applyChanges);
+
+    layout->addWidget(applyButton, 0, Qt::AlignRight);
+    layout->addStretch();
+}
+
+void RawTextEditorWidget::setChunk(const std::shared_ptr<ChunkItem>& chunkPtr) {
+    chunk = chunkPtr;
+    if (!chunkPtr) {
+        textEdit->clear();
+        setEnabled(false);
+        return;
+    }
+
+    textEdit->setPlainText(QString::fromLatin1(
+        reinterpret_cast<const char*>(chunkPtr->data.data()),
+        static_cast<int>(TruncatedLength(
+            reinterpret_cast<const char*>(chunkPtr->data.data()),
+            chunkPtr->data.size()))));
+    setEnabled(true);
+}
+
+void RawTextEditorWidget::applyChanges() {
+    auto chunkPtr = chunk.lock();
+    if (!chunkPtr) return;
+
+    QString normalized = textEdit->toPlainText();
+    normalized.replace("\r\n", "\n");
+    normalized.replace('\r', '\n');
+    normalized.replace('\n', "\r\n");
+    const QByteArray text = normalized.toLatin1();
+    const std::string value(text.constData(), static_cast<std::size_t>(text.size()));
+    if (!W3DEdit::UpdateNullTermStringChunk(chunkPtr, value)) {
+        QMessageBox::warning(this, tr("Error"), tr("Failed to update text chunk."));
+        return;
+    }
+    emit chunkEdited();
+}
+
 HierarchyHeaderEditorWidget::HierarchyHeaderEditorWidget(QWidget* parent)
     : QWidget(parent) {
     setEnabled(false);
@@ -6345,6 +6482,9 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     meshEditor = new MeshEditorWidget(editorStack);
     editorStack->addWidget(meshEditor);
 
+    meshUserTextEditor = new RawTextEditorWidget(tr("User Text"), editorStack);
+    editorStack->addWidget(meshUserTextEditor);
+
     textureNameEditor = new StringEditorWidget(tr("Texture Name"), editorStack);
     editorStack->addWidget(textureNameEditor);
 
@@ -6619,7 +6759,11 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     renderPrepActionLayout->setContentsMargins(0, 0, 0, 0);
     renderPrepActionLayout->setSpacing(6);
     renderAnimationPrepApplyButton = new QPushButton(tr("Apply To Draft"), renderPrepActionRow);
+    renderAnimationPrepFreezePoseButton = new QPushButton(tr("Apply Pose To All Frames"), renderPrepActionRow);
+    renderAnimationPrepFitSourceButton = new QPushButton(tr("Fit Source To Clip"), renderPrepActionRow);
     renderPrepActionLayout->addWidget(renderAnimationPrepApplyButton);
+    renderPrepActionLayout->addWidget(renderAnimationPrepFreezePoseButton);
+    renderPrepActionLayout->addWidget(renderAnimationPrepFitSourceButton);
     renderPrepActionLayout->addStretch(1);
     renderPrepLayout->addWidget(renderPrepActionRow);
 
@@ -6899,6 +7043,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
 
     connect(meshEditor, &MeshEditorWidget::chunkEdited, this, &MainWindow::onChunkEdited);
     connect(meshEditor, &MeshEditorWidget::meshRenamed, this, &MainWindow::onMeshRenamed);
+    connect(meshUserTextEditor, &RawTextEditorWidget::chunkEdited, this, &MainWindow::onChunkEdited);
     connect(textureNameEditor, &StringEditorWidget::chunkEdited, this, &MainWindow::onChunkEdited);
     connect(textureInfoEditor, &TextureInfoEditorWidget::chunkEdited, this, &MainWindow::onChunkEdited);
     connect(hierarchyHeaderEditor, &HierarchyHeaderEditorWidget::chunkEdited, this, &MainWindow::onChunkEdited);
@@ -7018,6 +7163,8 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     connect(renderAnimationPrepSourceCombo, qOverload<int>(&QComboBox::currentIndexChanged), this, &MainWindow::handleRenderPrepSourceClipChanged);
     connect(renderAnimationPrepStaticPoseFrameSpin, qOverload<int>(&QSpinBox::valueChanged), this, &MainWindow::handleRenderPrepStaticPoseFrameChanged);
     connect(renderAnimationPrepApplyButton, &QPushButton::clicked, this, &MainWindow::applyRenderAnimationClipPrep);
+    connect(renderAnimationPrepFreezePoseButton, &QPushButton::clicked, this, &MainWindow::applyRenderAnimationStaticPoseToClip);
+    connect(renderAnimationPrepFitSourceButton, &QPushButton::clicked, this, &MainWindow::applyRenderAnimationFitSourceToClip);
     connect(renderAnimationBlendSourceCombo, qOverload<int>(&QComboBox::currentIndexChanged), this, &MainWindow::handleRenderBlendSourceClipChanged);
     connect(renderAnimationBlendTimingCombo, qOverload<int>(&QComboBox::currentIndexChanged), this, &MainWindow::handleRenderBlendTimingModeChanged);
     connect(renderAnimationBlendPivotTree, &QTreeWidget::itemChanged, this, &MainWindow::handleRenderBlendPivotItemChanged);
@@ -8882,6 +9029,7 @@ void MainWindow::updateEditorForChunk(const std::shared_ptr<ChunkItem>& chunk) {
     currentChunk = chunk;
 
     meshEditor->setChunk(nullptr);
+    meshUserTextEditor->setChunk(nullptr);
     textureNameEditor->setChunk(nullptr);
     textureInfoEditor->setChunk(nullptr);
     hierarchyHeaderEditor->setChunk(nullptr);
@@ -8943,6 +9091,11 @@ void MainWindow::updateEditorForChunk(const std::shared_ptr<ChunkItem>& chunk) {
     }
 
     switch (chunk->id) {
+    case 0x000C: // W3D_CHUNK_MESH_USER_TEXT
+        meshUserTextEditor->setChunk(chunk);
+        editorStack->setCurrentWidget(meshUserTextEditor);
+        showEditor();
+        break;
     case 0x001F: // W3D_CHUNK_MESH_HEADER3
         meshEditor->setChunk(chunk);
         editorStack->setCurrentWidget(meshEditor);
@@ -9734,6 +9887,8 @@ void MainWindow::refreshRenderAnimationPrepControls() {
         || !renderAnimationPrepSourceCombo
         || !renderAnimationPrepStaticPoseFrameSpin
         || !renderAnimationPrepApplyButton
+        || !renderAnimationPrepFreezePoseButton
+        || !renderAnimationPrepFitSourceButton
         || !renderAnimationPrepStatusLabel) {
         return;
     }
@@ -9860,6 +10015,12 @@ void MainWindow::refreshRenderAnimationPrepControls() {
     renderAnimationPrepStaticPoseFrameSpin->setEnabled(controlsEnabled);
     renderAnimationPrepApplyButton->setEnabled(
         controlsEnabled && currentRenderAnimationPrepState.targetAnimationIndex >= 0);
+    renderAnimationPrepFreezePoseButton->setEnabled(
+        controlsEnabled && activeFrameCount > 0u);
+    renderAnimationPrepFitSourceButton->setEnabled(
+        controlsEnabled
+        && activeFrameCount > 0u
+        && currentRenderAnimationPrepState.targetAnimationIndex >= 0);
 
     QString statusText;
     if (!activeClip) {
@@ -9875,22 +10036,28 @@ void MainWindow::refreshRenderAnimationPrepControls() {
         statusText = tr("Clip prep unavailable: the active clip has no compatible hierarchy.");
     }
     else if (currentRenderAnimationPrepState.targetAnimationIndex < 0) {
-        statusText = tr("Select a compatible source clip to match the base timing.");
+        statusText = tr("Select a compatible source clip to match timing or fit it into this clip. Use Apply Pose To All Frames to freeze pose frame %1 across the current clip timing.")
+            .arg(currentRenderAnimationPrepState.staticPoseFrame);
     }
     else {
         const auto& targetClip =
             animations[static_cast<std::size_t>(currentRenderAnimationPrepState.targetAnimationIndex)];
         const OW3D::Render::RenderAnimationEditDraft* targetDraft =
             findRenderAnimationEditDraftForClip(targetClip);
+        const uint32_t sourceFrameCount =
+            EffectiveRenderAnimationFrameCount(targetClip, targetDraft);
+        const float sourceFrameRate =
+            EffectiveRenderAnimationFrameRate(targetClip, targetDraft);
         statusText = tr(
-            "Prepare the active base clip by sampling pose frame %1 and duplicating it across %2 frames at %3 FPS from %4.")
+            "Apply To Draft freezes pose frame %1 across %2 frames at %3 FPS from %4. Fit Source To Clip retimes all %2 source frames into the active clip's %5-frame timing.")
             .arg(currentRenderAnimationPrepState.staticPoseFrame)
-            .arg(EffectiveRenderAnimationFrameCount(targetClip, targetDraft))
+            .arg(sourceFrameCount)
             .arg(QString::number(
-                EffectiveRenderAnimationFrameRate(targetClip, targetDraft),
+                sourceFrameRate,
                 'f',
                 2))
-            .arg(QString::fromStdString(targetClip.fullName));
+            .arg(QString::fromStdString(targetClip.fullName))
+            .arg(activeFrameCount);
     }
     renderAnimationPrepStatusLabel->setText(statusText);
 }
@@ -11825,6 +11992,227 @@ void MainWindow::applyRenderAnimationClipPrep() {
     }
 
     currentRenderAnimationPrepState.staticPoseFrame = poseFrame;
+    setDirty(true);
+    currentRenderAnimationPlayback.timeSeconds = std::clamp(
+        currentRenderAnimationPlayback.timeSeconds,
+        0.0f,
+        AnimationClipDurationSeconds(*baseClip, baseDraft));
+    syncRenderAnimationUi();
+}
+
+void MainWindow::applyRenderAnimationStaticPoseToClip() {
+    int activeAnimationIndex = -1;
+    const OW3D::Render::RenderAnimationClip* clip = nullptr;
+    std::shared_ptr<ChunkItem> animationChunk;
+    QString editReason;
+    if (!ResolveEditablePrimaryRenderAnimation(
+        chunkData.get(),
+        currentRenderSceneResult,
+        currentRenderAnimationPlayback,
+        &activeAnimationIndex,
+        &clip,
+        &animationChunk,
+        &editReason)) {
+        QMessageBox::information(
+            this,
+            tr("Clip Prep Unavailable"),
+            editReason.isEmpty() ? tr("The active clip is read-only.") : editReason);
+        return;
+    }
+    Q_UNUSED(activeAnimationIndex);
+    if (!clip || !animationChunk) {
+        return;
+    }
+
+    const OW3D::Render::RenderAnimationEditDraft* existingDraft =
+        findRenderAnimationEditDraftForClip(*clip);
+    const uint32_t clipFrameCount =
+        EffectiveRenderAnimationFrameCount(*clip, existingDraft);
+    const float clipFrameRate =
+        EffectiveRenderAnimationFrameRate(*clip, existingDraft);
+    if (clipFrameCount == 0u) {
+        QMessageBox::warning(
+            this,
+            tr("Clip Prep Failed"),
+            tr("The active clip reports zero frames."));
+        return;
+    }
+
+    const int maxPoseFrame = std::max(0, static_cast<int>(clipFrameCount) - 1);
+    const int poseFrame =
+        std::clamp(currentRenderAnimationPrepState.staticPoseFrame, 0, maxPoseFrame);
+
+    const auto beforeDrafts = currentRenderAnimationDrafts;
+    OW3D::Render::RenderAnimationEditDraft* draft =
+        ensureRenderAnimationEditDraft(*clip, animationChunk);
+    if (!draft) {
+        QMessageBox::warning(
+            this,
+            tr("Clip Prep Failed"),
+            tr("The active clip could not be prepared for draft editing."));
+        return;
+    }
+
+    PrepareAnimationEditDraftFromStaticPose(
+        *clip,
+        *draft,
+        clipFrameCount,
+        clipFrameRate,
+        static_cast<float>(poseFrame));
+
+    if (!applyingRenderTransformUndoRedo) {
+        RenderEditUndoEntry entry{};
+        entry.kind = RenderEditUndoEntry::Kind::AnimationDrafts;
+        entry.beforeDrafts = beforeDrafts;
+        entry.afterDrafts = currentRenderAnimationDrafts;
+        renderTransformUndoStack.push_back(std::move(entry));
+        renderTransformRedoStack.clear();
+    }
+
+    currentRenderAnimationPrepState.staticPoseFrame = poseFrame;
+    setDirty(true);
+    currentRenderAnimationPlayback.timeSeconds = std::clamp(
+        currentRenderAnimationPlayback.timeSeconds,
+        0.0f,
+        AnimationClipDurationSeconds(*clip, draft));
+    syncRenderAnimationUi();
+}
+
+void MainWindow::applyRenderAnimationFitSourceToClip() {
+    int activeAnimationIndex = -1;
+    const OW3D::Render::RenderAnimationClip* baseClip = nullptr;
+    std::shared_ptr<ChunkItem> baseAnimationChunk;
+    QString editReason;
+    if (!ResolveEditablePrimaryRenderAnimation(
+        chunkData.get(),
+        currentRenderSceneResult,
+        currentRenderAnimationPlayback,
+        &activeAnimationIndex,
+        &baseClip,
+        &baseAnimationChunk,
+        &editReason)) {
+        QMessageBox::information(
+            this,
+            tr("Clip Prep Unavailable"),
+            editReason.isEmpty() ? tr("The active clip is read-only.") : editReason);
+        return;
+    }
+    if (!baseClip || !baseAnimationChunk) {
+        return;
+    }
+
+    const int sourceAnimationIndex = currentRenderAnimationPrepState.targetAnimationIndex;
+    const auto& animations = currentRenderSceneResult.scene.animations;
+    if (sourceAnimationIndex < 0
+        || sourceAnimationIndex >= static_cast<int>(animations.size())) {
+        QMessageBox::information(
+            this,
+            tr("Clip Prep Unavailable"),
+            tr("Select a compatible source clip first."));
+        return;
+    }
+    if (sourceAnimationIndex == activeAnimationIndex) {
+        QMessageBox::information(
+            this,
+            tr("Clip Prep Unavailable"),
+            tr("The source clip must be different from the active base clip."));
+        return;
+    }
+
+    const auto& sourceClip = animations[static_cast<std::size_t>(sourceAnimationIndex)];
+    if (!sourceClip.supportedForPlayback) {
+        QMessageBox::warning(
+            this,
+            tr("Clip Prep Failed"),
+            tr("The selected source clip is not supported for playback sampling."));
+        return;
+    }
+
+    const int hierarchyIndex = findCompatibleRenderHierarchyIndexForAnimation(activeAnimationIndex);
+    if (hierarchyIndex < 0
+        || hierarchyIndex >= static_cast<int>(currentRenderSceneResult.scene.hierarchies.size())) {
+        QMessageBox::warning(
+            this,
+            tr("Clip Prep Failed"),
+            tr("The active base clip does not target a compatible hierarchy."));
+        return;
+    }
+
+    const auto& hierarchy =
+        currentRenderSceneResult.scene.hierarchies[static_cast<std::size_t>(hierarchyIndex)];
+    if (std::find(
+        hierarchy.compatibleAnimationIndices.begin(),
+        hierarchy.compatibleAnimationIndices.end(),
+        sourceAnimationIndex) == hierarchy.compatibleAnimationIndices.end()) {
+        QMessageBox::warning(
+            this,
+            tr("Clip Prep Failed"),
+            tr("The selected source clip is not compatible with the active hierarchy."));
+        return;
+    }
+
+    const OW3D::Render::RenderAnimationEditDraft* existingBaseDraft =
+        findRenderAnimationEditDraftForClip(*baseClip);
+    const uint32_t baseFrameCount =
+        EffectiveRenderAnimationFrameCount(*baseClip, existingBaseDraft);
+    const float baseFrameRate =
+        EffectiveRenderAnimationFrameRate(*baseClip, existingBaseDraft);
+    if (baseFrameCount == 0u) {
+        QMessageBox::warning(
+            this,
+            tr("Clip Prep Failed"),
+            tr("The active clip reports zero frames."));
+        return;
+    }
+    if (baseFrameCount > 1u && baseFrameRate <= 0.0f) {
+        QMessageBox::warning(
+            this,
+            tr("Clip Prep Failed"),
+            tr("The active clip reports an invalid frame rate."));
+        return;
+    }
+
+    const OW3D::Render::RenderAnimationEditDraft* sourceDraft =
+        findRenderAnimationEditDraftForClip(sourceClip);
+    const uint32_t sourceFrameCount =
+        EffectiveRenderAnimationFrameCount(sourceClip, sourceDraft);
+    if (sourceFrameCount == 0u) {
+        QMessageBox::warning(
+            this,
+            tr("Clip Prep Failed"),
+            tr("The selected source clip reports zero frames."));
+        return;
+    }
+
+    const auto beforeDrafts = currentRenderAnimationDrafts;
+    OW3D::Render::RenderAnimationEditDraft* baseDraft =
+        ensureRenderAnimationEditDraft(*baseClip, baseAnimationChunk);
+    if (!baseDraft) {
+        QMessageBox::warning(
+            this,
+            tr("Clip Prep Failed"),
+            tr("The active base clip could not be prepared for draft editing."));
+        return;
+    }
+    sourceDraft = findRenderAnimationEditDraftForClip(sourceClip);
+
+    PrepareAnimationEditDraftFromFittedSourceClip(
+        *baseClip,
+        *baseDraft,
+        sourceClip,
+        sourceDraft,
+        baseFrameCount,
+        baseFrameRate);
+
+    if (!applyingRenderTransformUndoRedo) {
+        RenderEditUndoEntry entry{};
+        entry.kind = RenderEditUndoEntry::Kind::AnimationDrafts;
+        entry.beforeDrafts = beforeDrafts;
+        entry.afterDrafts = currentRenderAnimationDrafts;
+        renderTransformUndoStack.push_back(std::move(entry));
+        renderTransformRedoStack.clear();
+    }
+
     setDirty(true);
     currentRenderAnimationPlayback.timeSeconds = std::clamp(
         currentRenderAnimationPlayback.timeSeconds,
@@ -13791,6 +14179,35 @@ void MainWindow::rebuildRenderScene() {
     if (chunkSourceTabsDirty) {
         populateTree();
     }
+    auto clearActiveRenderAnimation = [&]() {
+        currentRenderAnimationPlayback.activeAnimationIndex = -1;
+        currentRenderAnimationPlayback.timeSeconds = 0.0f;
+        currentRenderAnimationPlayback.playing = false;
+        currentRenderActiveClipIdentity.reset();
+        if (renderAnimationPlaybackTimer) {
+            renderAnimationPlaybackTimer->stop();
+        }
+        renderAnimationPlaybackElapsed.invalidate();
+    };
+    auto activateRenderAnimationAtRest = [&](int animationIndex) {
+        if (animationIndex < 0
+            || animationIndex >= static_cast<int>(currentRenderSceneResult.scene.animations.size()))
+        {
+            clearActiveRenderAnimation();
+            return;
+        }
+
+        currentRenderAnimationPlayback.activeAnimationIndex = animationIndex;
+        currentRenderAnimationPlayback.timeSeconds = 0.0f;
+        currentRenderAnimationPlayback.playing = false;
+        currentRenderActiveClipIdentity = BuildRenderAnimationClipIdentity(
+            currentRenderSceneResult.scene.animations[static_cast<std::size_t>(animationIndex)]);
+        if (renderAnimationPlaybackTimer) {
+            renderAnimationPlaybackTimer->stop();
+        }
+        renderAnimationPlaybackElapsed.invalidate();
+    };
+
     if (currentRenderActiveClipIdentity) {
         const int remappedIndex = findRenderAnimationIndexByIdentity(*currentRenderActiveClipIdentity);
         if (remappedIndex >= 0
@@ -13833,24 +14250,25 @@ void MainWindow::rebuildRenderScene() {
             }
         }
         else {
-            currentRenderAnimationPlayback.activeAnimationIndex = -1;
-            currentRenderAnimationPlayback.timeSeconds = 0.0f;
-            currentRenderAnimationPlayback.playing = false;
-            currentRenderActiveClipIdentity.reset();
-            if (renderAnimationPlaybackTimer) {
-                renderAnimationPlaybackTimer->stop();
+            const int defaultAnimationIndex =
+                FindFirstPlayableAnimationIndex(currentRenderSceneResult.scene);
+            if (defaultAnimationIndex >= 0) {
+                activateRenderAnimationAtRest(defaultAnimationIndex);
             }
-            renderAnimationPlaybackElapsed.invalidate();
+            else {
+                clearActiveRenderAnimation();
+            }
         }
     }
     else {
-        currentRenderAnimationPlayback.activeAnimationIndex = -1;
-        currentRenderAnimationPlayback.timeSeconds = 0.0f;
-        currentRenderAnimationPlayback.playing = false;
-        if (renderAnimationPlaybackTimer) {
-            renderAnimationPlaybackTimer->stop();
+        const int defaultAnimationIndex =
+            FindFirstPlayableAnimationIndex(currentRenderSceneResult.scene);
+        if (defaultAnimationIndex >= 0) {
+            activateRenderAnimationAtRest(defaultAnimationIndex);
         }
-        renderAnimationPlaybackElapsed.invalidate();
+        else {
+            clearActiveRenderAnimation();
+        }
     }
 
     renderViewport->SetSceneResult(currentRenderSceneResult);
