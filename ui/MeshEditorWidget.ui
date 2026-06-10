@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ui version="4.0">
+ <class>MeshEditorWidget</class>
+ <widget class="QWidget" name="MeshEditorWidget">
+  <property name="enabled"><bool>false</bool></property>
+  <layout class="QVBoxLayout" name="verticalLayout">
+   <property name="spacing"><number>6</number></property>
+   <property name="leftMargin"><number>0</number></property><property name="topMargin"><number>0</number></property>
+   <property name="rightMargin"><number>0</number></property><property name="bottomMargin"><number>0</number></property>
+   <item><layout class="QFormLayout" name="formLayout">
+    <item row="0" column="0"><widget class="QLabel" name="meshNameLabel"><property name="text"><string>Mesh Name</string></property></widget></item><item row="0" column="1"><widget class="QLineEdit" name="meshNameEdit"><property name="maxLength"><number>15</number></property></widget></item>
+    <item row="1" column="0"><widget class="QLabel" name="containerNameLabel"><property name="text"><string>Container Name</string></property></widget></item><item row="1" column="1"><widget class="QLineEdit" name="containerNameEdit"><property name="maxLength"><number>15</number></property></widget></item>
+   </layout></item>
+   <item><widget class="QGroupBox" name="flagsGroup"><property name="title"><string>Mesh Flags</string></property><layout class="QGridLayout" name="flagsLayout">
+    <item row="0" column="0"><widget class="QCheckBox" name="physicalCheck"><property name="text"><string>Physical</string></property></widget></item>
+    <item row="0" column="1"><widget class="QCheckBox" name="projectileCheck"><property name="text"><string>Projectile</string></property></widget></item>
+    <item row="1" column="0"><widget class="QCheckBox" name="visibilityCheck"><property name="text"><string>Visibility</string></property></widget></item>
+    <item row="1" column="1"><widget class="QCheckBox" name="cameraCheck"><property name="text"><string>Camera</string></property></widget></item>
+    <item row="2" column="0"><widget class="QCheckBox" name="vehicleCheck"><property name="text"><string>Vehicle</string></property></widget></item>
+    <item row="2" column="1"><widget class="QCheckBox" name="hiddenCheck"><property name="text"><string>Hide</string></property></widget></item>
+    <item row="3" column="0"><widget class="QCheckBox" name="twoSidedCheck"><property name="text"><string>2-Sided</string></property></widget></item>
+   </layout></widget></item>
+   <item alignment="Qt::AlignmentFlag::AlignRight"><widget class="QPushButton" name="applyButton"><property name="text"><string>Apply Mesh Changes</string></property></widget></item>
+   <item><spacer name="verticalSpacer"><property name="orientation"><enum>Qt::Orientation::Vertical</enum></property><property name="sizeHint" stdset="0"><size><width>20</width><height>40</height></size></property></spacer></item>
+  </layout>
+ </widget>
+ <resources/><connections/>
+</ui>

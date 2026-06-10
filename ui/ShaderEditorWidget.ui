@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ui version="4.0">
+ <class>ShaderEditorWidget</class>
+ <widget class="QWidget" name="ShaderEditorWidget">
+  <property name="enabled"><bool>false</bool></property>
+  <layout class="QVBoxLayout" name="verticalLayout">
+   <property name="spacing"><number>6</number></property>
+   <property name="leftMargin"><number>0</number></property><property name="topMargin"><number>0</number></property>
+   <property name="rightMargin"><number>0</number></property><property name="bottomMargin"><number>0</number></property>
+   <item><layout class="QFormLayout" name="formLayout">
+    <item row="0" column="0"><widget class="QLabel" name="shaderLabel"><property name="text"><string>Shader</string></property></widget></item><item row="0" column="1"><widget class="QComboBox" name="shaderIndexCombo"/></item>
+    <item row="1" column="0"><widget class="QLabel" name="depthCompareLabel"><property name="text"><string>Depth Compare</string></property></widget></item><item row="1" column="1"><widget class="QComboBox" name="depthCompareCombo"/></item>
+    <item row="2" column="0"><widget class="QLabel" name="depthMaskLabel"><property name="text"><string>Depth Mask</string></property></widget></item><item row="2" column="1"><widget class="QComboBox" name="depthMaskCombo"/></item>
+    <item row="3" column="0"><widget class="QLabel" name="destBlendLabel"><property name="text"><string>Dest Blend</string></property></widget></item><item row="3" column="1"><widget class="QComboBox" name="destBlendCombo"/></item>
+    <item row="4" column="0"><widget class="QLabel" name="priGradientLabel"><property name="text"><string>Primary Gradient</string></property></widget></item><item row="4" column="1"><widget class="QComboBox" name="priGradientCombo"/></item>
+    <item row="5" column="0"><widget class="QLabel" name="secGradientLabel"><property name="text"><string>Secondary Gradient</string></property></widget></item><item row="5" column="1"><widget class="QComboBox" name="secGradientCombo"/></item>
+    <item row="6" column="0"><widget class="QLabel" name="srcBlendLabel"><property name="text"><string>Source Blend</string></property></widget></item><item row="6" column="1"><widget class="QComboBox" name="srcBlendCombo"/></item>
+    <item row="7" column="0"><widget class="QLabel" name="texturingLabel"><property name="text"><string>Texturing</string></property></widget></item><item row="7" column="1"><widget class="QComboBox" name="texturingCombo"/></item>
+    <item row="8" column="0"><widget class="QLabel" name="detailColorLabel"><property name="text"><string>Detail Color Func</string></property></widget></item><item row="8" column="1"><widget class="QComboBox" name="detailColorCombo"/></item>
+    <item row="9" column="0"><widget class="QLabel" name="detailAlphaLabel"><property name="text"><string>Detail Alpha Func</string></property></widget></item><item row="9" column="1"><widget class="QComboBox" name="detailAlphaCombo"/></item>
+    <item row="10" column="0"><widget class="QLabel" name="alphaTestLabel"><property name="text"><string>Alpha Test</string></property></widget></item><item row="10" column="1"><widget class="QComboBox" name="alphaTestCombo"/></item>
+    <item row="11" column="0"><widget class="QLabel" name="postDetailColorLabel"><property name="text"><string>Post Detail Color</string></property></widget></item><item row="11" column="1"><widget class="QComboBox" name="postDetailColorCombo"/></item>
+    <item row="12" column="0"><widget class="QLabel" name="postDetailAlphaLabel"><property name="text"><string>Post Detail Alpha</string></property></widget></item><item row="12" column="1"><widget class="QComboBox" name="postDetailAlphaCombo"/></item>
+    <item row="13" column="0"><widget class="QLabel" name="colorMaskLabel"><property name="text"><string>Color Mask</string></property></widget></item><item row="13" column="1"><widget class="QSpinBox" name="colorMaskSpin"><property name="maximum"><number>255</number></property></widget></item>
+    <item row="14" column="0"><widget class="QLabel" name="fogFuncLabel"><property name="text"><string>Fog Func</string></property></widget></item><item row="14" column="1"><widget class="QSpinBox" name="fogFuncSpin"><property name="maximum"><number>255</number></property></widget></item>
+    <item row="15" column="0"><widget class="QLabel" name="shaderPresetLabel"><property name="text"><string>Shader Preset</string></property></widget></item><item row="15" column="1"><widget class="QSpinBox" name="shaderPresetSpin"><property name="maximum"><number>255</number></property></widget></item>
+   </layout></item>
+   <item alignment="Qt::AlignmentFlag::AlignRight"><widget class="QPushButton" name="applyButton"><property name="text"><string>Apply Shader Changes</string></property></widget></item>
+   <item><spacer name="verticalSpacer"><property name="orientation"><enum>Qt::Orientation::Vertical</enum></property><property name="sizeHint" stdset="0"><size><width>20</width><height>40</height></size></property></spacer></item>
+  </layout>
+ </widget>
+ <resources/><connections/>
+</ui>

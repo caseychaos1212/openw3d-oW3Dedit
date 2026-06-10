@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ui version="4.0">
+ <class>TextureInfoEditorWidget</class>
+ <widget class="QWidget" name="TextureInfoEditorWidget">
+  <property name="enabled"><bool>false</bool></property>
+  <layout class="QVBoxLayout" name="verticalLayout">
+   <property name="spacing"><number>6</number></property>
+   <property name="leftMargin"><number>0</number></property><property name="topMargin"><number>0</number></property>
+   <property name="rightMargin"><number>0</number></property><property name="bottomMargin"><number>0</number></property>
+   <item><widget class="QGroupBox" name="flagsGroup"><property name="title"><string>Texture Flags</string></property><layout class="QGridLayout" name="flagsLayout">
+    <item row="0" column="0"><widget class="QCheckBox" name="publishCheck"><property name="text"><string>Publish</string></property></widget></item>
+    <item row="0" column="1"><widget class="QCheckBox" name="resizeCheck"><property name="text"><string>Resize (Obsolete)</string></property></widget></item>
+    <item row="1" column="0"><widget class="QCheckBox" name="noLodCheck"><property name="text"><string>No LOD</string></property></widget></item>
+    <item row="1" column="1"><widget class="QCheckBox" name="clampUCheck"><property name="text"><string>Clamp U</string></property></widget></item>
+    <item row="2" column="0"><widget class="QCheckBox" name="clampVCheck"><property name="text"><string>Clamp V</string></property></widget></item>
+    <item row="2" column="1"><widget class="QCheckBox" name="alphaBitmapCheck"><property name="text"><string>Alpha Bitmap</string></property></widget></item>
+   </layout></widget></item>
+   <item><layout class="QFormLayout" name="formLayout">
+    <item row="0" column="0"><widget class="QLabel" name="mipLabel"><property name="text"><string>Mip Levels</string></property></widget></item><item row="0" column="1"><widget class="QComboBox" name="mipCombo"/></item>
+    <item row="1" column="0"><widget class="QLabel" name="hintLabel"><property name="text"><string>Hint</string></property></widget></item><item row="1" column="1"><widget class="QComboBox" name="hintCombo"/></item>
+    <item row="2" column="0"><widget class="QLabel" name="typeLabel"><property name="text"><string>Type</string></property></widget></item><item row="2" column="1"><widget class="QComboBox" name="typeCombo"/></item>
+    <item row="3" column="0"><widget class="QLabel" name="animLabel"><property name="text"><string>Anim Type</string></property></widget></item><item row="3" column="1"><widget class="QComboBox" name="animCombo"/></item>
+    <item row="4" column="0"><widget class="QLabel" name="frameCountLabel"><property name="text"><string>Frame Count</string></property></widget></item><item row="4" column="1"><widget class="QSpinBox" name="frameCountSpin"><property name="maximum"><number>2147483647</number></property></widget></item>
+    <item row="5" column="0"><widget class="QLabel" name="frameRateLabel"><property name="text"><string>Frame Rate</string></property></widget></item><item row="5" column="1"><widget class="QDoubleSpinBox" name="frameRateSpin"><property name="decimals"><number>3</number></property><property name="maximum"><double>1000000.000000000000000</double></property><property name="singleStep"><double>0.100000000000000</double></property></widget></item>
+   </layout></item>
+   <item><spacer name="verticalSpacer"><property name="orientation"><enum>Qt::Orientation::Vertical</enum></property><property name="sizeHint" stdset="0"><size><width>20</width><height>40</height></size></property></spacer></item>
+   <item alignment="Qt::AlignmentFlag::AlignRight"><widget class="QPushButton" name="applyButton"><property name="text"><string>Apply Texture Info Changes</string></property></widget></item>
+  </layout>
+ </widget>
+ <resources/><connections/>
+</ui>

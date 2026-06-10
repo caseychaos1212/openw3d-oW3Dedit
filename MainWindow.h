@@ -52,6 +52,11 @@ namespace OW3D::Render {
 class RenderViewportWidget;
 }
 
+namespace Ui {
+class MainWindow;
+class RenderPanel;
+}
+
 class ChunkData; // forward declare
 
 struct ArchiveRenderEntryInfo {
@@ -107,6 +112,7 @@ class MainWindow : public QMainWindow {
     Q_OBJECT
 public:
     MainWindow(QWidget* parent = nullptr);
+    ~MainWindow() override;
 
 private slots:
     void newFile();
@@ -205,6 +211,14 @@ private slots:
 protected:
     void closeEvent(QCloseEvent* event) override;
 private:
+    void bindDesignerWidgets();
+    void createDynamicEditorPages();
+    void connectDesignerActions();
+    void restoreWindowLayout();
+
+    std::unique_ptr<Ui::MainWindow> ui;
+    std::unique_ptr<Ui::RenderPanel> renderUi;
+
     enum class ValidatorRunMode {
         Both,
         StructuredPreferred,

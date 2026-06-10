@@ -59,6 +59,17 @@
 #include "backend/render/SceneBuilder.h"
 #include "EditorWidgets.h"
 #include "frontend/render/RenderViewportWidget.h"
+#include "ui_MainWindow.h"
+#include "ui_RenderPanel.h"
+#include "ui_HierarchyHeaderEditorWidget.h"
+#include "ui_AnimationHierarchyEditorWidget.h"
+#include "ui_TransformNodeEditorWidget.h"
+#include "ui_SurfaceTypeEditorWidget.h"
+#include "ui_TriangleSurfaceTypeEditorWidget.h"
+#include "ui_MeshEditorWidget.h"
+#include "ui_TextureInfoEditorWidget.h"
+#include "ui_ShaderEditorWidget.h"
+#include "ui_MaterialEditorWidget.h"
 #include <map>
 #include <nlohmann/json.hpp>
 #include <array>
@@ -5105,46 +5116,22 @@ static std::vector<HierarchyInfo> CollectHierarchies(
 }
 
 MeshEditorWidget::MeshEditorWidget(QWidget* parent) : QWidget(parent) {
-    setEnabled(false);
-    auto* layout = new QVBoxLayout(this);
-    layout->setContentsMargins(0, 0, 0, 0);
-    layout->setSpacing(6);
-
-    auto* form = new QFormLayout();
-    meshNameEdit = new QLineEdit(this);
-    meshNameEdit->setMaxLength(kMeshNameMax);
-    containerNameEdit = new QLineEdit(this);
-    containerNameEdit->setMaxLength(kMeshNameMax);
-    form->addRow(tr("Mesh Name"), meshNameEdit);
-    form->addRow(tr("Container Name"), containerNameEdit);
-    layout->addLayout(form);
-
-    auto* flagGroup = new QGroupBox(tr("Mesh Flags"), this);
-    auto* flagLayout = new QGridLayout(flagGroup);
-    const std::array<std::pair<MeshAttr, const char*>, 7> kFlags = { {
-        { MeshAttr::W3D_MESH_FLAG_COLLISION_TYPE_PHYSICAL,   "Physical" },
-        { MeshAttr::W3D_MESH_FLAG_COLLISION_TYPE_PROJECTILE, "Projectile" },
-        { MeshAttr::W3D_MESH_FLAG_COLLISION_TYPE_VIS,        "Visibility" },
-        { MeshAttr::W3D_MESH_FLAG_COLLISION_TYPE_CAMERA,     "Camera" },
-        { MeshAttr::W3D_MESH_FLAG_COLLISION_TYPE_VEHICLE,    "Vehicle" },
-        { MeshAttr::W3D_MESH_FLAG_HIDDEN,                    "Hide" },
-        { MeshAttr::W3D_MESH_FLAG_TWO_SIDED,                 "2-Sided" },
-    } };
-    int row = 0;
-    for (const auto& [flag, label] : kFlags) {
-        auto* check = new QCheckBox(QString::fromLatin1(label), flagGroup);
-        flagLayout->addWidget(check, row / 2, row % 2);
-        flagControls.push_back({ MeshAttrValue(flag), check });
-        ++row;
-    }
-    layout->addWidget(flagGroup);
-
-    applyButton = new QPushButton(tr("Apply Mesh Changes"), this);
+    Ui::MeshEditorWidget form;
+    form.setupUi(this);
+    meshNameEdit = form.meshNameEdit;
+    containerNameEdit = form.containerNameEdit;
+    applyButton = form.applyButton;
+    flagControls = {
+        { MeshAttrValue(MeshAttr::W3D_MESH_FLAG_COLLISION_TYPE_PHYSICAL), form.physicalCheck },
+        { MeshAttrValue(MeshAttr::W3D_MESH_FLAG_COLLISION_TYPE_PROJECTILE), form.projectileCheck },
+        { MeshAttrValue(MeshAttr::W3D_MESH_FLAG_COLLISION_TYPE_VIS), form.visibilityCheck },
+        { MeshAttrValue(MeshAttr::W3D_MESH_FLAG_COLLISION_TYPE_CAMERA), form.cameraCheck },
+        { MeshAttrValue(MeshAttr::W3D_MESH_FLAG_COLLISION_TYPE_VEHICLE), form.vehicleCheck },
+        { MeshAttrValue(MeshAttr::W3D_MESH_FLAG_HIDDEN), form.hiddenCheck },
+        { MeshAttrValue(MeshAttr::W3D_MESH_FLAG_TWO_SIDED), form.twoSidedCheck },
+    };
     connect(applyButton, &QPushButton::clicked,
         this, &MeshEditorWidget::applyChanges);
-
-    layout->addWidget(applyButton, 0, Qt::AlignRight);
-    layout->addStretch();
 }
 
 void MeshEditorWidget::setChunk(const std::shared_ptr<ChunkItem>& chunkPtr) {
@@ -5230,84 +5217,38 @@ void MeshEditorWidget::applyChanges() {
 
 ShaderEditorWidget::ShaderEditorWidget(QWidget* parent)
     : QWidget(parent) {
-    setEnabled(false);
+    Ui::ShaderEditorWidget form;
+    form.setupUi(this);
+    shaderIndexCombo = form.shaderIndexCombo;
+    depthCompareCombo = form.depthCompareCombo;
+    depthMaskCombo = form.depthMaskCombo;
+    destBlendCombo = form.destBlendCombo;
+    priGradientCombo = form.priGradientCombo;
+    secGradientCombo = form.secGradientCombo;
+    srcBlendCombo = form.srcBlendCombo;
+    texturingCombo = form.texturingCombo;
+    detailColorCombo = form.detailColorCombo;
+    detailAlphaCombo = form.detailAlphaCombo;
+    alphaTestCombo = form.alphaTestCombo;
+    postDetailColorCombo = form.postDetailColorCombo;
+    postDetailAlphaCombo = form.postDetailAlphaCombo;
+    colorMaskSpin = form.colorMaskSpin;
+    fogFuncSpin = form.fogFuncSpin;
+    shaderPresetSpin = form.shaderPresetSpin;
+    applyButton = form.applyButton;
 
-    auto* layout = new QVBoxLayout(this);
-    layout->setContentsMargins(0, 0, 0, 0);
-    layout->setSpacing(6);
-
-    auto* headerForm = new QFormLayout();
-    shaderIndexCombo = new QComboBox(this);
-    headerForm->addRow(tr("Shader"), shaderIndexCombo);
-    layout->addLayout(headerForm);
-
-    auto* form = new QFormLayout();
-
-    depthCompareCombo = new QComboBox(this);
     PopulateEnumCombo<DepthCompare>(depthCompareCombo);
-    form->addRow(tr("Depth Compare"), depthCompareCombo);
-
-    depthMaskCombo = new QComboBox(this);
     PopulateEnumCombo<DepthMask>(depthMaskCombo);
-    form->addRow(tr("Depth Mask"), depthMaskCombo);
-
-    destBlendCombo = new QComboBox(this);
     PopulateEnumCombo<DestBlend>(destBlendCombo);
-    form->addRow(tr("Dest Blend"), destBlendCombo);
-
-    priGradientCombo = new QComboBox(this);
     PopulateEnumCombo<PriGradient>(priGradientCombo);
-    form->addRow(tr("Primary Gradient"), priGradientCombo);
-
-    secGradientCombo = new QComboBox(this);
     PopulateEnumCombo<SecGradient>(secGradientCombo);
-    form->addRow(tr("Secondary Gradient"), secGradientCombo);
-
-    srcBlendCombo = new QComboBox(this);
     PopulateEnumCombo<SrcBlend>(srcBlendCombo);
-    form->addRow(tr("Source Blend"), srcBlendCombo);
-
-    texturingCombo = new QComboBox(this);
     PopulateEnumCombo<Texturing>(texturingCombo);
-    form->addRow(tr("Texturing"), texturingCombo);
-
-    detailColorCombo = new QComboBox(this);
     PopulateEnumCombo<DetailColorFunc>(detailColorCombo);
-    form->addRow(tr("Detail Color Func"), detailColorCombo);
-
-    detailAlphaCombo = new QComboBox(this);
     PopulateEnumCombo<DetailAlphaFunc>(detailAlphaCombo);
-    form->addRow(tr("Detail Alpha Func"), detailAlphaCombo);
-
-    alphaTestCombo = new QComboBox(this);
     PopulateEnumCombo<AlphaTest>(alphaTestCombo);
-    form->addRow(tr("Alpha Test"), alphaTestCombo);
-
-    postDetailColorCombo = new QComboBox(this);
     PopulateEnumCombo<DetailColorFunc>(postDetailColorCombo);
-    form->addRow(tr("Post Detail Color"), postDetailColorCombo);
-
-    postDetailAlphaCombo = new QComboBox(this);
     PopulateEnumCombo<DetailAlphaFunc>(postDetailAlphaCombo);
-    form->addRow(tr("Post Detail Alpha"), postDetailAlphaCombo);
-
-    colorMaskSpin = new QSpinBox(this);
-    colorMaskSpin->setRange(0, 255);
-    form->addRow(tr("Color Mask"), colorMaskSpin);
-
-    fogFuncSpin = new QSpinBox(this);
-    fogFuncSpin->setRange(0, 255);
-    form->addRow(tr("Fog Func"), fogFuncSpin);
-
-    shaderPresetSpin = new QSpinBox(this);
-    shaderPresetSpin->setRange(0, 255);
-    form->addRow(tr("Shader Preset"), shaderPresetSpin);
-
-    layout->addLayout(form);
-
-    applyButton = new QPushButton(tr("Apply Shader Changes"), this);
-    layout->addWidget(applyButton, 0, Qt::AlignRight);
-    layout->addStretch();
 
     connect(shaderIndexCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
         this, [this](int idx) { loadShader(idx); });
@@ -5550,24 +5491,12 @@ void RawTextEditorWidget::applyChanges() {
 
 HierarchyHeaderEditorWidget::HierarchyHeaderEditorWidget(QWidget* parent)
     : QWidget(parent) {
-    setEnabled(false);
-
-    auto* layout = new QVBoxLayout(this);
-    layout->setContentsMargins(0, 0, 0, 0);
-    layout->setSpacing(6);
-
-    auto* form = new QFormLayout();
-    nameEdit = new QLineEdit(this);
-    nameEdit->setMaxLength(kW3DNameMax);
-    form->addRow(tr("Hierarchy Name"), nameEdit);
-    layout->addLayout(form);
-
-    applyButton = new QPushButton(tr("Apply"), this);
+    Ui::HierarchyHeaderEditorWidget form;
+    form.setupUi(this);
+    nameEdit = form.nameEdit;
+    applyButton = form.applyButton;
     connect(applyButton, &QPushButton::clicked,
         this, &HierarchyHeaderEditorWidget::applyChanges);
-
-    layout->addWidget(applyButton, 0, Qt::AlignRight);
-    layout->addStretch();
 }
 
 void HierarchyHeaderEditorWidget::setChunk(const std::shared_ptr<ChunkItem>& chunkPtr) {
@@ -5614,27 +5543,13 @@ void HierarchyHeaderEditorWidget::applyChanges() {
 
 AnimationHierarchyEditorWidget::AnimationHierarchyEditorWidget(QWidget* parent)
     : QWidget(parent) {
-    setEnabled(false);
-
-    auto* layout = new QVBoxLayout(this);
-    layout->setContentsMargins(0, 0, 0, 0);
-    layout->setSpacing(6);
-
-    auto* form = new QFormLayout();
-    animationNameEdit = new QLineEdit(this);
-    animationNameEdit->setMaxLength(kW3DNameMax);
-    form->addRow(tr("Animation Name"), animationNameEdit);
-    hierarchyNameEdit = new QLineEdit(this);
-    hierarchyNameEdit->setMaxLength(kW3DNameMax);
-    form->addRow(tr("Hierarchy Name"), hierarchyNameEdit);
-    layout->addLayout(form);
-
-    applyButton = new QPushButton(tr("Apply"), this);
+    Ui::AnimationHierarchyEditorWidget form;
+    form.setupUi(this);
+    animationNameEdit = form.animationNameEdit;
+    hierarchyNameEdit = form.hierarchyNameEdit;
+    applyButton = form.applyButton;
     connect(applyButton, &QPushButton::clicked,
         this, &AnimationHierarchyEditorWidget::applyChanges);
-
-    layout->addWidget(applyButton, 0, Qt::AlignRight);
-    layout->addStretch();
 }
 
 void AnimationHierarchyEditorWidget::setChunk(const std::shared_ptr<ChunkItem>& chunkPtr) {
@@ -5772,22 +5687,12 @@ void AnimationHierarchyEditorWidget::applyChanges() {
 
 TransformNodeEditorWidget::TransformNodeEditorWidget(QWidget* parent)
     : QWidget(parent) {
-    setEnabled(false);
-
-    auto* layout = new QVBoxLayout(this);
-    layout->setContentsMargins(0, 0, 0, 0);
-    layout->setSpacing(6);
-
-    auto* form = new QFormLayout();
-    fileNameEdit = new QLineEdit(this);
-    form->addRow(tr("Linked W3D File"), fileNameEdit);
-    layout->addLayout(form);
-
-    applyButton = new QPushButton(tr("Apply"), this);
+    Ui::TransformNodeEditorWidget form;
+    form.setupUi(this);
+    fileNameEdit = form.fileNameEdit;
+    applyButton = form.applyButton;
     connect(applyButton, &QPushButton::clicked,
         this, &TransformNodeEditorWidget::applyChanges);
-    layout->addWidget(applyButton, 0, Qt::AlignRight);
-    layout->addStretch();
 }
 
 void TransformNodeEditorWidget::setChunk(const std::shared_ptr<ChunkItem>& chunkPtr) {
@@ -5925,14 +5830,10 @@ void MapperArgsEditorWidget::applyChanges() {
 
 SurfaceTypeEditorWidget::SurfaceTypeEditorWidget(QWidget* parent)
     : QWidget(parent) {
-    setEnabled(false);
-
-    auto* layout = new QVBoxLayout(this);
-    layout->setContentsMargins(0, 0, 0, 0);
-    layout->setSpacing(6);
-
-    auto* form = new QFormLayout();
-    surfaceTypeCombo = new QComboBox(this);
+    Ui::SurfaceTypeEditorWidget form;
+    form.setupUi(this);
+    surfaceTypeCombo = form.surfaceTypeCombo;
+    applyButton = form.applyButton;
 
     for (uint32_t i = 0; i <= 255; ++i) {
         const char* name = SurfaceTypeName(i);
@@ -5941,15 +5842,8 @@ SurfaceTypeEditorWidget::SurfaceTypeEditorWidget(QWidget* parent)
             static_cast<int>(i));
     }
 
-    form->addRow(tr("Surface Type"), surfaceTypeCombo);
-    layout->addLayout(form);
-
-    applyButton = new QPushButton(tr("Apply"), this);
     connect(applyButton, &QPushButton::clicked,
         this, &SurfaceTypeEditorWidget::applyChanges);
-
-    layout->addWidget(applyButton, 0, Qt::AlignRight);
-    layout->addStretch();
 }
 
 void SurfaceTypeEditorWidget::setChunk(const std::shared_ptr<ChunkItem>& chunkPtr) {
@@ -6036,15 +5930,12 @@ void SurfaceTypeEditorWidget::applyChanges() {
 
 TriangleSurfaceTypeEditorWidget::TriangleSurfaceTypeEditorWidget(QWidget* parent)
     : QWidget(parent) {
-    setEnabled(false);
-
-    auto* layout = new QVBoxLayout(this);
-    layout->setContentsMargins(0, 0, 0, 0);
-    layout->setSpacing(6);
-
-    auto* form = new QFormLayout();
-    fromCombo = new QComboBox(this);
-    toCombo = new QComboBox(this);
+    Ui::TriangleSurfaceTypeEditorWidget form;
+    form.setupUi(this);
+    fromCombo = form.fromCombo;
+    toCombo = form.toCombo;
+    statsLabel = form.statsLabel;
+    applyButton = form.applyButton;
 
     fromCombo->addItem(tr("Any"), -1);
     for (uint32_t i = 0; i <= 255; ++i) {
@@ -6057,22 +5948,10 @@ TriangleSurfaceTypeEditorWidget::TriangleSurfaceTypeEditorWidget(QWidget* parent
         toCombo->addItem(label, static_cast<int>(i));
     }
 
-    form->addRow(tr("Replace"), fromCombo);
-    form->addRow(tr("With"), toCombo);
-    layout->addLayout(form);
-
-    statsLabel = new QLabel(this);
-    statsLabel->setTextInteractionFlags(Qt::TextSelectableByMouse);
-    layout->addWidget(statsLabel);
-
-    applyButton = new QPushButton(tr("Apply"), this);
     connect(applyButton, &QPushButton::clicked,
         this, &TriangleSurfaceTypeEditorWidget::applyChanges);
     connect(fromCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
         this, &TriangleSurfaceTypeEditorWidget::updateStats);
-
-    layout->addWidget(applyButton, 0, Qt::AlignRight);
-    layout->addStretch();
 }
 
 void TriangleSurfaceTypeEditorWidget::setChunk(const std::shared_ptr<ChunkItem>& chunkPtr) {
@@ -6192,76 +6071,43 @@ void TriangleSurfaceTypeEditorWidget::applyChanges() {
 
 TextureInfoEditorWidget::TextureInfoEditorWidget(QWidget* parent)
     : QWidget(parent) {
-    setEnabled(false);
+    Ui::TextureInfoEditorWidget form;
+    form.setupUi(this);
+    mipCombo = form.mipCombo;
+    hintCombo = form.hintCombo;
+    typeCombo = form.typeCombo;
+    animCombo = form.animCombo;
+    frameCountSpin = form.frameCountSpin;
+    frameRateSpin = form.frameRateSpin;
+    applyButton = form.applyButton;
+    flagControls = {
+        { TextureAttrValue(TextureAttr::PUBLISH), form.publishCheck },
+        { TextureAttrValue(TextureAttr::RESIZE_OBSOLETE), form.resizeCheck },
+        { TextureAttrValue(TextureAttr::NO_LOD), form.noLodCheck },
+        { TextureAttrValue(TextureAttr::CLAMP_U), form.clampUCheck },
+        { TextureAttrValue(TextureAttr::CLAMP_V), form.clampVCheck },
+        { TextureAttrValue(TextureAttr::ALPHA_BITMAP), form.alphaBitmapCheck },
+    };
 
-    auto* layout = new QVBoxLayout(this);
-    layout->setContentsMargins(0, 0, 0, 0);
-    layout->setSpacing(6);
-
-    auto* flagsGroup = new QGroupBox(tr("Texture Flags"), this);
-    auto* flagsLayout = new QGridLayout(flagsGroup);
-    const std::array<std::pair<TextureAttr, const char*>, 6> kFlags = { {
-        { TextureAttr::PUBLISH, "Publish" },
-        { TextureAttr::RESIZE_OBSOLETE, "Resize (Obsolete)" },
-        { TextureAttr::NO_LOD, "No LOD" },
-        { TextureAttr::CLAMP_U, "Clamp U" },
-        { TextureAttr::CLAMP_V, "Clamp V" },
-        { TextureAttr::ALPHA_BITMAP, "Alpha Bitmap" },
-    } };
-    int row = 0;
-    for (const auto& [flag, label] : kFlags) {
-        auto* check = new QCheckBox(QString::fromLatin1(label), flagsGroup);
-        flagsLayout->addWidget(check, row / 2, row % 2);
-        flagControls.push_back({ TextureAttrValue(flag), check });
-        ++row;
-    }
-    layout->addWidget(flagsGroup);
-
-    auto* form = new QFormLayout();
-    mipCombo = new QComboBox(this);
     mipCombo->addItem(tr("All"), static_cast<int>(TextureAttrValue(TextureAttr::MIP_ALL)));
     mipCombo->addItem(tr("2"), static_cast<int>(TextureAttrValue(TextureAttr::MIP_2)));
     mipCombo->addItem(tr("3"), static_cast<int>(TextureAttrValue(TextureAttr::MIP_3)));
     mipCombo->addItem(tr("4"), static_cast<int>(TextureAttrValue(TextureAttr::MIP_4)));
-    form->addRow(tr("Mip Levels"), mipCombo);
 
-    hintCombo = new QComboBox(this);
     hintCombo->addItem(tr("Base"), static_cast<int>(TextureAttrValue(TextureAttr::HINT_BASE)));
     hintCombo->addItem(tr("Emissive"), static_cast<int>(TextureAttrValue(TextureAttr::HINT_EMISSIVE)));
     hintCombo->addItem(tr("Environment"), static_cast<int>(TextureAttrValue(TextureAttr::HINT_ENVIRONMENT)));
     hintCombo->addItem(tr("Shiny Mask"), static_cast<int>(TextureAttrValue(TextureAttr::HINT_SHINY_MASK)));
-    form->addRow(tr("Hint"), hintCombo);
 
-    typeCombo = new QComboBox(this);
     typeCombo->addItem(tr("Color Map"), static_cast<int>(TextureAttrValue(TextureAttr::TYPE_COLORMAP)));
     typeCombo->addItem(tr("Bump Map"), static_cast<int>(TextureAttrValue(TextureAttr::TYPE_BUMPMAP)));
-    form->addRow(tr("Type"), typeCombo);
 
-    animCombo = new QComboBox(this);
     animCombo->addItem(tr("Loop"), static_cast<int>(TextureAttrValue(TextureAttr::ANIM_LOOP)));
     animCombo->addItem(tr("Ping Pong"), static_cast<int>(TextureAttrValue(TextureAttr::ANIM_PINGPONG)));
     animCombo->addItem(tr("Once"), static_cast<int>(TextureAttrValue(TextureAttr::ANIM_ONCE)));
     animCombo->addItem(tr("Manual"), static_cast<int>(TextureAttrValue(TextureAttr::ANIM_MANUAL)));
-    form->addRow(tr("Anim Type"), animCombo);
-
-    frameCountSpin = new QSpinBox(this);
-    frameCountSpin->setRange(0, std::numeric_limits<int>::max());
-    form->addRow(tr("Frame Count"), frameCountSpin);
-
-    frameRateSpin = new QDoubleSpinBox(this);
-    frameRateSpin->setRange(0.0, 1000000.0);
-    frameRateSpin->setDecimals(3);
-    frameRateSpin->setSingleStep(0.1);
-    form->addRow(tr("Frame Rate"), frameRateSpin);
-
-    layout->addLayout(form);
-
-    applyButton = new QPushButton(tr("Apply Texture Info Changes"), this);
     connect(applyButton, &QPushButton::clicked,
         this, &TextureInfoEditorWidget::applyChanges);
-
-    layout->addStretch();
-    layout->addWidget(applyButton, 0, Qt::AlignRight);
 }
 
 void TextureInfoEditorWidget::setChunk(const std::shared_ptr<ChunkItem>& chunkPtr) {
@@ -6361,43 +6207,31 @@ void TextureInfoEditorWidget::applyChanges() {
 
 MaterialEditorWidget::MaterialEditorWidget(QWidget* parent)
     : QWidget(parent) {
-    setEnabled(false);
-    auto* layout = new QVBoxLayout(this);
-    layout->setContentsMargins(0, 0, 0, 0);
-    layout->setSpacing(6);
+    Ui::MaterialEditorWidget form;
+    form.setupUi(this);
+    stage0Combo = form.stage0Combo;
+    stage1Combo = form.stage1Combo;
+    stage0CodeSpin = form.stage0CodeSpin;
+    stage1CodeSpin = form.stage1CodeSpin;
+    ambient = { form.ambientRSpin, form.ambientGSpin, form.ambientBSpin };
+    diffuse = { form.diffuseRSpin, form.diffuseGSpin, form.diffuseBSpin };
+    specular = { form.specularRSpin, form.specularGSpin, form.specularBSpin };
+    emissive = { form.emissiveRSpin, form.emissiveGSpin, form.emissiveBSpin };
+    shininessSpin = form.shininessSpin;
+    opacitySpin = form.opacitySpin;
+    translucencySpin = form.translucencySpin;
+    applyButton = form.applyButton;
 
-    auto* flagsGroup = new QGroupBox(tr("Basic Flags"), this);
-    auto* flagsLayout = new QVBoxLayout(flagsGroup);
     for (const auto& [mask, name] : VERTMAT_BASIC_FLAGS) {
-        auto* box = new QCheckBox(QString::fromLatin1(name.data(), static_cast<int>(name.size())), flagsGroup);
-        flagsLayout->addWidget(box);
+        auto* box = new QCheckBox(
+            QString::fromLatin1(name.data(), static_cast<int>(name.size())),
+            form.basicFlagsGroup);
+        form.basicFlagsLayout->addWidget(box);
         basicFlagControls.push_back({ static_cast<uint32_t>(mask), box });
     }
-    layout->addWidget(flagsGroup);
 
-    auto* stageGroup = new QGroupBox(tr("Stage Mapping"), this);
-    auto* stageLayout = new QGridLayout(stageGroup);
-    stage0Combo = new QComboBox(stageGroup);
-    stage1Combo = new QComboBox(stageGroup);
-    stage0CodeSpin = new QSpinBox(stageGroup);
-    stage1CodeSpin = new QSpinBox(stageGroup);
     populateStageCombo(stage0Combo, 0);
     populateStageCombo(stage1Combo, 1);
-    for (auto* spin : { stage0CodeSpin, stage1CodeSpin }) {
-        spin->setRange(0, 255);
-        spin->setSingleStep(1);
-    }
-
-    stageLayout->addWidget(new QLabel(tr("Mapping"), stageGroup), 0, 1);
-    stageLayout->addWidget(new QLabel(tr("Code"), stageGroup), 0, 2);
-    stageLayout->addWidget(new QLabel(tr("Stage 0"), stageGroup), 1, 0);
-    stageLayout->addWidget(stage0Combo, 1, 1);
-    stageLayout->addWidget(stage0CodeSpin, 1, 2);
-    stageLayout->addWidget(new QLabel(tr("Stage 1"), stageGroup), 2, 0);
-    stageLayout->addWidget(stage1Combo, 2, 1);
-    stageLayout->addWidget(stage1CodeSpin, 2, 2);
-    stageLayout->setColumnStretch(1, 1);
-    layout->addWidget(stageGroup);
 
     auto hookStage = [&](QComboBox* combo, QSpinBox* spin, int stage) {
         connect(combo, QOverload<int>::of(&QComboBox::currentIndexChanged),
@@ -6418,55 +6252,8 @@ MaterialEditorWidget::MaterialEditorWidget(QWidget* parent)
     hookStage(stage0Combo, stage0CodeSpin, 0);
     hookStage(stage1Combo, stage1CodeSpin, 1);
 
-    auto makeColorGroup = [&](const QString& title, ColorControls& controls) {
-        auto* group = new QGroupBox(title, this);
-        auto* grid = new QGridLayout(group);
-        controls.r = new QSpinBox(group);
-        controls.g = new QSpinBox(group);
-        controls.b = new QSpinBox(group);
-        for (auto* spin : { controls.r, controls.g, controls.b }) {
-            spin->setRange(0, 255);
-        }
-        grid->addWidget(new QLabel(tr("R"), group), 0, 0);
-        grid->addWidget(controls.r, 0, 1);
-        grid->addWidget(new QLabel(tr("G"), group), 0, 2);
-        grid->addWidget(controls.g, 0, 3);
-        grid->addWidget(new QLabel(tr("B"), group), 0, 4);
-        grid->addWidget(controls.b, 0, 5);
-        layout->addWidget(group);
-    };
-    makeColorGroup(tr("Ambient"), ambient);
-    makeColorGroup(tr("Diffuse"), diffuse);
-    makeColorGroup(tr("Specular"), specular);
-    makeColorGroup(tr("Emissive"), emissive);
-
-    auto* floatForm = new QFormLayout();
-    shininessSpin = new QDoubleSpinBox(this);
-    shininessSpin->setRange(0.0, 1000.0);
-    shininessSpin->setDecimals(2);
-    shininessSpin->setSingleStep(1.0);
-
-    opacitySpin = new QDoubleSpinBox(this);
-    opacitySpin->setRange(0.0, 1.0);
-    opacitySpin->setDecimals(3);
-    opacitySpin->setSingleStep(0.05);
-
-    translucencySpin = new QDoubleSpinBox(this);
-    translucencySpin->setRange(0.0, 1.0);
-    translucencySpin->setDecimals(3);
-    translucencySpin->setSingleStep(0.05);
-
-    floatForm->addRow(tr("Shininess"), shininessSpin);
-    floatForm->addRow(tr("Opacity"), opacitySpin);
-    floatForm->addRow(tr("Translucency"), translucencySpin);
-    layout->addLayout(floatForm);
-
-    applyButton = new QPushButton(tr("Apply Material Changes"), this);
     connect(applyButton, &QPushButton::clicked,
         this, &MaterialEditorWidget::applyChanges);
-
-    layout->addWidget(applyButton, 0, Qt::AlignRight);
-    layout->addStretch();
 }
 
 void MaterialEditorWidget::populateStageCombo(QComboBox* combo, int stage) {
@@ -6609,235 +6396,48 @@ void MaterialEditorWidget::applyChanges() {
 }
 
 
-MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
-    QMenu* fileMenu = menuBar()->addMenu(tr("&File"));
-    QAction* newAction = fileMenu->addAction(tr("&New"));
-    newAction->setShortcut(QKeySequence::New);
-    connect(newAction, &QAction::triggered, this, &MainWindow::newFile);
+MainWindow::MainWindow(QWidget* parent)
+    : QMainWindow(parent),
+      ui(std::make_unique<Ui::MainWindow>()) {
+    ui->setupUi(this);
+    bindDesignerWidgets();
 
-    QAction* openAction = fileMenu->addAction(tr("&Open"));
-    openAction->setShortcut(QKeySequence::Open);
-    connect(openAction, &QAction::triggered, this, [this]() {
-        openFile("");
-        });
-    fileMenu->addSeparator();
-    QAction* exportJsonAct = fileMenu->addAction("Export to JSON...");
-    connect(exportJsonAct, &QAction::triggered, this, &MainWindow::exportJson);
-    QAction* importJsonAct = fileMenu->addAction("Import from JSON...");
-    connect(importJsonAct, &QAction::triggered, this, &MainWindow::importJson);
-
-    QAction* saveAction = fileMenu->addAction(tr("&Save"));
-    saveAction->setShortcut(QKeySequence::Save);
-    connect(saveAction, &QAction::triggered, this, &MainWindow::saveFile);
-
-    QAction* saveAsAction = fileMenu->addAction(tr("Save &As..."));
-    saveAsAction->setShortcut(QKeySequence::SaveAs);
-    connect(saveAsAction, &QAction::triggered, this, &MainWindow::saveFileAs);
-
-    splitter = new QSplitter(this);
-
-    chunkTreeTabs = new QTabWidget(splitter);
-    chunkTreeTabs->setDocumentMode(true);
-    connect(chunkTreeTabs, &QTabWidget::currentChanged, this, &MainWindow::handleChunkSourceTabChanged);
-
-    auto* detailContainer = new QWidget(splitter);
-    auto* detailLayout = new QVBoxLayout(detailContainer);
-    detailLayout->setContentsMargins(0, 0, 0, 0);
-    detailLayout->setSpacing(6);
-
-    detailSourceLabel = new QLabel(tr("Source: none"), detailContainer);
-    detailLayout->addWidget(detailSourceLabel);
-
-    detailSplitter = new QSplitter(Qt::Vertical, detailContainer);
     detailSplitter->setChildrenCollapsible(true);
     detailSplitter->setCollapsible(0, false);
     detailSplitter->setCollapsible(1, true);
     detailSplitter->setStretchFactor(0, 3);
     detailSplitter->setStretchFactor(1, 1);
-    detailLayout->addWidget(detailSplitter, 1);
-
-    auto* tableContainer = new QWidget(detailSplitter);
-    auto* tableLayout = new QVBoxLayout(tableContainer);
-    tableLayout->setContentsMargins(0, 0, 0, 0);
-    tableLayout->setSpacing(6);
-
-    rawHexToggle = new QCheckBox(tr("Show raw hex"), tableContainer);
-    tableLayout->addWidget(rawHexToggle);
-
-    tableWidget = new QTableWidget(tableContainer);
-    tableWidget->setColumnCount(3);
-    tableWidget->setHorizontalHeaderLabels({ tr("Field"), tr("Type"), tr("Value") });
-    tableWidget->setEditTriggers(QAbstractItemView::NoEditTriggers);
-    tableLayout->addWidget(tableWidget, 1);
-
-    rawHexContainer = new QGroupBox(tr("Raw Hex"), tableContainer);
-    auto* rawHexLayout = new QVBoxLayout(rawHexContainer);
-    rawHexEdit = new QPlainTextEdit(rawHexContainer);
-    rawHexEdit->setReadOnly(true);
-    rawHexLayout->addWidget(rawHexEdit);
-    rawHexContainer->setVisible(false);
-    tableLayout->addWidget(rawHexContainer);
-
-    detailSplitter->addWidget(tableContainer);
-
-    editorScrollArea = new QScrollArea(detailSplitter);
-    editorScrollArea->setWidgetResizable(true);
-    editorScrollArea->setFrameShape(QFrame::NoFrame);
-    detailSplitter->addWidget(editorScrollArea);
-
-    editorStack = new QStackedWidget();
-    editorStack->setContentsMargins(0, 0, 0, 0);
-    editorScrollArea->setWidget(editorStack);
-    editorPlaceholder = new QWidget(editorStack);
-    auto* placeholderLayout = new QVBoxLayout(editorPlaceholder);
-    placeholderLayout->addStretch();
-    editorPlaceholderLabel = new QLabel(tr("Select a supported chunk to edit."), editorPlaceholder);
-    editorPlaceholderLabel->setAlignment(Qt::AlignCenter);
-    placeholderLayout->addWidget(editorPlaceholderLabel);
-    placeholderLayout->addStretch();
-    editorStack->addWidget(editorPlaceholder);
-
-    meshEditor = new MeshEditorWidget(editorStack);
-    editorStack->addWidget(meshEditor);
-
-    meshUserTextEditor = new RawTextEditorWidget(tr("User Text"), editorStack);
-    editorStack->addWidget(meshUserTextEditor);
-
-    textureNameEditor = new StringEditorWidget(tr("Texture Name"), editorStack);
-    editorStack->addWidget(textureNameEditor);
-
-    textureInfoEditor = new TextureInfoEditorWidget(editorStack);
-    editorStack->addWidget(textureInfoEditor);
-
-    hierarchyHeaderEditor = new HierarchyHeaderEditorWidget(editorStack);
-    editorStack->addWidget(hierarchyHeaderEditor);
-
-    animationHierarchyEditor = new AnimationHierarchyEditorWidget(editorStack);
-    editorStack->addWidget(animationHierarchyEditor);
-
-    materialNameEditor = new StringEditorWidget(tr("Material Name"), editorStack);
-    editorStack->addWidget(materialNameEditor);
-
-    transformNodeEditor = new TransformNodeEditorWidget(editorStack);
-    editorStack->addWidget(transformNodeEditor);
-
-    stage0ArgsEditor = new MapperArgsEditorWidget(tr("Stage 0 Mapper Args"), editorStack);
-    editorStack->addWidget(stage0ArgsEditor);
-
-    stage1ArgsEditor = new MapperArgsEditorWidget(tr("Stage 1 Mapper Args"), editorStack);
-    editorStack->addWidget(stage1ArgsEditor);
-
-    materialEditor = new MaterialEditorWidget(editorStack);
-    editorStack->addWidget(materialEditor);
-
-    shaderEditor = new ShaderEditorWidget(editorStack);
-    editorStack->addWidget(shaderEditor);
-
-    surfaceTypeEditor = new SurfaceTypeEditorWidget(editorStack);
-    editorStack->addWidget(surfaceTypeEditor);
-
-    triangleSurfaceTypeEditor = new TriangleSurfaceTypeEditorWidget(editorStack);
-    editorStack->addWidget(triangleSurfaceTypeEditor);
-
-    editorStack->setCurrentWidget(editorPlaceholder);
+    createDynamicEditorPages();
     detailSplitter->setSizes({ 800, 180 });
     detailSplitterStateCache = detailSplitter->saveState();
-    editorScrollArea->setVisible(false);
 
-    renderPane = new QWidget(splitter);
-    auto* renderLayout = new QVBoxLayout(renderPane);
-    renderLayout->setContentsMargins(6, 6, 6, 6);
-    renderLayout->setSpacing(6);
+    renderUi = std::make_unique<Ui::RenderPanel>();
+    auto* renderPanel = new QWidget(renderPane);
+    renderUi->setupUi(renderPanel);
+    ui->renderHostLayout->addWidget(renderPanel);
 
-    renderSplitter = new QSplitter(Qt::Vertical, renderPane);
-    renderSplitter->setChildrenCollapsible(false);
-    renderSplitter->setHandleWidth(10);
-    renderSplitter->setStyleSheet(
-        QStringLiteral("QSplitter::handle:vertical { background: palette(mid); }"));
-    renderLayout->addWidget(renderSplitter, 1);
+    renderSplitter = renderUi->renderSplitter;
+    renderFogToggle = renderUi->renderFogToggle;
+    renderLodToggle = renderUi->renderLodToggle;
+    renderUvDebugToggle = renderUi->renderUvDebugToggle;
+    renderLodLockToggle = renderUi->renderLodLockToggle;
+    renderLodLevelSpin = renderUi->renderLodLevelSpin;
+    renderCameraGizmoToggle = renderUi->renderCameraGizmoToggle;
+    renderPivotMarkersToggle = renderUi->renderPivotMarkersToggle;
+    renderLodBiasSpin = renderUi->renderLodBiasSpin;
+    renderStatsLabel = renderUi->renderStatsLabel;
+    renderSelectionLabel = renderUi->renderSelectionLabel;
+    renderTabs = renderUi->renderTabs;
+    renderWarningsEdit = renderUi->renderWarningsEdit;
 
-    auto* renderViewportSection = new QWidget();
-    auto* renderViewportSectionLayout = new QVBoxLayout(renderViewportSection);
-    renderViewportSectionLayout->setContentsMargins(0, 0, 0, 0);
-    renderViewportSectionLayout->setSpacing(6);
-    renderViewportSection->setMinimumHeight(140);
-    renderViewportSection->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
-
-    auto* renderTabsSection = new QWidget();
-    auto* renderTabsSectionLayout = new QVBoxLayout(renderTabsSection);
-    renderTabsSectionLayout->setContentsMargins(0, 0, 0, 0);
-    renderTabsSectionLayout->setSpacing(0);
-    renderTabsSection->setMinimumHeight(0);
-    renderTabsSection->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Ignored);
-
-    renderViewport = new OW3D::Render::RenderViewportWidget(renderViewportSection);
+    renderViewport = new OW3D::Render::RenderViewportWidget(renderUi->renderViewportHost);
     renderViewport->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
     renderViewport->setMinimumHeight(180);
-    renderViewportSectionLayout->addWidget(renderViewport, 1);
+    renderUi->renderViewportHostLayout->addWidget(renderViewport);
 
-    auto* renderControls = new QWidget(renderViewportSection);
-    auto* renderControlsLayout = new QHBoxLayout(renderControls);
-    renderControlsLayout->setContentsMargins(0, 0, 0, 0);
-    renderControlsLayout->setSpacing(8);
-    renderFogToggle = new QCheckBox(tr("Fog"), renderControls);
-    renderFogToggle->setChecked(true);
-    renderLodToggle = new QCheckBox(tr("LOD"), renderControls);
-    renderLodToggle->setChecked(true);
-    renderUvDebugToggle = new QCheckBox(tr("UV Debug"), renderControls);
-    renderUvDebugToggle->setChecked(false);
-    renderLodLockToggle = new QCheckBox(tr("Lock LOD"), renderControls);
-    renderLodLockToggle->setChecked(false);
-    auto* lodLevelLabel = new QLabel(tr("LOD Level"), renderControls);
-    renderLodLevelSpin = new QSpinBox(renderControls);
-    renderLodLevelSpin->setRange(0, 255);
-    renderLodLevelSpin->setValue(0);
-    renderLodLevelSpin->setEnabled(false);
-    renderCameraGizmoToggle = new QCheckBox(tr("Camera Gizmo"), renderControls);
-    renderCameraGizmoToggle->setChecked(true);
-    renderPivotMarkersToggle = new QCheckBox(tr("Pivot Markers"), renderControls);
-    renderPivotMarkersToggle->setChecked(true);
-    auto* lodBiasLabel = new QLabel(tr("LOD Bias"), renderControls);
-    renderLodBiasSpin = new QDoubleSpinBox(renderControls);
-    renderLodBiasSpin->setDecimals(2);
-    renderLodBiasSpin->setRange(0.1, 8.0);
-    renderLodBiasSpin->setSingleStep(0.1);
-    renderLodBiasSpin->setValue(1.0);
-    renderControlsLayout->addWidget(renderFogToggle);
-    renderControlsLayout->addWidget(renderLodToggle);
-    renderControlsLayout->addWidget(renderUvDebugToggle);
-    renderControlsLayout->addWidget(renderLodLockToggle);
-    renderControlsLayout->addWidget(lodLevelLabel);
-    renderControlsLayout->addWidget(renderLodLevelSpin);
-    renderControlsLayout->addWidget(renderCameraGizmoToggle);
-    renderControlsLayout->addWidget(renderPivotMarkersToggle);
-    renderControlsLayout->addWidget(lodBiasLabel);
-    renderControlsLayout->addWidget(renderLodBiasSpin);
-    renderControlsLayout->addStretch(1);
-    renderViewportSectionLayout->addWidget(renderControls);
-
-    renderStatsLabel = new QLabel(tr("Draws: 0 | Tris: 0"), renderViewportSection);
-    renderViewportSectionLayout->addWidget(renderStatsLabel);
-
-    renderSelectionLabel = new QLabel(tr("Selection: none"), renderViewportSection);
-    renderViewportSectionLayout->addWidget(renderSelectionLabel);
-
-    renderTabs = new QTabWidget(renderTabsSection);
-    renderWarningsEdit = new QPlainTextEdit(renderTabs);
-    renderWarningsEdit->setReadOnly(true);
-    renderWarningsEdit->setPlaceholderText(tr("No scene warnings."));
-    renderTabs->addTab(renderWarningsEdit, tr("Scene Warnings"));
-
-    auto* renderAnimationTabScroll = new QScrollArea(renderTabs);
-    renderAnimationTabScroll->setWidgetResizable(true);
-    renderAnimationTabScroll->setFrameShape(QFrame::NoFrame);
-    renderAnimationTabScroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAsNeeded);
-    renderAnimationTabScroll->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
-
-    auto* renderAnimationTab = new QWidget(renderAnimationTabScroll);
-    auto* renderAnimationLayout = new QVBoxLayout(renderAnimationTab);
-    renderAnimationLayout->setContentsMargins(6, 6, 6, 6);
-    renderAnimationLayout->setSpacing(6);
-    renderAnimationTabScroll->setWidget(renderAnimationTab);
+    auto* lodLevelLabel = renderUi->lodLevelLabel;
+    auto* renderAnimationTab = renderUi->renderAnimationTab;
+    auto* renderAnimationLayout = renderUi->renderAnimationLayout;
 
     auto* renderAssetButtons = new QWidget(renderAnimationTab);
     auto* renderAssetButtonsLayout = new QHBoxLayout(renderAssetButtons);
@@ -7235,27 +6835,17 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     renderPivotSheetTabLayout->addStretch(1);
     renderAnimationEditorTabs->addTab(renderPivotSheetTab, tr("Pivot Sheet"));
 
-    renderTabs->addTab(renderAnimationTabScroll, tr("Animations"));
     renderTabs->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Ignored);
     renderTabs->setMinimumHeight(0);
-    renderTabsSectionLayout->addWidget(renderTabs, 1);
-
-    renderSplitter->addWidget(renderViewportSection);
-    renderSplitter->addWidget(renderTabsSection);
     renderSplitter->setStretchFactor(0, 5);
     renderSplitter->setStretchFactor(1, 2);
     renderSplitter->setSizes({ 700, 240 });
 
-    splitter->addWidget(chunkTreeTabs);
-    splitter->addWidget(detailContainer);
-    splitter->addWidget(renderPane);
     splitter->setStretchFactor(0, 3);
     splitter->setStretchFactor(1, 1);
     splitter->setStretchFactor(2, 2);
     splitter->setChildrenCollapsible(false);
     splitter->setSizes({ 900, 340, 560 });
-
-    setCentralWidget(splitter);
 
     chunkData = std::make_unique<ChunkData>();
 
@@ -7438,167 +7028,163 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
 
     updateWindowTitle();
     recentFilesPath = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation) + "/recent_files.txt";
-    recentFilesMenu = fileMenu->addMenu("Open Recent");
+    recentFilesMenu = ui->menuOpenRecent;
     LoadRecentFiles();
     if (lastDirectory.isEmpty())
         lastDirectory = QDir::homePath();
     UpdateRecentFilesMenu();
-    // create the menu & action
-    QMenu* editMenu = menuBar()->addMenu(tr("&Edit"));
-    QAction* addTopLevelChunkAction = editMenu->addAction(tr("Add Top-Level Chunk..."));
-    QAction* insertChunkBeforeAction = editMenu->addAction(tr("Insert Chunk Before..."));
-    QAction* insertChunkAfterAction = editMenu->addAction(tr("Insert Chunk After..."));
-    QAction* addChildChunkAction = editMenu->addAction(tr("Add Child Chunk..."));
-    QAction* undoRenderTransformAction = editMenu->addAction(tr("Undo Render Edit"));
-    undoRenderTransformAction->setShortcut(QKeySequence::Undo);
-    QAction* redoRenderTransformAction = editMenu->addAction(tr("Redo Render Edit"));
-    redoRenderTransformAction->setShortcut(QKeySequence::Redo);
-    QAction* editRenderRotationAction = editMenu->addAction(tr("Set Selected Render Rotation..."));
-    editRenderRotationAction->setShortcut(QKeySequence(tr("Ctrl+Shift+R")));
-    editMenu->addSeparator();
-    QAction* moveChunkUpAction = editMenu->addAction(tr("Move Chunk Up"));
-    QAction* moveChunkDownAction = editMenu->addAction(tr("Move Chunk Down"));
-    QAction* deleteChunkAction = editMenu->addAction(tr("Delete Selected Chunk"));
-    editMenu->addSeparator();
-    QAction* moveHierarchyBoneToEndAction = editMenu->addAction(tr("Move Hierarchy Bone To End..."));
+    connectDesignerActions();
+    restoreWindowLayout();
+}
 
-    connect(addTopLevelChunkAction, &QAction::triggered, this, &MainWindow::addTopLevelChunk);
-    connect(insertChunkBeforeAction, &QAction::triggered, this, &MainWindow::insertChunkBefore);
-    connect(insertChunkAfterAction, &QAction::triggered, this, &MainWindow::insertChunkAfter);
-    connect(addChildChunkAction, &QAction::triggered, this, &MainWindow::addChildChunk);
-    connect(undoRenderTransformAction, &QAction::triggered, this, &MainWindow::undoRenderTransform);
-    connect(redoRenderTransformAction, &QAction::triggered, this, &MainWindow::redoRenderTransform);
-    connect(editRenderRotationAction, &QAction::triggered, this, [this]() {
+MainWindow::~MainWindow() = default;
+
+void MainWindow::bindDesignerWidgets()
+{
+    splitter = ui->mainSplitter;
+    chunkTreeTabs = ui->chunkTreeTabs;
+    detailSourceLabel = ui->detailSourceLabel;
+    detailSplitter = ui->detailSplitter;
+    rawHexToggle = ui->rawHexToggle;
+    tableWidget = ui->tableWidget;
+    rawHexContainer = ui->rawHexContainer;
+    rawHexEdit = ui->rawHexEdit;
+    editorScrollArea = ui->editorScrollArea;
+    editorStack = ui->editorStack;
+    editorPlaceholder = ui->editorPlaceholder;
+    editorPlaceholderLabel = ui->editorPlaceholderLabel;
+    renderPane = ui->renderPane;
+
+    connect(
+        chunkTreeTabs,
+        &QTabWidget::currentChanged,
+        this,
+        &MainWindow::handleChunkSourceTabChanged);
+}
+
+void MainWindow::createDynamicEditorPages()
+{
+    meshEditor = new MeshEditorWidget(editorStack);
+    editorStack->addWidget(meshEditor);
+    meshUserTextEditor = new RawTextEditorWidget(tr("User Text"), editorStack);
+    editorStack->addWidget(meshUserTextEditor);
+    textureNameEditor = new StringEditorWidget(tr("Texture Name"), editorStack);
+    editorStack->addWidget(textureNameEditor);
+    textureInfoEditor = new TextureInfoEditorWidget(editorStack);
+    editorStack->addWidget(textureInfoEditor);
+    hierarchyHeaderEditor = new HierarchyHeaderEditorWidget(editorStack);
+    editorStack->addWidget(hierarchyHeaderEditor);
+    animationHierarchyEditor = new AnimationHierarchyEditorWidget(editorStack);
+    editorStack->addWidget(animationHierarchyEditor);
+    materialNameEditor = new StringEditorWidget(tr("Material Name"), editorStack);
+    editorStack->addWidget(materialNameEditor);
+    transformNodeEditor = new TransformNodeEditorWidget(editorStack);
+    editorStack->addWidget(transformNodeEditor);
+    stage0ArgsEditor = new MapperArgsEditorWidget(tr("Stage 0 Mapper Args"), editorStack);
+    editorStack->addWidget(stage0ArgsEditor);
+    stage1ArgsEditor = new MapperArgsEditorWidget(tr("Stage 1 Mapper Args"), editorStack);
+    editorStack->addWidget(stage1ArgsEditor);
+    materialEditor = new MaterialEditorWidget(editorStack);
+    editorStack->addWidget(materialEditor);
+    shaderEditor = new ShaderEditorWidget(editorStack);
+    editorStack->addWidget(shaderEditor);
+    surfaceTypeEditor = new SurfaceTypeEditorWidget(editorStack);
+    editorStack->addWidget(surfaceTypeEditor);
+    triangleSurfaceTypeEditor = new TriangleSurfaceTypeEditorWidget(editorStack);
+    editorStack->addWidget(triangleSurfaceTypeEditor);
+    editorStack->setCurrentWidget(editorPlaceholder);
+}
+
+void MainWindow::connectDesignerActions()
+{
+    connect(ui->actionNew, &QAction::triggered, this, &MainWindow::newFile);
+    connect(ui->actionOpen, &QAction::triggered, this, [this]() { openFile(QString()); });
+    connect(ui->actionExportJson, &QAction::triggered, this, &MainWindow::exportJson);
+    connect(ui->actionImportJson, &QAction::triggered, this, &MainWindow::importJson);
+    connect(ui->actionSave, &QAction::triggered, this, &MainWindow::saveFile);
+    connect(ui->actionSaveAs, &QAction::triggered, this, &MainWindow::saveFileAs);
+
+    connect(ui->actionAddTopLevelChunk, &QAction::triggered, this, &MainWindow::addTopLevelChunk);
+    connect(ui->actionInsertChunkBefore, &QAction::triggered, this, &MainWindow::insertChunkBefore);
+    connect(ui->actionInsertChunkAfter, &QAction::triggered, this, &MainWindow::insertChunkAfter);
+    connect(ui->actionAddChildChunk, &QAction::triggered, this, &MainWindow::addChildChunk);
+    connect(ui->actionUndoRenderEdit, &QAction::triggered, this, &MainWindow::undoRenderTransform);
+    connect(ui->actionRedoRenderEdit, &QAction::triggered, this, &MainWindow::redoRenderTransform);
+    connect(ui->actionSetSelectedRenderRotation, &QAction::triggered, this, [this]() {
         if (renderViewport) {
             renderViewport->OpenManualPivotRotationDialog();
         }
-        });
-    connect(moveChunkUpAction, &QAction::triggered, this, &MainWindow::moveChunkUp);
-    connect(moveChunkDownAction, &QAction::triggered, this, &MainWindow::moveChunkDown);
-    connect(deleteChunkAction, &QAction::triggered, this, &MainWindow::deleteSelectedChunk);
-    connect(moveHierarchyBoneToEndAction, &QAction::triggered, this, &MainWindow::moveHierarchyBoneToEnd);
+    });
+    connect(ui->actionMoveChunkUp, &QAction::triggered, this, &MainWindow::moveChunkUp);
+    connect(ui->actionMoveChunkDown, &QAction::triggered, this, &MainWindow::moveChunkDown);
+    connect(ui->actionDeleteSelectedChunk, &QAction::triggered, this, &MainWindow::deleteSelectedChunk);
+    connect(ui->actionMoveHierarchyBoneToEnd, &QAction::triggered, this, &MainWindow::moveHierarchyBoneToEnd);
 
-    QMenu* viewMenu = menuBar()->addMenu("&View");
-    QAction* expandAllAction = viewMenu->addAction("Expand All");
-    QAction* collapseAllAction = viewMenu->addAction("Collapse All");
-    connect(expandAllAction, &QAction::triggered, this, [this]() {
+    connect(ui->actionExpandAll, &QAction::triggered, this, [this]() {
         if (treeWidget) {
             treeWidget->expandAll();
         }
-        });
-    connect(collapseAllAction, &QAction::triggered, this, [this]() {
+    });
+    connect(ui->actionCollapseAll, &QAction::triggered, this, [this]() {
         if (treeWidget) {
             treeWidget->collapseAll();
         }
-        });
-    QAction* hierarchyBrowserAction = viewMenu->addAction(tr("Hierarchy Browser..."));
-    connect(hierarchyBrowserAction, &QAction::triggered, this, &MainWindow::showHierarchyBrowser);
-    viewMenu->addSeparator();
-    QAction* showChunkTreeAction = viewMenu->addAction(tr("Show Chunk Tree"));
-    showChunkTreeAction->setCheckable(true);
-    showChunkTreeAction->setChecked(true);
-    connect(showChunkTreeAction, &QAction::toggled, this, [this](bool on) {
-        if (chunkTreeTabs) {
-            chunkTreeTabs->setVisible(on);
-        }
-        });
-    QAction* showDetailsAction = viewMenu->addAction(tr("Show Details"));
-    showDetailsAction->setCheckable(true);
-    showDetailsAction->setChecked(true);
-    connect(showDetailsAction, &QAction::toggled, this, [detailContainer](bool on) {
-        if (detailContainer) {
-            detailContainer->setVisible(on);
-        }
-        });
-    QAction* showRenderPaneAction = viewMenu->addAction(tr("Show Render Pane"));
-    showRenderPaneAction->setCheckable(true);
-    showRenderPaneAction->setChecked(true);
-    connect(showRenderPaneAction, &QAction::toggled, this, [this](bool on) {
-        if (renderPane) {
-            renderPane->setVisible(on);
-        }
-        });
-    QAction* showWarningsSectionAction = viewMenu->addAction(tr("Show Render Tabs"));
-    showWarningsSectionAction->setCheckable(true);
-    showWarningsSectionAction->setChecked(true);
-    connect(showWarningsSectionAction, &QAction::toggled, this, [this](bool on) {
+    });
+    connect(ui->actionHierarchyBrowser, &QAction::triggered, this, &MainWindow::showHierarchyBrowser);
+    connect(ui->actionShowChunkTree, &QAction::toggled, chunkTreeTabs, &QWidget::setVisible);
+    connect(ui->actionShowDetails, &QAction::toggled, ui->detailContainer, &QWidget::setVisible);
+    connect(ui->actionShowRenderPane, &QAction::toggled, renderPane, &QWidget::setVisible);
+    connect(ui->actionShowRenderTabs, &QAction::toggled, this, [this](bool visible) {
         if (renderTabs) {
-            renderTabs->setVisible(on);
+            renderTabs->setVisible(visible);
         }
-        });
-    QMenu* renderMenu = menuBar()->addMenu(tr("&Render"));
-    QAction* addRenderSkeletonsAction = renderMenu->addAction(tr("Add Model/Skeleton..."));
-    QAction* addRenderAnimationsAction = renderMenu->addAction(tr("Add Animations..."));
-    QAction* setRenderTextureFolderAction = renderMenu->addAction(tr("Set Texture Folder..."));
-    QAction* clearRenderTextureFolderAction = renderMenu->addAction(tr("Clear Texture Folder"));
-    QAction* removeRenderAssetAction = renderMenu->addAction(tr("Remove Selected Render Asset"));
-    QAction* clearRenderAnimationsAction = renderMenu->addAction(tr("Clear Animation Libraries"));
-    renderMenu->addSeparator();
-    QAction* toggleRenderPlaybackAction = renderMenu->addAction(tr("Play/Pause Animation"));
-    toggleRenderPlaybackAction->setShortcut(QKeySequence(Qt::Key_Space));
-    QAction* stopRenderPlaybackAction = renderMenu->addAction(tr("Stop Animation"));
-    QAction* exportCurrentAnimationGifAction = renderMenu->addAction(tr("Export Current Animation GIF..."));
-    connect(addRenderSkeletonsAction, &QAction::triggered, this, &MainWindow::addRenderSkeletons);
-    connect(addRenderAnimationsAction, &QAction::triggered, this, &MainWindow::addRenderAnimations);
-    connect(setRenderTextureFolderAction, &QAction::triggered, this, &MainWindow::selectRenderTextureFolder);
-    connect(clearRenderTextureFolderAction, &QAction::triggered, this, &MainWindow::clearRenderTextureFolder);
-    connect(removeRenderAssetAction, &QAction::triggered, this, &MainWindow::removeSelectedRenderSessionAsset);
-    connect(clearRenderAnimationsAction, &QAction::triggered, this, &MainWindow::clearRenderAnimationLibraries);
-    connect(toggleRenderPlaybackAction, &QAction::triggered, this, &MainWindow::toggleRenderAnimationPlayback);
-    connect(stopRenderPlaybackAction, &QAction::triggered, this, &MainWindow::stopRenderAnimationPlayback);
-    connect(exportCurrentAnimationGifAction, &QAction::triggered, this, &MainWindow::exportActiveRenderAnimationGif);
-    auto batchMenu = menuBar()->addMenu(tr("Batch Tools"));
-    auto exportChunksAct = new QAction(tr("Export Chunk List..."), this);
-    batchMenu->addAction(exportChunksAct);
-    connect(exportChunksAct, &QAction::triggered,
-        this, &MainWindow::on_actionExportChunkList_triggered);
-    auto exportJsonBatchAct = new QAction(tr("Export JSON Batch..."), this);
-    batchMenu->addAction(exportJsonBatchAct);
-    connect(exportJsonBatchAct, &QAction::triggered,
-        this, &MainWindow::on_actionExportJsonBatch_triggered);
-    auto validateRoundTripBatchAct = new QAction(tr("Round-Trip Validate Batch..."), this);
-    batchMenu->addAction(validateRoundTripBatchAct);
-    connect(validateRoundTripBatchAct, &QAction::triggered,
-        this, &MainWindow::on_actionValidateRoundTripBatch_triggered);
-    auto copyPureHumanAnimationsAct =
-        new QAction(tr("Copy Pure Human Animations by Skeleton..."), this);
-    batchMenu->addAction(copyPureHumanAnimationsAct);
-    connect(copyPureHumanAnimationsAct, &QAction::triggered,
-        this, &MainWindow::on_actionCopyPureHumanAnimationsBySkeleton_triggered);
-    auto exportSkeletonAGifsAct =
-        new QAction(tr("Export Animation GIFs..."), this);
-    batchMenu->addAction(exportSkeletonAGifsAct);
-    connect(exportSkeletonAGifsAct, &QAction::triggered,
-        this, &MainWindow::on_actionExportSkeletonAAnimationGifs_triggered);
+    });
 
-    {
-        QSettings settings;
-        const QByteArray geometry = settings.value("MainWindow/geometry").toByteArray();
-        if (!geometry.isEmpty()) {
-            restoreGeometry(geometry);
+    connect(ui->actionAddRenderSkeletons, &QAction::triggered, this, &MainWindow::addRenderSkeletons);
+    connect(ui->actionAddRenderAnimations, &QAction::triggered, this, &MainWindow::addRenderAnimations);
+    connect(ui->actionSetRenderTextureFolder, &QAction::triggered, this, &MainWindow::selectRenderTextureFolder);
+    connect(ui->actionClearRenderTextureFolder, &QAction::triggered, this, &MainWindow::clearRenderTextureFolder);
+    connect(ui->actionRemoveSelectedRenderAsset, &QAction::triggered, this, &MainWindow::removeSelectedRenderSessionAsset);
+    connect(ui->actionClearAnimationLibraries, &QAction::triggered, this, &MainWindow::clearRenderAnimationLibraries);
+    connect(ui->actionToggleRenderPlayback, &QAction::triggered, this, &MainWindow::toggleRenderAnimationPlayback);
+    connect(ui->actionStopRenderPlayback, &QAction::triggered, this, &MainWindow::stopRenderAnimationPlayback);
+    connect(ui->actionExportCurrentAnimationGif, &QAction::triggered, this, &MainWindow::exportActiveRenderAnimationGif);
+
+    connect(ui->batchExportChunkListAction, &QAction::triggered, this, &MainWindow::on_actionExportChunkList_triggered);
+    connect(ui->batchExportJsonAction, &QAction::triggered, this, &MainWindow::on_actionExportJsonBatch_triggered);
+    connect(ui->batchValidateRoundTripAction, &QAction::triggered, this, &MainWindow::on_actionValidateRoundTripBatch_triggered);
+    connect(ui->actionCopyPureHumanAnimations, &QAction::triggered, this, &MainWindow::on_actionCopyPureHumanAnimationsBySkeleton_triggered);
+    connect(ui->actionExportAnimationGifs, &QAction::triggered, this, &MainWindow::on_actionExportSkeletonAAnimationGifs_triggered);
+}
+
+void MainWindow::restoreWindowLayout()
+{
+    QSettings settings;
+    const QByteArray geometry = settings.value("MainWindow/geometry").toByteArray();
+    if (!geometry.isEmpty()) {
+        restoreGeometry(geometry);
+    }
+    const QByteArray splitterState = settings.value("MainWindow/splitter").toByteArray();
+    if (splitter && !splitterState.isEmpty()) {
+        splitter->restoreState(splitterState);
+    }
+    const QByteArray detailSplitterState = settings.value("MainWindow/detailSplitter").toByteArray();
+    if (detailSplitter && !detailSplitterState.isEmpty()) {
+        detailSplitter->restoreState(detailSplitterState);
+        detailSplitterStateCache = detailSplitterState;
+    }
+    const QByteArray renderSplitterState = settings.value("MainWindow/renderSplitter").toByteArray();
+    if (renderSplitter) {
+        bool restored = false;
+        if (!renderSplitterState.isEmpty()) {
+            restored = renderSplitter->restoreState(renderSplitterState);
         }
-        const QByteArray splitterState = settings.value("MainWindow/splitter").toByteArray();
-        if (splitter && !splitterState.isEmpty()) {
-            splitter->restoreState(splitterState);
-        }
-        const QByteArray detailSplitterState = settings.value("MainWindow/detailSplitter").toByteArray();
-        if (detailSplitter && !detailSplitterState.isEmpty()) {
-            detailSplitter->restoreState(detailSplitterState);
-            detailSplitterStateCache = detailSplitterState;
-        }
-        const QByteArray renderSplitterState = settings.value("MainWindow/renderSplitter").toByteArray();
-        if (renderSplitter) {
-            bool restored = false;
-            if (!renderSplitterState.isEmpty()) {
-                restored = renderSplitter->restoreState(renderSplitterState);
-            }
-            const QList<int> sizes = renderSplitter->sizes();
-            if (!restored
-                || sizes.size() != 2
-                || sizes[0] < 140
-                || sizes[1] < 80) {
-                renderSplitter->setSizes({ 700, 240 });
-            }
+        const QList<int> sizes = renderSplitter->sizes();
+        if (!restored
+            || sizes.size() != 2
+            || sizes[0] < 140
+            || sizes[1] < 80) {
+            renderSplitter->setSizes({ 700, 240 });
         }
     }
 }

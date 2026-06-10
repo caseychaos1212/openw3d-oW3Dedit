@@ -313,6 +313,17 @@
     <QtMoc Include="MainWindow.h" />
     <QtMoc Include="EditorWidgets.h" />
     <QtMoc Include="frontend\render\RenderViewportWidget.h" />
+    <QtUic Include="MainWindow.ui" />
+    <QtUic Include="RenderPanel.ui" />
+    <QtUic Include="ui\HierarchyHeaderEditorWidget.ui" />
+    <QtUic Include="ui\AnimationHierarchyEditorWidget.ui" />
+    <QtUic Include="ui\TransformNodeEditorWidget.ui" />
+    <QtUic Include="ui\SurfaceTypeEditorWidget.ui" />
+    <QtUic Include="ui\TriangleSurfaceTypeEditorWidget.ui" />
+    <QtUic Include="ui\MeshEditorWidget.ui" />
+    <QtUic Include="ui\TextureInfoEditorWidget.ui" />
+    <QtUic Include="ui\ShaderEditorWidget.ui" />
+    <QtUic Include="ui\MaterialEditorWidget.ui" />
     <ClCompile Include="backend\ChunkJson.cpp" />
     <ClCompile Include="backend\ChunkSerializers.cpp" />
     <ClCompile Include="backend\render\SceneBuilder.cpp" />

@@ -208,10 +208,28 @@
     <QtMoc Include="MainWindow.h" />
     <QtMoc Include="EditorWidgets.h" />
     <QtMoc Include="frontend\render\RenderViewportWidget.h" />
+    <QtUic Include="MainWindow.ui">
+      <Filter>Form Files</Filter>
+    </QtUic>
+    <QtUic Include="RenderPanel.ui">
+      <Filter>Form Files</Filter>
+    </QtUic>
+    <QtUic Include="ui\HierarchyHeaderEditorWidget.ui"><Filter>Form Files</Filter></QtUic>
+    <QtUic Include="ui\AnimationHierarchyEditorWidget.ui"><Filter>Form Files</Filter></QtUic>
+    <QtUic Include="ui\TransformNodeEditorWidget.ui"><Filter>Form Files</Filter></QtUic>
+    <QtUic Include="ui\SurfaceTypeEditorWidget.ui"><Filter>Form Files</Filter></QtUic>
+    <QtUic Include="ui\TriangleSurfaceTypeEditorWidget.ui"><Filter>Form Files</Filter></QtUic>
+    <QtUic Include="ui\MeshEditorWidget.ui"><Filter>Form Files</Filter></QtUic>
+    <QtUic Include="ui\TextureInfoEditorWidget.ui"><Filter>Form Files</Filter></QtUic>
+    <QtUic Include="ui\ShaderEditorWidget.ui"><Filter>Form Files</Filter></QtUic>
+    <QtUic Include="ui\MaterialEditorWidget.ui"><Filter>Form Files</Filter></QtUic>
   </ItemGroup>
   <ItemGroup>
     <Filter Include="Resource Files">
       <UniqueIdentifier>{4A782A7C-5972-4E34-B4A2-B4F39D39F5CF}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Form Files">
+      <UniqueIdentifier>{A0D784C4-8F41-4F6C-9D75-98224F1BE04A}</UniqueIdentifier>
     </Filter>
   </ItemGroup>
 </Project>

@@ -1,0 +1,404 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ui version="4.0">
+ <class>MainWindow</class>
+ <widget class="QMainWindow" name="MainWindow">
+  <property name="geometry">
+   <rect>
+    <x>0</x>
+    <y>0</y>
+    <width>1600</width>
+    <height>900</height>
+   </rect>
+  </property>
+  <property name="windowTitle">
+   <string>oW3DEdit</string>
+  </property>
+  <widget class="QWidget" name="centralWidget">
+   <layout class="QVBoxLayout" name="centralLayout">
+    <property name="spacing">
+     <number>0</number>
+    </property>
+    <property name="leftMargin">
+     <number>0</number>
+    </property>
+    <property name="topMargin">
+     <number>0</number>
+    </property>
+    <property name="rightMargin">
+     <number>0</number>
+    </property>
+    <property name="bottomMargin">
+     <number>0</number>
+    </property>
+    <item>
+     <widget class="QSplitter" name="mainSplitter">
+      <property name="orientation">
+       <enum>Qt::Orientation::Horizontal</enum>
+      </property>
+      <property name="childrenCollapsible">
+       <bool>false</bool>
+      </property>
+      <widget class="QTabWidget" name="chunkTreeTabs">
+       <property name="documentMode">
+        <bool>true</bool>
+       </property>
+      </widget>
+      <widget class="QWidget" name="detailContainer">
+       <layout class="QVBoxLayout" name="detailLayout">
+        <property name="spacing">
+         <number>6</number>
+        </property>
+        <property name="leftMargin">
+         <number>0</number>
+        </property>
+        <property name="topMargin">
+         <number>0</number>
+        </property>
+        <property name="rightMargin">
+         <number>0</number>
+        </property>
+        <property name="bottomMargin">
+         <number>0</number>
+        </property>
+        <item>
+         <widget class="QLabel" name="detailSourceLabel">
+          <property name="text">
+           <string>Source: none</string>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QSplitter" name="detailSplitter">
+          <property name="orientation">
+           <enum>Qt::Orientation::Vertical</enum>
+          </property>
+          <widget class="QWidget" name="tableContainer">
+           <layout class="QVBoxLayout" name="tableLayout">
+            <property name="spacing">
+             <number>6</number>
+            </property>
+            <property name="leftMargin">
+             <number>0</number>
+            </property>
+            <property name="topMargin">
+             <number>0</number>
+            </property>
+            <property name="rightMargin">
+             <number>0</number>
+            </property>
+            <property name="bottomMargin">
+             <number>0</number>
+            </property>
+            <item>
+             <widget class="QCheckBox" name="rawHexToggle">
+              <property name="text">
+               <string>Show raw hex</string>
+              </property>
+             </widget>
+            </item>
+            <item>
+             <widget class="QTableWidget" name="tableWidget">
+              <property name="editTriggers">
+               <set>QAbstractItemView::EditTrigger::NoEditTriggers</set>
+              </property>
+              <column>
+               <property name="text">
+                <string>Field</string>
+               </property>
+              </column>
+              <column>
+               <property name="text">
+                <string>Type</string>
+               </property>
+              </column>
+              <column>
+               <property name="text">
+                <string>Value</string>
+               </property>
+              </column>
+             </widget>
+            </item>
+            <item>
+             <widget class="QGroupBox" name="rawHexContainer">
+              <property name="visible">
+               <bool>false</bool>
+              </property>
+              <property name="title">
+               <string>Raw Hex</string>
+              </property>
+              <layout class="QVBoxLayout" name="rawHexLayout">
+               <item>
+                <widget class="QPlainTextEdit" name="rawHexEdit">
+                 <property name="readOnly">
+                  <bool>true</bool>
+                 </property>
+                </widget>
+               </item>
+              </layout>
+             </widget>
+            </item>
+           </layout>
+          </widget>
+          <widget class="QScrollArea" name="editorScrollArea">
+           <property name="visible">
+            <bool>false</bool>
+           </property>
+           <property name="frameShape">
+            <enum>QFrame::Shape::NoFrame</enum>
+           </property>
+           <property name="widgetResizable">
+            <bool>true</bool>
+           </property>
+           <widget class="QWidget" name="editorScrollAreaContents">
+            <layout class="QVBoxLayout" name="editorScrollAreaLayout">
+             <property name="leftMargin">
+              <number>0</number>
+             </property>
+             <property name="topMargin">
+              <number>0</number>
+             </property>
+             <property name="rightMargin">
+              <number>0</number>
+             </property>
+             <property name="bottomMargin">
+              <number>0</number>
+             </property>
+             <item>
+              <widget class="QStackedWidget" name="editorStack">
+               <widget class="QWidget" name="editorPlaceholder">
+                <layout class="QVBoxLayout" name="editorPlaceholderLayout">
+                 <item>
+                  <spacer name="editorPlaceholderTopSpacer">
+                   <property name="orientation">
+                    <enum>Qt::Orientation::Vertical</enum>
+                   </property>
+                   <property name="sizeHint" stdset="0">
+                    <size>
+                     <width>20</width>
+                     <height>40</height>
+                    </size>
+                   </property>
+                  </spacer>
+                 </item>
+                 <item>
+                  <widget class="QLabel" name="editorPlaceholderLabel">
+                   <property name="text">
+                    <string>Select a supported chunk to edit.</string>
+                   </property>
+                   <property name="alignment">
+                    <set>Qt::AlignmentFlag::AlignCenter</set>
+                   </property>
+                  </widget>
+                 </item>
+                 <item>
+                  <spacer name="editorPlaceholderBottomSpacer">
+                   <property name="orientation">
+                    <enum>Qt::Orientation::Vertical</enum>
+                   </property>
+                   <property name="sizeHint" stdset="0">
+                    <size>
+                     <width>20</width>
+                     <height>40</height>
+                    </size>
+                   </property>
+                  </spacer>
+                 </item>
+                </layout>
+               </widget>
+              </widget>
+             </item>
+            </layout>
+           </widget>
+          </widget>
+         </widget>
+        </item>
+       </layout>
+      </widget>
+      <widget class="QWidget" name="renderPane">
+       <layout class="QVBoxLayout" name="renderHostLayout">
+        <property name="spacing">
+         <number>6</number>
+        </property>
+        <property name="leftMargin">
+         <number>6</number>
+        </property>
+        <property name="topMargin">
+         <number>6</number>
+        </property>
+        <property name="rightMargin">
+         <number>6</number>
+        </property>
+        <property name="bottomMargin">
+         <number>6</number>
+        </property>
+       </layout>
+      </widget>
+     </widget>
+    </item>
+   </layout>
+  </widget>
+  <widget class="QMenuBar" name="menuBar">
+   <widget class="QMenu" name="menuFile">
+    <property name="title">
+     <string>&amp;File</string>
+    </property>
+    <addaction name="actionNew"/>
+    <addaction name="actionOpen"/>
+    <addaction name="separator"/>
+    <addaction name="actionExportJson"/>
+    <addaction name="actionImportJson"/>
+    <addaction name="actionSave"/>
+    <addaction name="actionSaveAs"/>
+    <addaction name="separator"/>
+    <addaction name="menuOpenRecent"/>
+   </widget>
+   <widget class="QMenu" name="menuOpenRecent">
+    <property name="title">
+     <string>Open Recent</string>
+    </property>
+   </widget>
+   <widget class="QMenu" name="menuEdit">
+    <property name="title">
+     <string>&amp;Edit</string>
+    </property>
+    <addaction name="actionAddTopLevelChunk"/>
+    <addaction name="actionInsertChunkBefore"/>
+    <addaction name="actionInsertChunkAfter"/>
+    <addaction name="actionAddChildChunk"/>
+    <addaction name="actionUndoRenderEdit"/>
+    <addaction name="actionRedoRenderEdit"/>
+    <addaction name="actionSetSelectedRenderRotation"/>
+    <addaction name="separator"/>
+    <addaction name="actionMoveChunkUp"/>
+    <addaction name="actionMoveChunkDown"/>
+    <addaction name="actionDeleteSelectedChunk"/>
+    <addaction name="separator"/>
+    <addaction name="actionMoveHierarchyBoneToEnd"/>
+   </widget>
+   <widget class="QMenu" name="menuView">
+    <property name="title">
+     <string>&amp;View</string>
+    </property>
+    <addaction name="actionExpandAll"/>
+    <addaction name="actionCollapseAll"/>
+    <addaction name="actionHierarchyBrowser"/>
+    <addaction name="separator"/>
+    <addaction name="actionShowChunkTree"/>
+    <addaction name="actionShowDetails"/>
+    <addaction name="actionShowRenderPane"/>
+    <addaction name="actionShowRenderTabs"/>
+   </widget>
+   <widget class="QMenu" name="menuRender">
+    <property name="title">
+     <string>&amp;Render</string>
+    </property>
+    <addaction name="actionAddRenderSkeletons"/>
+    <addaction name="actionAddRenderAnimations"/>
+    <addaction name="actionSetRenderTextureFolder"/>
+    <addaction name="actionClearRenderTextureFolder"/>
+    <addaction name="actionRemoveSelectedRenderAsset"/>
+    <addaction name="actionClearAnimationLibraries"/>
+    <addaction name="separator"/>
+    <addaction name="actionToggleRenderPlayback"/>
+    <addaction name="actionStopRenderPlayback"/>
+    <addaction name="actionExportCurrentAnimationGif"/>
+   </widget>
+   <widget class="QMenu" name="menuBatchTools">
+    <property name="title">
+     <string>Batch Tools</string>
+    </property>
+    <addaction name="batchExportChunkListAction"/>
+    <addaction name="batchExportJsonAction"/>
+    <addaction name="batchValidateRoundTripAction"/>
+    <addaction name="actionCopyPureHumanAnimations"/>
+    <addaction name="actionExportAnimationGifs"/>
+   </widget>
+   <addaction name="menuFile"/>
+   <addaction name="menuEdit"/>
+   <addaction name="menuView"/>
+   <addaction name="menuRender"/>
+   <addaction name="menuBatchTools"/>
+  </widget>
+  <widget class="QStatusBar" name="statusBar"/>
+  <action name="actionNew">
+   <property name="text"><string>&amp;New</string></property>
+   <property name="shortcut"><string>Ctrl+N</string></property>
+  </action>
+  <action name="actionOpen">
+   <property name="text"><string>&amp;Open</string></property>
+   <property name="shortcut"><string>Ctrl+O</string></property>
+  </action>
+  <action name="actionExportJson"><property name="text"><string>Export to JSON...</string></property></action>
+  <action name="actionImportJson"><property name="text"><string>Import from JSON...</string></property></action>
+  <action name="actionSave">
+   <property name="text"><string>&amp;Save</string></property>
+   <property name="shortcut"><string>Ctrl+S</string></property>
+  </action>
+  <action name="actionSaveAs">
+   <property name="text"><string>Save &amp;As...</string></property>
+   <property name="shortcut"><string>Ctrl+Shift+S</string></property>
+  </action>
+  <action name="actionAddTopLevelChunk"><property name="text"><string>Add Top-Level Chunk...</string></property></action>
+  <action name="actionInsertChunkBefore"><property name="text"><string>Insert Chunk Before...</string></property></action>
+  <action name="actionInsertChunkAfter"><property name="text"><string>Insert Chunk After...</string></property></action>
+  <action name="actionAddChildChunk"><property name="text"><string>Add Child Chunk...</string></property></action>
+  <action name="actionUndoRenderEdit">
+   <property name="text"><string>Undo Render Edit</string></property>
+   <property name="shortcut"><string>Ctrl+Z</string></property>
+  </action>
+  <action name="actionRedoRenderEdit">
+   <property name="text"><string>Redo Render Edit</string></property>
+   <property name="shortcut"><string>Ctrl+Y</string></property>
+  </action>
+  <action name="actionSetSelectedRenderRotation">
+   <property name="text"><string>Set Selected Render Rotation...</string></property>
+   <property name="shortcut"><string>Ctrl+Shift+R</string></property>
+  </action>
+  <action name="actionMoveChunkUp"><property name="text"><string>Move Chunk Up</string></property></action>
+  <action name="actionMoveChunkDown"><property name="text"><string>Move Chunk Down</string></property></action>
+  <action name="actionDeleteSelectedChunk"><property name="text"><string>Delete Selected Chunk</string></property></action>
+  <action name="actionMoveHierarchyBoneToEnd"><property name="text"><string>Move Hierarchy Bone To End...</string></property></action>
+  <action name="actionExpandAll"><property name="text"><string>Expand All</string></property></action>
+  <action name="actionCollapseAll"><property name="text"><string>Collapse All</string></property></action>
+  <action name="actionHierarchyBrowser"><property name="text"><string>Hierarchy Browser...</string></property></action>
+  <action name="actionShowChunkTree">
+   <property name="checkable"><bool>true</bool></property>
+   <property name="checked"><bool>true</bool></property>
+   <property name="text"><string>Show Chunk Tree</string></property>
+  </action>
+  <action name="actionShowDetails">
+   <property name="checkable"><bool>true</bool></property>
+   <property name="checked"><bool>true</bool></property>
+   <property name="text"><string>Show Details</string></property>
+  </action>
+  <action name="actionShowRenderPane">
+   <property name="checkable"><bool>true</bool></property>
+   <property name="checked"><bool>true</bool></property>
+   <property name="text"><string>Show Render Pane</string></property>
+  </action>
+  <action name="actionShowRenderTabs">
+   <property name="checkable"><bool>true</bool></property>
+   <property name="checked"><bool>true</bool></property>
+   <property name="text"><string>Show Render Tabs</string></property>
+  </action>
+  <action name="actionAddRenderSkeletons"><property name="text"><string>Add Model/Skeleton...</string></property></action>
+  <action name="actionAddRenderAnimations"><property name="text"><string>Add Animations...</string></property></action>
+  <action name="actionSetRenderTextureFolder"><property name="text"><string>Set Texture Folder...</string></property></action>
+  <action name="actionClearRenderTextureFolder"><property name="text"><string>Clear Texture Folder</string></property></action>
+  <action name="actionRemoveSelectedRenderAsset"><property name="text"><string>Remove Selected Render Asset</string></property></action>
+  <action name="actionClearAnimationLibraries"><property name="text"><string>Clear Animation Libraries</string></property></action>
+  <action name="actionToggleRenderPlayback">
+   <property name="text"><string>Play/Pause Animation</string></property>
+   <property name="shortcut"><string>Space</string></property>
+  </action>
+  <action name="actionStopRenderPlayback"><property name="text"><string>Stop Animation</string></property></action>
+  <action name="actionExportCurrentAnimationGif"><property name="text"><string>Export Current Animation GIF...</string></property></action>
+  <action name="batchExportChunkListAction"><property name="text"><string>Export Chunk List...</string></property></action>
+  <action name="batchExportJsonAction"><property name="text"><string>Export JSON Batch...</string></property></action>
+  <action name="batchValidateRoundTripAction"><property name="text"><string>Round-Trip Validate Batch...</string></property></action>
+  <action name="actionCopyPureHumanAnimations"><property name="text"><string>Copy Pure Human Animations by Skeleton...</string></property></action>
+  <action name="actionExportAnimationGifs"><property name="text"><string>Export Animation GIFs...</string></property></action>
+ </widget>
+ <resources/>
+ <connections/>
+</ui>

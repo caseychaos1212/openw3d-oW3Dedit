@@ -1,0 +1,181 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ui version="4.0">
+ <class>RenderPanel</class>
+ <widget class="QWidget" name="RenderPanel">
+  <layout class="QVBoxLayout" name="panelLayout">
+   <property name="spacing">
+    <number>0</number>
+   </property>
+   <property name="leftMargin">
+    <number>0</number>
+   </property>
+   <property name="topMargin">
+    <number>0</number>
+   </property>
+   <property name="rightMargin">
+    <number>0</number>
+   </property>
+   <property name="bottomMargin">
+    <number>0</number>
+   </property>
+   <item>
+    <widget class="QSplitter" name="renderSplitter">
+     <property name="orientation">
+      <enum>Qt::Orientation::Vertical</enum>
+     </property>
+     <property name="childrenCollapsible">
+      <bool>false</bool>
+     </property>
+     <property name="handleWidth">
+      <number>10</number>
+     </property>
+     <property name="styleSheet">
+      <string>QSplitter::handle:vertical { background: palette(mid); }</string>
+     </property>
+     <widget class="QWidget" name="renderViewportSection">
+      <property name="minimumSize">
+       <size>
+        <width>0</width>
+        <height>140</height>
+       </size>
+      </property>
+      <layout class="QVBoxLayout" name="renderViewportLayout">
+       <property name="spacing">
+        <number>6</number>
+       </property>
+       <property name="leftMargin">
+        <number>0</number>
+       </property>
+       <property name="topMargin">
+        <number>0</number>
+       </property>
+       <property name="rightMargin">
+        <number>0</number>
+       </property>
+       <property name="bottomMargin">
+        <number>0</number>
+       </property>
+       <item>
+        <widget class="QWidget" name="renderViewportHost" native="true">
+         <property name="minimumSize">
+          <size>
+           <width>0</width>
+           <height>180</height>
+          </size>
+         </property>
+         <layout class="QVBoxLayout" name="renderViewportHostLayout">
+          <property name="leftMargin">
+           <number>0</number>
+          </property>
+          <property name="topMargin">
+           <number>0</number>
+          </property>
+          <property name="rightMargin">
+           <number>0</number>
+          </property>
+          <property name="bottomMargin">
+           <number>0</number>
+          </property>
+         </layout>
+        </widget>
+       </item>
+       <item>
+        <layout class="QHBoxLayout" name="renderControlsLayout">
+         <property name="spacing">
+          <number>8</number>
+         </property>
+         <item><widget class="QCheckBox" name="renderFogToggle"><property name="text"><string>Fog</string></property><property name="checked"><bool>true</bool></property></widget></item>
+         <item><widget class="QCheckBox" name="renderLodToggle"><property name="text"><string>LOD</string></property><property name="checked"><bool>true</bool></property></widget></item>
+         <item><widget class="QCheckBox" name="renderUvDebugToggle"><property name="text"><string>UV Debug</string></property></widget></item>
+         <item><widget class="QCheckBox" name="renderLodLockToggle"><property name="text"><string>Lock LOD</string></property></widget></item>
+         <item><widget class="QLabel" name="lodLevelLabel"><property name="text"><string>LOD Level</string></property></widget></item>
+         <item>
+          <widget class="QSpinBox" name="renderLodLevelSpin">
+           <property name="enabled"><bool>false</bool></property>
+           <property name="maximum"><number>255</number></property>
+          </widget>
+         </item>
+         <item><widget class="QCheckBox" name="renderCameraGizmoToggle"><property name="text"><string>Camera Gizmo</string></property><property name="checked"><bool>true</bool></property></widget></item>
+         <item><widget class="QCheckBox" name="renderPivotMarkersToggle"><property name="text"><string>Pivot Markers</string></property><property name="checked"><bool>true</bool></property></widget></item>
+         <item><widget class="QLabel" name="lodBiasLabel"><property name="text"><string>LOD Bias</string></property></widget></item>
+         <item>
+          <widget class="QDoubleSpinBox" name="renderLodBiasSpin">
+           <property name="decimals"><number>2</number></property>
+           <property name="minimum"><double>0.100000000000000</double></property>
+           <property name="maximum"><double>8.000000000000000</double></property>
+           <property name="singleStep"><double>0.100000000000000</double></property>
+           <property name="value"><double>1.000000000000000</double></property>
+          </widget>
+         </item>
+         <item>
+          <spacer name="renderControlsSpacer">
+           <property name="orientation"><enum>Qt::Orientation::Horizontal</enum></property>
+           <property name="sizeHint" stdset="0"><size><width>40</width><height>20</height></size></property>
+          </spacer>
+         </item>
+        </layout>
+       </item>
+       <item><widget class="QLabel" name="renderStatsLabel"><property name="text"><string>Draws: 0 | Tris: 0</string></property></widget></item>
+       <item><widget class="QLabel" name="renderSelectionLabel"><property name="text"><string>Selection: none</string></property></widget></item>
+      </layout>
+     </widget>
+     <widget class="QWidget" name="renderTabsSection">
+      <layout class="QVBoxLayout" name="renderTabsSectionLayout">
+       <property name="spacing"><number>0</number></property>
+       <property name="leftMargin"><number>0</number></property>
+       <property name="topMargin"><number>0</number></property>
+       <property name="rightMargin"><number>0</number></property>
+       <property name="bottomMargin"><number>0</number></property>
+       <item>
+        <widget class="QTabWidget" name="renderTabs">
+         <property name="minimumSize"><size><width>0</width><height>0</height></size></property>
+         <widget class="QWidget" name="warningsTab">
+          <attribute name="title"><string>Scene Warnings</string></attribute>
+          <layout class="QVBoxLayout" name="warningsLayout">
+           <property name="leftMargin"><number>0</number></property>
+           <property name="topMargin"><number>0</number></property>
+           <property name="rightMargin"><number>0</number></property>
+           <property name="bottomMargin"><number>0</number></property>
+           <item>
+            <widget class="QPlainTextEdit" name="renderWarningsEdit">
+             <property name="readOnly"><bool>true</bool></property>
+             <property name="placeholderText"><string>No scene warnings.</string></property>
+            </widget>
+           </item>
+          </layout>
+         </widget>
+         <widget class="QWidget" name="animationsTab">
+          <attribute name="title"><string>Animations</string></attribute>
+          <layout class="QVBoxLayout" name="animationsTabLayout">
+           <property name="leftMargin"><number>0</number></property>
+           <property name="topMargin"><number>0</number></property>
+           <property name="rightMargin"><number>0</number></property>
+           <property name="bottomMargin"><number>0</number></property>
+           <item>
+            <widget class="QScrollArea" name="renderAnimationTabScroll">
+             <property name="frameShape"><enum>QFrame::Shape::NoFrame</enum></property>
+             <property name="widgetResizable"><bool>true</bool></property>
+             <widget class="QWidget" name="renderAnimationTab">
+              <layout class="QVBoxLayout" name="renderAnimationLayout">
+               <property name="spacing"><number>6</number></property>
+               <property name="leftMargin"><number>6</number></property>
+               <property name="topMargin"><number>6</number></property>
+               <property name="rightMargin"><number>6</number></property>
+               <property name="bottomMargin"><number>6</number></property>
+              </layout>
+             </widget>
+            </widget>
+           </item>
+          </layout>
+         </widget>
+        </widget>
+       </item>
+      </layout>
+     </widget>
+    </widget>
+   </item>
+  </layout>
+ </widget>
+ <resources/>
+ <connections/>
+</ui>
