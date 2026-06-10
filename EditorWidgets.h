@@ -72,6 +72,24 @@ private:
     QPushButton* applyButton = nullptr;
 };
 
+class RawTextEditorWidget : public QWidget {
+    Q_OBJECT
+public:
+    explicit RawTextEditorWidget(const QString& label, QWidget* parent = nullptr);
+    void setChunk(const std::shared_ptr<ChunkItem>& chunk);
+
+signals:
+    void chunkEdited();
+
+private slots:
+    void applyChanges();
+
+private:
+    std::weak_ptr<ChunkItem> chunk;
+    QPlainTextEdit* textEdit = nullptr;
+    QPushButton* applyButton = nullptr;
+};
+
 class HierarchyHeaderEditorWidget : public QWidget {
     Q_OBJECT
 public:

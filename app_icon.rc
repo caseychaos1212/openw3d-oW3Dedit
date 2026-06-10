@@ -1,0 +1,3 @@
+#define IDI_APP_ICON 101
+
+IDI_APP_ICON ICON "resources\\ow3dedit_logo_v2.ico"
