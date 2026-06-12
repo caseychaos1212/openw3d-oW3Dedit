@@ -138,6 +138,7 @@ private slots:
     void OpenRecentFile();  // will be connected to recent file actions
     void on_actionExportChunkList_triggered();
     void on_actionExportJsonBatch_triggered();
+    void on_actionImportJsonBatch_triggered();
     void on_actionValidateRoundTripBatch_triggered();
     void on_actionCopyPureHumanAnimationsBySkeleton_triggered();
     void on_actionExportSkeletonAAnimationGifs_triggered();

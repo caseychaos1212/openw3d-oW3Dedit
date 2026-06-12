@@ -43,6 +43,7 @@
 #include <QFile>
 #include <QDir>
 #include <QDirIterator>
+#include <QHash>
 #include <QFileInfo>
 #include <QDateTime>
 #include <QProgressDialog>
@@ -16420,6 +16421,157 @@ void MainWindow::on_actionExportJsonBatch_triggered()
     }
     else {
         QMessageBox::warning(this, tr("Export JSON"), summary);
+    }
+}
+
+void MainWindow::on_actionImportJsonBatch_triggered()
+{
+    QString startDir = lastDirectory.isEmpty() ? QDir::homePath() : lastDirectory;
+    QString jsonDir = QFileDialog::getExistingDirectory(
+        this,
+        tr("Select JSON Source Directory"),
+        startDir,
+        QFileDialog::ShowDirsOnly | QFileDialog::DontResolveSymlinks);
+    if (jsonDir.isEmpty()) return;
+
+    QString w3dDir = QFileDialog::getExistingDirectory(
+        this,
+        tr("Select Target W3D Directory"),
+        jsonDir,
+        QFileDialog::ShowDirsOnly | QFileDialog::DontResolveSymlinks);
+    if (w3dDir.isEmpty()) return;
+
+    // Collect the JSON files to import.
+    QDir jsonDirObj(jsonDir);
+    const QFileInfoList jsonFiles = jsonDirObj.entryInfoList(
+        QStringList() << QStringLiteral("*.json"),
+        QDir::Files | QDir::Readable,
+        QDir::Name);
+    if (jsonFiles.isEmpty()) {
+        QMessageBox::information(this, tr("Import JSON Batch"),
+            tr("No .json files found in %1.").arg(jsonDir));
+        return;
+    }
+
+    // Index the target W3D/WLT files by lowercase base name so we can match by filename.
+    QDir w3dDirObj(w3dDir);
+    const QFileInfoList w3dFiles = w3dDirObj.entryInfoList(
+        QStringList() << QStringLiteral("*.w3d") << QStringLiteral("*.wlt"),
+        QDir::Files,
+        QDir::Name);
+    QHash<QString, QString> w3dByBaseName;
+    for (const QFileInfo& w3dInfo : w3dFiles) {
+        w3dByBaseName.insert(w3dInfo.completeBaseName().toLower(), w3dInfo.absoluteFilePath());
+    }
+
+    QProgressDialog progress(tr("Preparing import..."), tr("Cancel"), 0, jsonFiles.size(), this);
+    progress.setWindowTitle(tr("Import JSON Batch"));
+    progress.setWindowModality(Qt::WindowModal);
+    progress.setMinimumDuration(0);
+    progress.setAutoClose(false);
+    progress.setAutoReset(false);
+    progress.setValue(0);
+
+    int successCount = 0;
+    QStringList unmatched;
+    QStringList failures;
+    bool canceled = false;
+
+    for (int i = 0; i < jsonFiles.size(); ++i) {
+        const QFileInfo& jsonInfo = jsonFiles.at(i);
+        progress.setValue(i);
+        progress.setLabelText(tr("Importing %1 (%2/%3)")
+            .arg(jsonInfo.fileName())
+            .arg(i + 1)
+            .arg(jsonFiles.size()));
+        QCoreApplication::processEvents();
+        if (progress.wasCanceled()) {
+            canceled = true;
+            break;
+        }
+
+        // Match this JSON to a W3D/WLT file by base name.
+        const QString w3dPath = w3dByBaseName.value(jsonInfo.completeBaseName().toLower());
+        if (w3dPath.isEmpty()) {
+            unmatched << jsonInfo.fileName();
+            continue;
+        }
+
+        QFile jsonFile(jsonInfo.absoluteFilePath());
+        if (!jsonFile.open(QIODevice::ReadOnly)) {
+            failures << tr("%1 (cannot read JSON)").arg(jsonInfo.fileName());
+            continue;
+        }
+        const QByteArray jsonBytes = jsonFile.readAll();
+        jsonFile.close();
+
+        ordered_json doc;
+        try {
+            doc = ordered_json::parse(jsonBytes.constBegin(), jsonBytes.constEnd());
+        }
+        catch (const std::exception& e) {
+            failures << tr("%1 (invalid JSON: %2)")
+                .arg(jsonInfo.fileName(), QString::fromUtf8(e.what()));
+            continue;
+        }
+
+        ChunkData cd;
+        std::vector<std::string> importWarnings;
+        try {
+            if (!cd.fromJson(doc, &importWarnings)) {
+                failures << tr("%1 (fromJson returned false)").arg(jsonInfo.fileName());
+                continue;
+            }
+        }
+        catch (const std::exception& e) {
+            failures << tr("%1 (import failed: %2)")
+                .arg(jsonInfo.fileName(), QString::fromUtf8(e.what()));
+            continue;
+        }
+
+        SyncHLodCountsForSave(&cd);
+        SyncPureAnimationHeaderNameForSave(&cd, w3dPath);
+        if (!cd.saveToFile(w3dPath.toStdString())) {
+            failures << tr("%1 (failed to write %2)")
+                .arg(jsonInfo.fileName(), QFileInfo(w3dPath).fileName());
+            continue;
+        }
+
+        ++successCount;
+    }
+    progress.setValue(jsonFiles.size());
+
+    lastDirectory = jsonDir;
+
+    QString summary = tr("%1\nImported %2 of %3 JSON file(s) into %4.")
+        .arg(canceled ? tr("Import canceled.") : tr("Import completed."))
+        .arg(successCount)
+        .arg(jsonFiles.size())
+        .arg(w3dDir);
+
+    if (!unmatched.isEmpty()) {
+        QStringList preview = unmatched.mid(0, 20);
+        if (unmatched.size() > preview.size()) {
+            preview << tr("... (%1 additional)").arg(unmatched.size() - preview.size());
+        }
+        summary += tr("\n\nNo matching W3D/WLT file (%1):\n%2")
+            .arg(unmatched.size())
+            .arg(preview.join("\n"));
+    }
+
+    if (!failures.isEmpty()) {
+        QStringList preview = failures.mid(0, 20);
+        if (failures.size() > preview.size()) {
+            preview << tr("... (%1 additional failures)").arg(failures.size() - preview.size());
+        }
+        summary += tr("\n\nFailures:\n%1").arg(preview.join("\n"));
+    }
+
+    if (!canceled && unmatched.isEmpty() && failures.isEmpty()) {
+        QMessageBox::information(this, tr("Import JSON Batch"), summary);
+    }
+    else {
+        QMessageBox::warning(this, tr("Import JSON Batch"), summary);
     }
 }
 
