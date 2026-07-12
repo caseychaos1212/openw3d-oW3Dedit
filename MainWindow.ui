@@ -309,6 +309,7 @@
     </property>
     <addaction name="batchExportChunkListAction"/>
     <addaction name="batchExportJsonAction"/>
+    <addaction name="batchImportJsonAction"/>
     <addaction name="batchValidateRoundTripAction"/>
     <addaction name="actionCopyPureHumanAnimations"/>
     <addaction name="actionExportAnimationGifs"/>
@@ -395,6 +396,7 @@
   <action name="actionExportCurrentAnimationGif"><property name="text"><string>Export Current Animation GIF...</string></property></action>
   <action name="batchExportChunkListAction"><property name="text"><string>Export Chunk List...</string></property></action>
   <action name="batchExportJsonAction"><property name="text"><string>Export JSON Batch...</string></property></action>
+  <action name="batchImportJsonAction"><property name="text"><string>Import JSON Batch...</string></property></action>
   <action name="batchValidateRoundTripAction"><property name="text"><string>Round-Trip Validate Batch...</string></property></action>
   <action name="actionCopyPureHumanAnimations"><property name="text"><string>Copy Pure Human Animations by Skeleton...</string></property></action>
   <action name="actionExportAnimationGifs"><property name="text"><string>Export Animation GIFs...</string></property></action>

@@ -7153,6 +7153,7 @@ void MainWindow::connectDesignerActions()
 
     connect(ui->batchExportChunkListAction, &QAction::triggered, this, &MainWindow::on_actionExportChunkList_triggered);
     connect(ui->batchExportJsonAction, &QAction::triggered, this, &MainWindow::on_actionExportJsonBatch_triggered);
+    connect(ui->batchImportJsonAction, &QAction::triggered, this, &MainWindow::on_actionImportJsonBatch_triggered);
     connect(ui->batchValidateRoundTripAction, &QAction::triggered, this, &MainWindow::on_actionValidateRoundTripBatch_triggered);
     connect(ui->actionCopyPureHumanAnimations, &QAction::triggered, this, &MainWindow::on_actionCopyPureHumanAnimationsBySkeleton_triggered);
     connect(ui->actionExportAnimationGifs, &QAction::triggered, this, &MainWindow::on_actionExportSkeletonAAnimationGifs_triggered);
