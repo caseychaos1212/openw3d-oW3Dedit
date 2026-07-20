@@ -190,9 +190,6 @@ static bool RebuildPayloadFromChildren(
 
 
 bool ChunkData::loadFromFile(const std::string& filename) {
-    // Ensure previous data does not persist between loads
-    clear();
-    sourceFilename = std::filesystem::path(filename).filename().string();
     std::ifstream file(filename, std::ios::binary);
     if (!file) {
         std::cerr << "Failed to open file: " << filename << "\n";
@@ -200,44 +197,83 @@ bool ChunkData::loadFromFile(const std::string& filename) {
     }
 
     file.seekg(0, std::ios::end);
-    auto fileSize = file.tellg();
+    const std::streamoff fileSize = static_cast<std::streamoff>(file.tellg());
+    if (fileSize <= 0) {
+        std::cerr << "Invalid or empty file: " << filename << "\n";
+        return false;
+    }
     file.seekg(0, std::ios::beg);
+    if (!file) {
+        std::cerr << "Failed to seek in file: " << filename << "\n";
+        return false;
+    }
 
     std::cout << "Opening file: " << filename << "\n"
         << "File size: " << fileSize << "\n";
 
-    while (file && file.tellg() < fileSize) {
+    std::vector<std::shared_ptr<ChunkItem>> parsedChunks;
+    while (true) {
+        const std::streamoff startPos = static_cast<std::streamoff>(file.tellg());
+        if (startPos < 0 || startPos > fileSize) {
+            std::cerr << "Invalid read position while loading file: " << filename << "\n";
+            return false;
+        }
+        if (startPos == fileSize) {
+            break;
+        }
+        if (fileSize - startPos < 8) {
+            std::cerr << "Truncated top-level chunk header at offset "
+                << startPos << " in file: " << filename << "\n";
+            return false;
+        }
+
         auto chunk = std::make_shared<ChunkItem>();
-        std::streampos startPos = file.tellg();
 
         // 1 read ID
-        if (!readUint32(file, chunk->id)) break;
+        if (!readUint32(file, chunk->id)) {
+            std::cerr << "Failed to read top-level chunk ID at offset "
+                << startPos << " in file: " << filename << "\n";
+            return false;
+        }
 
         // 2 read raw length word  split out hasSubChunks bit
         uint32_t rawLen = 0;
-        if (!readUint32(file, rawLen)) break;
+        if (!readUint32(file, rawLen)) {
+            std::cerr << "Failed to read top-level chunk length at offset "
+                << startPos << " in file: " << filename << "\n";
+            return false;
+        }
         chunk->hasSubChunks = (rawLen & 0x80000000u) != 0;
         chunk->length = rawLen & 0x7FFFFFFFu;
 
-        // 3 compute end of data position and sanity check
-        std::streampos dataEnd = file.tellg()
-            + static_cast<std::streamoff>(chunk->length);
-        if (chunk->length > fileSize
-            || dataEnd > fileSize
-            || chunk->length > 100000000)
+        // 3 validate the payload length before allocating or reading
+        const std::streamoff payloadPos = static_cast<std::streamoff>(file.tellg());
+        const std::streamoff payloadBytesRemaining = fileSize - payloadPos;
+        if (chunk->length > 100000000
+            || static_cast<uint64_t>(chunk->length)
+                > static_cast<uint64_t>(payloadBytesRemaining))
         {
             std::cerr << "Suspicious chunk size at "
                 << startPos
                 << " ID: 0x" << std::hex << chunk->id
                 << std::dec << ", size: " << chunk->length
-                << "\n";
-            break;
+                << ", bytes remaining: " << payloadBytesRemaining
+                << " in file: " << filename << "\n";
+            return false;
         }
 
         // 4 read the payload
         chunk->data.resize(chunk->length);
-        file.read(reinterpret_cast<char*>(chunk->data.data()), chunk->length);
-        if (!file) break;
+        if (chunk->length > 0) {
+            file.read(
+                reinterpret_cast<char*>(chunk->data.data()),
+                static_cast<std::streamsize>(chunk->length));
+            if (!file) {
+                std::cerr << "Failed to read top-level chunk payload at offset "
+                    << payloadPos << " in file: " << filename << "\n";
+                return false;
+            }
+        }
         std::cout << "Top level chunk: 0x"
             << std::hex << chunk->id
             << std::dec << "  size=" << chunk->length
@@ -274,11 +310,11 @@ bool ChunkData::loadFromFile(const std::string& filename) {
         //    parseChunk(subStream, chunk);
       //  }
 
-        // 6 advance to next top level chunk
-        file.seekg(dataEnd);
-        chunks.push_back(std::move(chunk));
+        parsedChunks.push_back(std::move(chunk));
     }
 
+    chunks = std::move(parsedChunks);
+    sourceFilename = std::filesystem::path(filename).filename().string();
     return true;
 }
 
@@ -404,24 +440,33 @@ bool ChunkData::parseChunk(std::istream& stream, std::shared_ptr<ChunkItem>& par
 }
 
 bool ChunkData::saveToFile(const std::string& filename) {
+    // Complete serialization before opening the destination. This guarantees
+    // that an unsupported or invalid chunk cannot truncate an existing file.
+    std::vector<std::vector<uint8_t>> serializedChunks;
+    serializedChunks.reserve(chunks.size());
+    for (auto& chunk : chunks) {
+        std::vector<uint8_t> buffer;
+        if (!SerializeChunk(*chunk, buffer)) {
+            std::cerr << "Failed to serialize chunk 0x"
+                << std::hex << chunk->id << std::dec << "\n";
+            return false;
+        }
+        serializedChunks.push_back(std::move(buffer));
+    }
+
     std::ofstream out(filename, std::ios::binary | std::ios::trunc);
     if (!out) {
         std::cerr << "Failed to open file for writing: " << filename << "\n";
         return false;
     }
 
-    std::vector<uint8_t> buffer;
-    for (auto& chunk : chunks) {
-        if (!SerializeChunk(*chunk, buffer)) {
-            std::cerr << "Failed to serialize chunk 0x"
-                << std::hex << chunk->id << std::dec << "\n";
-            return false;
-        }
+    for (std::size_t i = 0; i < serializedChunks.size(); ++i) {
+        const std::vector<uint8_t>& buffer = serializedChunks[i];
         out.write(reinterpret_cast<const char*>(buffer.data()),
             static_cast<std::streamsize>(buffer.size()));
         if (!out) {
             std::cerr << "Failed to write chunk 0x"
-                << std::hex << chunk->id << std::dec << " to file.\n";
+                << std::hex << chunks[i]->id << std::dec << " to file.\n";
             return false;
         }
     }

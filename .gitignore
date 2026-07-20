@@ -27,3 +27,8 @@ CMakeUserPresets.json
 /oW3DDumpQt.dir
 /oW3DEdit.dir/Release
 /Release
+
+# Local, non-redistributable W3D regression corpus and generated test artifacts
+/local-test-corpus
+/test-output/
+/tools/verify.local.psd1

@@ -202,7 +202,10 @@
       <LinkLibraryDependencies>false</LinkLibraryDependencies>
     </ProjectReference>
     <PostBuildEvent>
-      <Command>C:\Qt\6.9.0\msvc2022_64\bin\windeployqt.exe "$(OutDir)\$(TargetFileName)"</Command>
+      <Command>C:\Qt\6.9.0\msvc2022_64\bin\windeployqt.exe "$(OutDir)\$(TargetFileName)"
+copy /Y "$(ProjectDir)README.md" "$(OutDir)README.md"
+copy /Y "$(ProjectDir)LICENSE" "$(OutDir)LICENSE"
+copy /Y "$(ProjectDir)CHANGELOG.md" "$(OutDir)CHANGELOG.md"</Command>
     </PostBuildEvent>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">
@@ -340,6 +343,7 @@
     <ClCompile Include="mainWindow.cpp">
       <AdditionalOptions>/bigobj %(AdditionalOptions)</AdditionalOptions>
     </ClCompile>
+    <ClInclude Include="AppVersion.h" />
     <ClInclude Include="backend\ChunkInterpreter.h" />
     <ClInclude Include="backend\ChunkJson.h" />
     <ClInclude Include="backend\ChunkNames.h" />

@@ -113,6 +113,10 @@ class MainWindow : public QMainWindow {
 public:
     MainWindow(QWidget* parent = nullptr);
     ~MainWindow() override;
+    int runCommandLineRoundTripValidation(
+        const QString& sourceDirectory,
+        const QString& outputDirectory,
+        const QString& modeToken);
 
 private slots:
     void newFile();
@@ -237,6 +241,11 @@ private:
     ValidatorRunMode loadValidatorRunModeSetting() const;
     void saveValidatorRunModeSetting(ValidatorRunMode mode) const;
     bool promptValidatorRunMode(ValidatorRunMode& outMode);
+    int executeRoundTripValidation(
+        const QString& sourceDirectory,
+        const QString& outputDirectory,
+        ValidatorRunMode runMode,
+        bool interactive);
     void rebuildRenderScene();
     void applyRenderSettingsToViewport();
     void clearArchiveRenderContext();

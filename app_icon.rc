@@ -1,3 +1,39 @@
+#include <windows.h>
+#include "AppVersion.h"
+
 #define IDI_APP_ICON 101
 
 IDI_APP_ICON ICON "resources\\ow3dedit_logo_v2.ico"
+
+VS_VERSION_INFO VERSIONINFO
+ FILEVERSION OW3DEDIT_VERSION_NUMERIC
+ PRODUCTVERSION OW3DEDIT_VERSION_NUMERIC
+ FILEFLAGSMASK VS_FFI_FILEFLAGSMASK
+#ifdef _DEBUG
+ FILEFLAGS VS_FF_DEBUG
+#else
+ FILEFLAGS 0x0L
+#endif
+ FILEOS VOS_NT_WINDOWS32
+ FILETYPE VFT_APP
+ FILESUBTYPE VFT2_UNKNOWN
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904B0"
+        BEGIN
+            VALUE "CompanyName", "oW3DEdit contributors"
+            VALUE "FileDescription", "oW3DEdit Westwood 3D Asset Editor"
+            VALUE "FileVersion", OW3DEDIT_VERSION_NUMERIC_STRING
+            VALUE "InternalName", "oW3DEdit"
+            VALUE "LegalCopyright", "Copyright (C) 2026 oW3DEdit contributors"
+            VALUE "OriginalFilename", "oW3DEdit.exe"
+            VALUE "ProductName", "oW3DEdit"
+            VALUE "ProductVersion", OW3DEDIT_VERSION_SEMVER
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x0409, 1200
+    END
+END

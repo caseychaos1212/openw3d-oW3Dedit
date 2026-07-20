@@ -48,6 +48,9 @@
     </ClCompile>
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="AppVersion.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
     <ClInclude Include="C:\Users\admin\source\repos\openw3d-oW3Dedit\MainWindow.h">
       <Filter>Header Files</Filter>
     </ClInclude>
