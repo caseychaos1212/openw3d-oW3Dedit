@@ -102,6 +102,18 @@ struct RenderVertex {
     std::array<float, 4> boneWeights{ 0.0f, 0.0f, 0.0f, 0.0f };
 };
 
+enum class RenderCollisionBoxType {
+    None,
+    AxisAligned,
+    Oriented
+};
+
+inline Mat4 ResolveCollisionBoxTransform(RenderCollisionBoxType type, const Mat4& world) {
+    // W3D AABoxes inherit translation only, including for an off-center box.
+    return type == RenderCollisionBoxType::AxisAligned
+        ? Translation({ world.m[12], world.m[13], world.m[14] }) : world;
+}
+
 struct RenderMesh {
     std::string fullName;
     std::vector<RenderVertex> vertices;
@@ -111,6 +123,11 @@ struct RenderMesh {
     Vec3 boundsMax{};
     Vec3 boundsCenter{};
     float boundsRadius = 0.0f;
+    // Preserve SphRadius for inspection; boundsRadius may use a fallback for LOD/picking.
+    float headerSphereRadius = 0.0f;
+    // Authored WorldBox objects share mesh instance bindings, but have no triangles.
+    RenderCollisionBoxType collisionBoxType = RenderCollisionBoxType::None;
+    const ::ChunkItem* sourceBoxChunk = nullptr;
     bool twoSided = false;
     bool hidden = false;
     bool skinned = false;

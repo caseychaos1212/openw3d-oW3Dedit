@@ -4,8 +4,14 @@ Notable changes to oW3DEdit are documented here.
 
 ## [Unreleased]
 
+### Added
+
+- Render menu toggles for mesh-header bounding boxes and bounding spheres, with wireframes that follow mesh placement and visibility.
+- Separate WorldBox collision overlay using authored box centers/extents, with hierarchy/LOD bindings and AABox/OBBox transform behavior.
+
 ### Fixed
 
+- Align viewport orbit and orientation-cube rotation, and scale panning to the camera distance, field of view, and viewport height so close-up models follow the cursor without jumping.
 - Open and losslessly preserve W3D files with short legacy `FF` trailers after the final chunk.
 - Retarget the checked-in MSVC project to Qt 6.9.3 and centralize its overridable Qt root path.
 

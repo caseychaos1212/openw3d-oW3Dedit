@@ -64,6 +64,9 @@ private:
         bool skinned = false;
         Vec3 boundsCenter{};
         float boundsRadius = 0.0f;
+        RenderCollisionBoxType collisionBoxType = RenderCollisionBoxType::None;
+        std::optional<Mat4> boundingBoxTransform;
+        std::optional<Mat4> boundingSphereTransform;
         std::vector<CpuVertex> cpuVertices;
     };
 
@@ -99,6 +102,7 @@ private:
     bool CreateShaders();
     bool CreateDefaultTexture();
     bool CreateConstantBuffers();
+    bool CreateBoundsGeometry();
     void ReleaseRenderTargets();
 
     bool BuildGpuMesh(const RenderMesh& mesh, GpuMesh& outMesh);
@@ -114,6 +118,7 @@ private:
         FrameStats& stats);
 
     Mat4 BuildPivotWorldTransform(int hierarchyIndex, int pivotIndex) const;
+    void DrawMeshBounds(const GpuMesh& mesh, const Mat4& world, FrameStats& stats);
     std::vector<std::vector<Mat4>> BuildAnimatedHierarchyWorldTransforms(float timeSeconds) const;
     std::vector<std::vector<Mat4>> BuildCpuSkinHierarchyWorldTransforms(float timeSeconds) const;
     bool UpdateSkinnedMeshVertices(
@@ -154,6 +159,7 @@ private:
 
     Microsoft::WRL::ComPtr<ID3D11Buffer> m_frameCBuffer;
     Microsoft::WRL::ComPtr<ID3D11Buffer> m_objectCBuffer;
+    Microsoft::WRL::ComPtr<ID3D11Buffer> m_boundsVertexBuffer;
 
     GpuTexture m_defaultTexture;
 

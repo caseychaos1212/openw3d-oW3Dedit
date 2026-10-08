@@ -40,6 +40,12 @@ oW3DEdit does not bundle Microsoft's C++ runtime DLLs. Install the [latest suppo
 
 JSON import and export are available from the **File** menu. Folder-wide operations are under **Batch Tools**.
 
+In the render pane, **Alt + left drag** or dragging the orientation cube orbits the camera; **right/middle drag** pans, and the mouse wheel zooms. Panning follows the cursor at the orbit target's depth and adjusts to zoom, field of view, and viewport size. The cube uses the same Z-up orientation as the scene (X red, Y green, Z blue).
+
+Use **Render > Show Mesh Bounding Boxes** or **Show Mesh Bounding Spheres** to inspect the bounds stored in mesh headers. Cyan boxes use `Min`/`Max`; orange sphere outlines use `SphCenter`/`SphRadius`. Both start off and follow visible mesh instances and LOD selection. The outlines remain visible through geometry and follow object/hierarchy placement; they show the stored bounds, not bounds recalculated from animated vertices. Invalid bounds and spheres with nonpositive radii are skipped. These display options do not change the asset or appear in animation GIF exports.
+
+**Render > Show WorldBoxes (Collision)** separately displays authored `WorldBox` collision objects as yellow wireframes. It reads `Center`/`Extent` from `W3D_CHUNK_BOX`, including case-insensitive `WorldBox.00` LOD names, and follows the object's hierarchy/animation and LOD binding. AABoxes retain world-axis alignment and inherit translation only; OBBoxes follow rotation too, matching the [W3D box implementation](https://github.com/electronicarts/CnC_Renegade/blob/main/Code/ww3d2/boxrobj.cpp). The toggle starts off, leaves source data unchanged, and is excluded from GIF exports. Malformed boxes are skipped with a render warning.
+
 Batch JSON import recursively mirrors the directory layout created by batch export. It skips ambiguous `.w3d`/`.wlt` matches and imports that produce warnings. Each successful replacement is serialized and validated before the target is changed, and the original target is retained beside it as a `.bak` file.
 
 ## Building from source

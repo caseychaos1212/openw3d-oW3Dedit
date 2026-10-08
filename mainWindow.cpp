@@ -6894,6 +6894,12 @@ MainWindow::MainWindow(QWidget* parent)
     connect(renderPivotMarkersToggle, &QCheckBox::toggled, this, [this](bool) {
         applyRenderSettingsToViewport();
         });
+    connect(ui->actionShowMeshBoundingBoxes, &QAction::toggled,
+        this, &MainWindow::applyRenderSettingsToViewport);
+    connect(ui->actionShowMeshBoundingSpheres, &QAction::toggled,
+        this, &MainWindow::applyRenderSettingsToViewport);
+    connect(ui->actionShowWorldBoxes, &QAction::toggled,
+        this, &MainWindow::applyRenderSettingsToViewport);
     connect(renderLodBiasSpin, qOverload<double>(&QDoubleSpinBox::valueChanged), this, [this](double) {
         applyRenderSettingsToViewport();
         });
@@ -11416,6 +11422,9 @@ void MainWindow::applyRenderSettingsToViewport() {
     settings.lockedLodLevel = renderLodLevelSpin ? renderLodLevelSpin->value() : 0;
     settings.showCameraGizmo = renderCameraGizmoToggle ? renderCameraGizmoToggle->isChecked() : true;
     settings.showPivotMarkers = renderPivotMarkersToggle ? renderPivotMarkersToggle->isChecked() : true;
+    settings.showMeshBoundingBoxes = ui->actionShowMeshBoundingBoxes->isChecked();
+    settings.showMeshBoundingSpheres = ui->actionShowMeshBoundingSpheres->isChecked();
+    settings.showWorldBoxes = ui->actionShowWorldBoxes->isChecked();
     renderViewport->SetRenderSettings(settings);
 }
 

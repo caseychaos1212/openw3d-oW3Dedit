@@ -76,6 +76,7 @@ constexpr uint32_t kChunkHLodHeader = 0x0701;
 constexpr uint32_t kChunkHLodLodArray = 0x0702;
 constexpr uint32_t kChunkHLodSubObjectArrayHeader = 0x0703;
 constexpr uint32_t kChunkHLodSubObject = 0x0704;
+constexpr uint32_t kChunkBox = 0x0740;
 constexpr uint32_t kChunkSecondaryVertices = 0x0C00;
 constexpr uint32_t kChunkSecondaryVertexNormals = 0x0C01;
 constexpr uint32_t kChunkVertexInfluencesExtended = 0x0C03;
@@ -1802,6 +1803,7 @@ std::optional<RenderMesh> BuildRenderMeshFromChunk(
         subMesh.boundsCenter = boundsCenter;
         subMesh.boundsRadius =
             (headerValue.SphRadius > 0.0f) ? headerValue.SphRadius : ComputeRadiusFromBounds(boundsMin, boundsMax);
+        subMesh.headerSphereRadius = headerValue.SphRadius;
         subMesh.sourceMeshHeaderChunk = headerChunk.get();
         subMesh.skinned = skinned;
         subMesh.hasSecondaryVertexStream = !secondaryVertices.empty();
@@ -3556,8 +3558,74 @@ void BuildLooseNodes(BuildContext& ctx) {
         node.hierarchyIndex = -1;
         node.pivotIndex = -1;
         node.localTransform = Mat4::Identity();
-        node.sourceBindingChunk = ctx.result.scene.meshes[i].sourceMeshHeaderChunk;
+        const auto& mesh = ctx.result.scene.meshes[i];
+        node.sourceBindingChunk = mesh.sourceBoxChunk ? mesh.sourceBoxChunk : mesh.sourceMeshHeaderChunk;
         ctx.result.scene.looseNodes.push_back(std::move(node));
+    }
+}
+
+bool IsWorldBoxName(const std::string& fullName) {
+    std::string name = NormalizeName(fullName);
+    const auto suffix = name.find_last_of('.');
+    if (suffix != std::string::npos && suffix + 1 < name.size()
+        && std::all_of(name.begin() + suffix + 1, name.end(),
+            [](unsigned char c) { return std::isdigit(c) != 0; }))
+    {
+        name.resize(suffix); // WorldBox.00 is used by LOD models.
+    }
+    const auto separator = name.find_last_of('.');
+    return name.substr(separator == std::string::npos ? 0 : separator + 1) == "worldbox";
+}
+
+void ParseWorldBoxes(const W3DChunk& roots, BuildContext& ctx, bool supplemental, bool referenceOnly) {
+    std::vector<std::shared_ptr<ChunkItem>> boxes;
+    for (const auto& root : roots) {
+        CollectChunksByIdRecursive(root, kChunkBox, boxes);
+    }
+    for (const auto& chunk : boxes) {
+        const auto box = ParseStructWithWarning<W3dBoxStruct>(chunk, ctx.result.warnings);
+        if (!box) {
+            continue;
+        }
+        const std::string name = ReadFixedString(box->Name, sizeof(box->Name));
+        if (!IsWorldBoxName(name)) {
+            continue;
+        }
+        const Vec3 center{ box->Center.X, box->Center.Y, box->Center.Z };
+        const Vec3 extent{ box->Extent.X, box->Extent.Y, box->Extent.Z };
+        const auto finite = [](const Vec3& v) {
+            return std::isfinite(v.x) && std::isfinite(v.y) && std::isfinite(v.z);
+        };
+        if (!finite(center) || !finite(extent) || !finite(center - extent)
+            || !finite(center + extent) || !finite(extent * 2.0f)
+            || !std::isfinite(Length(extent))
+            || extent.x < 0.0f || extent.y < 0.0f || extent.z < 0.0f)
+        {
+            ctx.result.warnings.push_back({ SceneBuildWarningCode::InvalidIndex,
+                BuildChunkPath(chunk.get()), "WorldBox has invalid center/extents; its overlay was skipped." });
+            continue;
+        }
+
+        RenderMesh mesh{};
+        mesh.fullName = name;
+        mesh.boundsCenter = center;
+        mesh.boundsMin = center - extent;
+        mesh.boundsMax = center + extent;
+        mesh.boundsRadius = Length(extent);
+        // The W3D loader chooses OBBox when ORIENTED is set, AABox otherwise.
+        mesh.collisionBoxType = (box->Attributes & static_cast<uint32_t>(BoxAttr::W3D_BOX_ATTRIBUTE_ORIENTED))
+            ? RenderCollisionBoxType::Oriented : RenderCollisionBoxType::AxisAligned;
+        mesh.sourceBoxChunk = chunk.get();
+        mesh.sourceFromSupplemental = supplemental || referenceOnly;
+        const int index = static_cast<int>(ctx.result.scene.meshes.size());
+        ctx.meshByName.emplace(NormalizeName(name), index);
+        ctx.result.scene.meshes.push_back(std::move(mesh));
+        if (supplemental) {
+            ctx.supplementalMeshes.insert(index);
+        }
+        if (referenceOnly) {
+            ctx.referenceOnlyMeshes.insert(index);
+        }
     }
 }
 
@@ -3618,11 +3686,14 @@ SceneBuildResult BuildRenderScene(
     const std::vector<std::shared_ptr<ChunkItem>> hierarchyRoots =
         CollectAllRoots(primaryRoots, skeletonSupplementalRoots, referenceOnlyRoots);
     ParseMeshes(primaryRoots, ctx, false, false);
+    ParseWorldBoxes(primaryRoots, ctx, false, false);
     if (skeletonSupplementalRoots && !skeletonSupplementalRoots->empty()) {
         ParseMeshes(*skeletonSupplementalRoots, ctx, true, false);
+        ParseWorldBoxes(*skeletonSupplementalRoots, ctx, true, false);
     }
     if (referenceOnlyRoots && !referenceOnlyRoots->empty()) {
         ParseMeshes(*referenceOnlyRoots, ctx, false, true);
+        ParseWorldBoxes(*referenceOnlyRoots, ctx, false, true);
     }
     ParseHierarchies(hierarchyRoots, ctx);
 

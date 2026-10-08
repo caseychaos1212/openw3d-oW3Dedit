@@ -27,6 +27,28 @@
 namespace OW3D::Render {
 namespace {
 
+constexpr UINT kBoundsBoxVertexCount = 24;
+constexpr UINT kBoundsSphereSegments = 64;
+constexpr UINT kBoundsSphereVertexCount = 3 * kBoundsSphereSegments * 2;
+
+bool IsFinite(const Vec3& value) {
+    return std::isfinite(value.x) && std::isfinite(value.y) && std::isfinite(value.z);
+}
+
+std::optional<Mat4> BoundsBoxTransform(const Vec3& min, const Vec3& max) {
+    const Vec3 extent = max - min;
+    if (!IsFinite(min) || !IsFinite(max) || !IsFinite(extent)
+        || extent.x < 0.0f || extent.y < 0.0f || extent.z < 0.0f)
+    {
+        return std::nullopt;
+    }
+    Mat4 box = Translation(min);
+    box.m[0] = extent.x;
+    box.m[5] = extent.y;
+    box.m[10] = extent.z;
+    return box;
+}
+
 constexpr uint32_t MakeFourCC(char a, char b, char c, char d) {
     return static_cast<uint32_t>(static_cast<uint8_t>(a))
         | (static_cast<uint32_t>(static_cast<uint8_t>(b)) << 8)
@@ -323,6 +345,7 @@ void D3D11RenderBackend::Shutdown() {
 
     m_defaultTexture = {};
     m_objectCBuffer.Reset();
+    m_boundsVertexBuffer.Reset();
     m_frameCBuffer.Reset();
     m_blendOpaque.Reset();
     m_depthStateCache.clear();
@@ -665,6 +688,7 @@ void D3D11RenderBackend::RenderFrame(const std::function<void()>& overlayCallbac
     struct DrawCommand {
         GpuMesh* mesh = nullptr;
         Mat4 world = Mat4::Identity();
+        Mat4 boundsWorld = Mat4::Identity();
         const RenderMaterial* material = nullptr;
         bool selected = false;
         float distanceToCamera = 0.0f;
@@ -673,6 +697,7 @@ void D3D11RenderBackend::RenderFrame(const std::function<void()>& overlayCallbac
     std::vector<DrawCommand> transparentDraws;
     auto enqueueDraw = [&](GpuMesh& gpuMesh,
         const Mat4& world,
+        const Mat4& boundsWorld,
         const RenderMaterial* material,
         bool selected,
         float distanceToCamera)
@@ -680,6 +705,7 @@ void D3D11RenderBackend::RenderFrame(const std::function<void()>& overlayCallbac
         DrawCommand command{};
         command.mesh = &gpuMesh;
         command.world = world;
+        command.boundsWorld = boundsWorld;
         command.material = material;
         command.selected = selected;
         command.distanceToCamera = distanceToCamera;
@@ -728,7 +754,8 @@ void D3D11RenderBackend::RenderFrame(const std::function<void()>& overlayCallbac
             }
 
             GpuMesh& gpuMesh = m_gpuMeshes[entry.meshIndex];
-            if (gpuMesh.hidden) {
+            if (gpuMesh.hidden || (gpuMesh.collisionBoxType != RenderCollisionBoxType::None
+                && !m_settings.showWorldBoxes)) {
                 continue;
             }
 
@@ -749,6 +776,7 @@ void D3D11RenderBackend::RenderFrame(const std::function<void()>& overlayCallbac
             if (const auto overrideIt = m_transformOverrides.find(key); overrideIt != m_transformOverrides.end()) {
                 world = overrideIt->second;
             }
+            world = ResolveCollisionBoxTransform(gpuMesh.collisionBoxType, world);
             Mat4 boundsWorld = world;
             if (gpuMesh.skinned
                 && entry.hierarchyIndex >= 0
@@ -780,7 +808,7 @@ void D3D11RenderBackend::RenderFrame(const std::function<void()>& overlayCallbac
             }
 
             const bool selected = m_selectedInstance.has_value() && *m_selectedInstance == key;
-            enqueueDraw(gpuMesh, world, material, selected, distanceToCamera);
+            enqueueDraw(gpuMesh, world, boundsWorld, material, selected, distanceToCamera);
         }
     }
 
@@ -791,7 +819,8 @@ void D3D11RenderBackend::RenderFrame(const std::function<void()>& overlayCallbac
         }
 
         GpuMesh& gpuMesh = m_gpuMeshes[node.meshIndex];
-        if (gpuMesh.hidden) {
+        if (gpuMesh.hidden || (gpuMesh.collisionBoxType != RenderCollisionBoxType::None
+            && !m_settings.showWorldBoxes)) {
             continue;
         }
 
@@ -809,6 +838,7 @@ void D3D11RenderBackend::RenderFrame(const std::function<void()>& overlayCallbac
         if (const auto overrideIt = m_transformOverrides.find(key); overrideIt != m_transformOverrides.end()) {
             world = overrideIt->second;
         }
+        world = ResolveCollisionBoxTransform(gpuMesh.collisionBoxType, world);
         Mat4 boundsWorld = world;
         if (gpuMesh.skinned
             && node.hierarchyIndex >= 0
@@ -835,7 +865,7 @@ void D3D11RenderBackend::RenderFrame(const std::function<void()>& overlayCallbac
         }
 
         const bool selected = m_selectedInstance.has_value() && *m_selectedInstance == key;
-        enqueueDraw(gpuMesh, world, material, selected, distanceToCamera);
+        enqueueDraw(gpuMesh, world, boundsWorld, material, selected, distanceToCamera);
     }
 
     for (const DrawCommand& draw : opaqueDraws) {
@@ -856,6 +886,35 @@ void D3D11RenderBackend::RenderFrame(const std::function<void()>& overlayCallbac
             continue;
         }
         DrawMesh(*draw.mesh, draw.world, draw.material, frameData, timeSeconds, draw.selected, stats);
+    }
+
+    if ((m_settings.showMeshBoundingBoxes || m_settings.showMeshBoundingSpheres || m_settings.showWorldBoxes)
+        && (m_boundsVertexBuffer || CreateBoundsGeometry()))
+    {
+        // Draw after surfaces so the stored volumes remain legible through the mesh.
+        // Reuse the exact draw lists and bounds transforms used for mesh visibility.
+        frameData.fogParams.x = 0.0f;
+        m_context->UpdateSubresource(m_frameCBuffer.Get(), 0, nullptr, &frameData, 0, 0);
+        m_context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_LINELIST);
+        const UINT stride = sizeof(CpuVertex);
+        const UINT offset = 0;
+        ID3D11Buffer* boundsBuffer = m_boundsVertexBuffer.Get();
+        m_context->IASetVertexBuffers(0, 1, &boundsBuffer, &stride, &offset);
+        m_context->RSSetState(m_rsCullNone.Get());
+        RenderMaterial boundsMaterial{};
+        boundsMaterial.depthWrite = false;
+        boundsMaterial.depthCompare = 7; // PASS_ALWAYS; diagnostic overlay only.
+        m_context->OMSetDepthStencilState(ResolveDepthState(&boundsMaterial), 0);
+        m_context->OMSetBlendState(m_blendOpaque.Get(), blendFactors, 0xFFFFFFFFu);
+        ID3D11Buffer* objectCB = m_objectCBuffer.Get();
+        m_context->VSSetConstantBuffers(1, 1, &objectCB);
+        m_context->PSSetConstantBuffers(1, 1, &objectCB);
+        for (const auto& draw : opaqueDraws) {
+            DrawMeshBounds(*draw.mesh, draw.boundsWorld, stats);
+        }
+        for (const auto& draw : transparentDraws) {
+            DrawMeshBounds(*draw.mesh, draw.boundsWorld, stats);
+        }
     }
 
     m_lastFrameStats = stats;
@@ -1351,7 +1410,62 @@ void D3D11RenderBackend::ReleaseRenderTargets() {
     m_rtv.Reset();
 }
 
+bool D3D11RenderBackend::CreateBoundsGeometry() {
+    // One immutable unit box and three great circles shared by every instance.
+    std::vector<CpuVertex> vertices;
+    vertices.reserve(kBoundsBoxVertexCount + kBoundsSphereVertexCount);
+    auto addVertex = [&](const Vec3& point) {
+        CpuVertex vertex{};
+        vertex.position[0] = point.x;
+        vertex.position[1] = point.y;
+        vertex.position[2] = point.z;
+        vertex.normal[2] = 1.0f;
+        std::fill(std::begin(vertex.color), std::end(vertex.color), 1.0f);
+        vertices.push_back(vertex);
+    };
+    auto boxCorner = [](unsigned index) -> Vec3 {
+        return { (index & 1) ? 1.0f : 0.0f,
+            (index & 2) ? 1.0f : 0.0f,
+            (index & 4) ? 1.0f : 0.0f };
+    };
+    for (unsigned corner = 0; corner < 8; ++corner) {
+        for (unsigned axis = 1; axis <= 4; axis <<= 1) {
+            if ((corner & axis) == 0) {
+                addVertex(boxCorner(corner));
+                addVertex(boxCorner(corner | axis));
+            }
+        }
+    }
+    for (int plane = 0; plane < 3; ++plane) {
+        for (UINT segment = 0; segment < kBoundsSphereSegments; ++segment) {
+            for (UINT end = 0; end < 2; ++end) {
+                const float angle = DegToRad(360.0f * (segment + end) / kBoundsSphereSegments);
+                const float c = std::cos(angle);
+                const float s = std::sin(angle);
+                addVertex(plane == 0 ? Vec3{ c, s, 0.0f }
+                    : plane == 1 ? Vec3{ c, 0.0f, s } : Vec3{ 0.0f, c, s });
+            }
+        }
+    }
+    D3D11_BUFFER_DESC desc{};
+    desc.BindFlags = D3D11_BIND_VERTEX_BUFFER;
+    desc.ByteWidth = static_cast<UINT>(vertices.size() * sizeof(CpuVertex));
+    desc.Usage = D3D11_USAGE_IMMUTABLE;
+    D3D11_SUBRESOURCE_DATA data{};
+    data.pSysMem = vertices.data();
+    return SUCCEEDED(m_device->CreateBuffer(&desc, &data, m_boundsVertexBuffer.GetAddressOf()));
+}
+
 bool D3D11RenderBackend::BuildGpuMesh(const RenderMesh& mesh, GpuMesh& outMesh) {
+    if (mesh.collisionBoxType != RenderCollisionBoxType::None && m_device) {
+        // Collision boxes use the shared line buffer, with no surface geometry.
+        outMesh.collisionBoxType = mesh.collisionBoxType;
+        outMesh.hidden = mesh.hidden;
+        outMesh.boundsCenter = mesh.boundsCenter;
+        outMesh.boundsRadius = mesh.boundsRadius;
+        outMesh.boundingBoxTransform = BoundsBoxTransform(mesh.boundsMin, mesh.boundsMax);
+        return true;
+    }
     if (!m_device || mesh.vertices.empty() || mesh.indices.empty()) {
         return false;
     }
@@ -1410,6 +1524,15 @@ bool D3D11RenderBackend::BuildGpuMesh(const RenderMesh& mesh, GpuMesh& outMesh) 
     outMesh.skinned = mesh.skinned;
     outMesh.boundsCenter = mesh.boundsCenter;
     outMesh.boundsRadius = mesh.boundsRadius;
+    outMesh.boundingBoxTransform = BoundsBoxTransform(mesh.boundsMin, mesh.boundsMax);
+    outMesh.boundingSphereTransform.reset();
+    // Use the stored radius, never the LOD/picking fallback in boundsRadius.
+    if (IsFinite(mesh.boundsCenter) && std::isfinite(mesh.headerSphereRadius)
+        && mesh.headerSphereRadius > 0.0f)
+    {
+        outMesh.boundingSphereTransform = Multiply(
+            Translation(mesh.boundsCenter), Scale(mesh.headerSphereRadius));
+    }
     outMesh.cpuVertices = std::move(vertices);
 
     return true;
@@ -1683,6 +1806,37 @@ void D3D11RenderBackend::DrawMesh(
     m_context->DrawIndexed(mesh.indexCount, 0, 0);
     stats.drawCalls += 1;
     stats.triangles += mesh.indexCount / 3;
+}
+
+void D3D11RenderBackend::DrawMeshBounds(const GpuMesh& mesh, const Mat4& world, FrameStats& stats) {
+    auto draw = [&](const Mat4& local, const Vec4& color, UINT count, UINT start) {
+        CBufferObject objectData{};
+        objectData.world = Multiply(world, local);
+        if (!std::all_of(std::begin(objectData.world.m), std::end(objectData.world.m),
+            [](float value) { return std::isfinite(value); }))
+        {
+            return;
+        }
+        objectData.diffuseColor = color;
+        objectData.emissiveOpacity.w = 1.0f;
+        objectData.flags2.y = 1.0f; // Unlit; unaffected by UV debug or selection tint.
+        m_context->UpdateSubresource(m_objectCBuffer.Get(), 0, nullptr, &objectData, 0, 0);
+        m_context->Draw(count, start);
+        ++stats.drawCalls;
+    };
+    if (mesh.collisionBoxType != RenderCollisionBoxType::None) {
+        if (m_settings.showWorldBoxes && mesh.boundingBoxTransform) {
+            draw(*mesh.boundingBoxTransform, { 1.0f, 0.9f, 0.15f, 1.0f }, kBoundsBoxVertexCount, 0);
+        }
+        return; // A WorldBox is not a mesh-header bound.
+    }
+    if (m_settings.showMeshBoundingBoxes && mesh.boundingBoxTransform) {
+        draw(*mesh.boundingBoxTransform, { 0.25f, 0.9f, 1.0f, 1.0f }, kBoundsBoxVertexCount, 0);
+    }
+    if (m_settings.showMeshBoundingSpheres && mesh.boundingSphereTransform) {
+        draw(*mesh.boundingSphereTransform, { 1.0f, 0.65f, 0.15f, 1.0f },
+            kBoundsSphereVertexCount, kBoundsBoxVertexCount);
+    }
 }
 
 Mat4 D3D11RenderBackend::BuildPivotWorldTransform(int hierarchyIndex, int pivotIndex) const {

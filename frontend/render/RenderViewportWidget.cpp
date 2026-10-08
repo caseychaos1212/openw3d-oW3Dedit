@@ -1199,11 +1199,15 @@ void RenderViewportWidget::mouseMoveEvent(QMouseEvent* event) {
 
     if (m_dragMode == DragMode::Orbit) {
         m_camera.yaw += static_cast<float>(delta.x()) * 0.0075f;
-        m_camera.pitch += static_cast<float>(delta.y()) * 0.0075f;
+        m_camera.pitch -= static_cast<float>(delta.y()) * 0.0075f;
         m_camera.pitch = std::clamp(m_camera.pitch, -kCameraPitchLimit, kCameraPitchLimit);
     }
     else if (m_dragMode == DragMode::Pan) {
-        const float panScale = std::max(0.05f, m_camera.distance * 0.0018f);
+        // Match a pixel of mouse motion to a pixel at the orbit target's depth.
+        // A fixed world-space minimum makes small/close models jump when panning.
+        const float panScale = 2.0f * m_camera.distance
+            * std::tan(DegToRad(m_camera.fovDeg) * 0.5f)
+            / static_cast<float>(std::max(1, height()));
         const Vec3 forward = Normalize(CameraForward(m_camera.yaw, m_camera.pitch));
         Vec3 right = Normalize(Cross(WorldUp(), forward));
         if (Length(right) < 0.001f) {
@@ -1554,12 +1558,13 @@ void RenderViewportWidget::BuildVisibleInstances(const Vec3& cameraPos) {
             }
 
             const auto& mesh = m_sceneResult.scene.meshes[static_cast<std::size_t>(entry.meshIndex)];
-            if (mesh.hidden) {
+            if (mesh.hidden || (mesh.collisionBoxType != RenderCollisionBoxType::None
+                && !m_settings.showWorldBoxes)) {
                 continue;
             }
 
-            const Mat4 world =
-                getWorldForBinding(entry.hierarchyIndex, entry.pivotIndex, entry.localTransform);
+            const Mat4 world = ResolveCollisionBoxTransform(mesh.collisionBoxType,
+                getWorldForBinding(entry.hierarchyIndex, entry.pivotIndex, entry.localTransform));
             const Vec3 worldCenter = TransformPoint(world, mesh.boundsCenter);
             const float distanceToCamera = Length(worldCenter - cameraPos);
 
@@ -1582,7 +1587,7 @@ void RenderViewportWidget::BuildVisibleInstances(const Vec3& cameraPos) {
             instance.hierarchyIndex = entry.hierarchyIndex;
             instance.pivotIndex = entry.pivotIndex;
             instance.world = world;
-            instance.meshChunk = mesh.sourceMeshHeaderChunk;
+            instance.meshChunk = mesh.sourceBoxChunk ? mesh.sourceBoxChunk : mesh.sourceMeshHeaderChunk;
             instance.meshFromSupplemental = mesh.sourceFromSupplemental;
             instance.hiddenByUser = m_hiddenInstances.contains(instance.key);
 
@@ -1605,7 +1610,8 @@ void RenderViewportWidget::BuildVisibleInstances(const Vec3& cameraPos) {
         }
 
         const auto& mesh = m_sceneResult.scene.meshes[static_cast<std::size_t>(node.meshIndex)];
-        if (mesh.hidden) {
+        if (mesh.hidden || (mesh.collisionBoxType != RenderCollisionBoxType::None
+            && !m_settings.showWorldBoxes)) {
             continue;
         }
 
@@ -1616,8 +1622,9 @@ void RenderViewportWidget::BuildVisibleInstances(const Vec3& cameraPos) {
             instance.meshIndex = node.meshIndex;
             instance.hierarchyIndex = node.hierarchyIndex;
             instance.pivotIndex = node.pivotIndex;
-            instance.world = getWorldForBinding(node.hierarchyIndex, node.pivotIndex, node.localTransform);
-            instance.meshChunk = mesh.sourceMeshHeaderChunk;
+            instance.world = ResolveCollisionBoxTransform(mesh.collisionBoxType,
+                getWorldForBinding(node.hierarchyIndex, node.pivotIndex, node.localTransform));
+            instance.meshChunk = mesh.sourceBoxChunk ? mesh.sourceBoxChunk : mesh.sourceMeshHeaderChunk;
             instance.meshFromSupplemental = mesh.sourceFromSupplemental;
             instance.hiddenByUser = m_hiddenInstances.contains(instance.key);
 
@@ -2487,30 +2494,54 @@ bool RenderViewportWidget::HandleGizmos(const Mat4& view, const Mat4& projection
     Mat4ToFloatArray(view, viewMatrix);
     Mat4ToFloatArray(projection, projectionMatrix);
 
-    float viewMatrixBefore[16];
-    std::memcpy(viewMatrixBefore, viewMatrix, sizeof(viewMatrixBefore));
     if (m_settings.showCameraGizmo) {
+        // ViewManipulate assumes a right-handed, Y-up camera. The renderer is
+        // left-handed and Z-up: swap world Y/Z, then reverse camera-space Z.
+        // Both reflections are needed to preserve the on-screen orientation.
+        Mat4 swapYZ = Mat4::Identity();
+        swapYZ.m[5] = swapYZ.m[10] = 0.0f;
+        swapYZ.m[6] = swapYZ.m[9] = 1.0f;
+        Mat4 reverseZ = Mat4::Identity();
+        reverseZ.m[10] = -1.0f;
+        Mat4 cubeView = Multiply(reverseZ, Multiply(view, swapYZ));
+        const Mat4 cubeViewBefore = cubeView;
+        const Mat4 cubeProjection = Multiply(projection, reverseZ);
+        Mat4 cubeModel = Mat4::Identity();
+
+        auto& colors = ImGuizmo::GetStyle().Colors;
+        std::swap(colors[ImGuizmo::DIRECTION_Y], colors[ImGuizmo::DIRECTION_Z]);
+        // Initialize the context even when there is no selected object gizmo.
         ImGuizmo::ViewManipulate(
-            viewMatrix,
+            cubeView.m,
+            cubeProjection.m,
+            ImGuizmo::TRANSLATE,
+            ImGuizmo::WORLD,
+            cubeModel.m,
             m_camera.distance,
             ImVec2(static_cast<float>(std::max(0, width() - 140)), 20.0f),
             ImVec2(120.0f, 120.0f),
             0x30303080u);
+        std::swap(colors[ImGuizmo::DIRECTION_Y], colors[ImGuizmo::DIRECTION_Z]);
+
+        if (std::memcmp(cubeViewBefore.m, cubeView.m, sizeof(cubeView.m)) != 0) {
+            const Mat4 invView = Inverse(Multiply(reverseZ, Multiply(cubeView, swapYZ)));
+            const Vec3 forward = Normalize({ invView.m[8], invView.m[9], invView.m[10] });
+            if (Length(forward) > 1e-4f) {
+                // Keep the orbit target/distance and the renderer's Z-up horizon.
+                m_camera.yaw = std::atan2(forward.y, forward.x);
+                m_camera.pitch = std::clamp(
+                    std::asin(std::clamp(forward.z, -1.0f, 1.0f)),
+                    -kCameraPitchLimit, kCameraPitchLimit);
+                const Vec3 cameraPos = m_camera.target
+                    - CameraForward(m_camera.yaw, m_camera.pitch) * m_camera.distance;
+                Mat4ToFloatArray(LookAtLH(cameraPos, m_camera.target, WorldUp()), viewMatrix);
+                changed = true;
+            }
+        }
     }
 
     DrawSceneBrowserOverlay();
     DrawTransformInspectorOverlay();
-
-    if (std::memcmp(viewMatrixBefore, viewMatrix, sizeof(viewMatrixBefore)) != 0) {
-        const Mat4 manipulatedView = Mat4FromFloatArray(viewMatrix);
-        const Mat4 invView = Inverse(manipulatedView);
-        const Vec3 forward = Normalize({ invView.m[8], invView.m[9], invView.m[10] });
-        if (Length(forward) > 1e-4f) {
-            m_camera.yaw = std::atan2(forward.y, forward.x);
-            m_camera.pitch = std::asin(std::clamp(forward.z, -1.0f, 1.0f));
-            changed = true;
-        }
-    }
 
     const Mat4 currentView = Mat4FromFloatArray(viewMatrix);
     const auto worlds = BuildHierarchyWorldTransforms();
@@ -2864,17 +2895,35 @@ Vec3 RenderViewportWidget::ComputeSceneCenter() const {
     }
 
     Vec3 sum{};
+    std::size_t count = 0;
     for (const auto& mesh : m_sceneResult.scene.meshes) {
+        if (mesh.collisionBoxType != RenderCollisionBoxType::None) {
+            continue;
+        }
         sum = sum + mesh.boundsCenter;
+        ++count;
+    }
+    // Preserve existing mesh framing; include boxes for a box-only asset.
+    if (count == 0) {
+        for (const auto& mesh : m_sceneResult.scene.meshes) {
+            sum = sum + mesh.boundsCenter;
+        }
+        count = m_sceneResult.scene.meshes.size();
     }
 
-    const float invCount = 1.0f / static_cast<float>(m_sceneResult.scene.meshes.size());
+    const float invCount = 1.0f / static_cast<float>(count);
     return sum * invCount;
 }
 
 float RenderViewportWidget::ComputeSceneRadius(const Vec3& center) const {
     float radius = 10.0f;
+    const bool hasSurfaceMeshes = std::any_of(
+        m_sceneResult.scene.meshes.begin(), m_sceneResult.scene.meshes.end(),
+        [](const RenderMesh& mesh) { return mesh.collisionBoxType == RenderCollisionBoxType::None; });
     for (const auto& mesh : m_sceneResult.scene.meshes) {
+        if (hasSurfaceMeshes && mesh.collisionBoxType != RenderCollisionBoxType::None) {
+            continue;
+        }
         const float d = Length(mesh.boundsCenter - center) + std::max(1.0f, mesh.boundsRadius);
         radius = std::max(radius, d);
     }

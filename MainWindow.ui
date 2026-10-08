@@ -299,6 +299,10 @@
     <addaction name="actionRemoveSelectedRenderAsset"/>
     <addaction name="actionClearAnimationLibraries"/>
     <addaction name="separator"/>
+    <addaction name="actionShowMeshBoundingBoxes"/>
+    <addaction name="actionShowMeshBoundingSpheres"/>
+    <addaction name="actionShowWorldBoxes"/>
+    <addaction name="separator"/>
     <addaction name="actionToggleRenderPlayback"/>
     <addaction name="actionStopRenderPlayback"/>
     <addaction name="actionExportCurrentAnimationGif"/>
@@ -388,9 +392,24 @@
   <action name="actionClearRenderTextureFolder"><property name="text"><string>Clear Texture Folder</string></property></action>
   <action name="actionRemoveSelectedRenderAsset"><property name="text"><string>Remove Selected Render Asset</string></property></action>
   <action name="actionClearAnimationLibraries"><property name="text"><string>Clear Animation Libraries</string></property></action>
+  <action name="actionShowMeshBoundingBoxes">
+   <property name="checkable"><bool>true</bool></property>
+   <property name="text"><string>Show Mesh Bounding Boxes</string></property>
+   <property name="statusTip"><string>Show stored mesh bounding boxes as cyan wireframes.</string></property>
+  </action>
+  <action name="actionShowMeshBoundingSpheres">
+   <property name="checkable"><bool>true</bool></property>
+   <property name="text"><string>Show Mesh Bounding Spheres</string></property>
+   <property name="statusTip"><string>Show stored mesh bounding spheres as orange wireframes.</string></property>
+  </action>
   <action name="actionToggleRenderPlayback">
    <property name="text"><string>Play/Pause Animation</string></property>
    <property name="shortcut"><string>Space</string></property>
+  </action>
+  <action name="actionShowWorldBoxes">
+   <property name="checkable"><bool>true</bool></property>
+   <property name="text"><string>Show WorldBoxes (Collision)</string></property>
+   <property name="statusTip"><string>Show authored WorldBox collision objects as yellow wireframes.</string></property>
   </action>
   <action name="actionStopRenderPlayback"><property name="text"><string>Stop Animation</string></property></action>
   <action name="actionExportCurrentAnimationGif"><property name="text"><string>Export Current Animation GIF...</string></property></action>

@@ -34,6 +34,9 @@ struct RenderSettings {
     Vec4 clearColor{ 0.08f, 0.09f, 0.12f, 1.0f };
     bool showCameraGizmo = true;
     bool showPivotMarkers = true;
+    bool showMeshBoundingBoxes = false;
+    bool showMeshBoundingSpheres = false;
+    bool showWorldBoxes = false;
 };
 
 struct FrameStats {
