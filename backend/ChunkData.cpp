@@ -22,6 +22,52 @@ static bool readUint32(std::istream& stream, uint32_t& value) {
     return static_cast<bool>(stream);
 }
 
+static bool IsSupportedTrailingData(const std::vector<uint8_t>& bytes) {
+    return !bytes.empty()
+        && bytes.size() < sizeof(uint32_t) * 2
+        && std::all_of(bytes.begin(), bytes.end(), [](uint8_t value) {
+            return value == 0xFF;
+        });
+}
+
+static std::string EncodeHex(const std::vector<uint8_t>& bytes) {
+    static constexpr char kHexDigits[] = "0123456789ABCDEF";
+    std::string out;
+    out.reserve(bytes.size() * 2);
+    for (uint8_t value : bytes) {
+        out.push_back(kHexDigits[(value >> 4) & 0x0F]);
+        out.push_back(kHexDigits[value & 0x0F]);
+    }
+    return out;
+}
+
+static int HexNibble(char value) {
+    if (value >= '0' && value <= '9') return value - '0';
+    if (value >= 'a' && value <= 'f') return 10 + value - 'a';
+    if (value >= 'A' && value <= 'F') return 10 + value - 'A';
+    return -1;
+}
+
+static bool DecodeHex(const std::string& hex, std::vector<uint8_t>& bytes) {
+    if ((hex.size() % 2) != 0) {
+        return false;
+    }
+
+    std::vector<uint8_t> decoded;
+    decoded.reserve(hex.size() / 2);
+    for (std::size_t i = 0; i < hex.size(); i += 2) {
+        const int high = HexNibble(hex[i]);
+        const int low = HexNibble(hex[i + 1]);
+        if (high < 0 || low < 0) {
+            return false;
+        }
+        decoded.push_back(static_cast<uint8_t>((high << 4) | low));
+    }
+
+    bytes = std::move(decoded);
+    return true;
+}
+
 inline bool IsForcedWrapper(uint32_t id, uint32_t parent = 0)
 {
     switch (id) {
@@ -212,6 +258,7 @@ bool ChunkData::loadFromFile(const std::string& filename) {
         << "File size: " << fileSize << "\n";
 
     std::vector<std::shared_ptr<ChunkItem>> parsedChunks;
+    std::vector<uint8_t> parsedTrailingData;
     while (true) {
         const std::streamoff startPos = static_cast<std::streamoff>(file.tellg());
         if (startPos < 0 || startPos > fileSize) {
@@ -221,10 +268,23 @@ bool ChunkData::loadFromFile(const std::string& filename) {
         if (startPos == fileSize) {
             break;
         }
-        if (fileSize - startPos < 8) {
-            std::cerr << "Truncated top-level chunk header at offset "
-                << startPos << " in file: " << filename << "\n";
-            return false;
+        const std::streamoff bytesRemaining = fileSize - startPos;
+        if (bytesRemaining < 8) {
+            parsedTrailingData.resize(static_cast<std::size_t>(bytesRemaining));
+            file.read(
+                reinterpret_cast<char*>(parsedTrailingData.data()),
+                static_cast<std::streamsize>(bytesRemaining));
+            if (!file
+                || parsedChunks.empty()
+                || !IsSupportedTrailingData(parsedTrailingData))
+            {
+                std::cerr << "Truncated top-level chunk header at offset "
+                    << startPos << " in file: " << filename << "\n";
+                return false;
+            }
+            std::cout << "Preserving " << parsedTrailingData.size()
+                << " trailing 0xFF byte(s).\n";
+            break;
         }
 
         auto chunk = std::make_shared<ChunkItem>();
@@ -314,6 +374,7 @@ bool ChunkData::loadFromFile(const std::string& filename) {
     }
 
     chunks = std::move(parsedChunks);
+    trailingData = std::move(parsedTrailingData);
     sourceFilename = std::filesystem::path(filename).filename().string();
     return true;
 }
@@ -442,6 +503,13 @@ bool ChunkData::parseChunk(std::istream& stream, std::shared_ptr<ChunkItem>& par
 bool ChunkData::saveToFile(const std::string& filename) {
     // Complete serialization before opening the destination. This guarantees
     // that an unsupported or invalid chunk cannot truncate an existing file.
+    if (!trailingData.empty()
+        && (chunks.empty() || !IsSupportedTrailingData(trailingData)))
+    {
+        std::cerr << "Refusing to serialize invalid trailing data.\n";
+        return false;
+    }
+
     std::vector<std::vector<uint8_t>> serializedChunks;
     serializedChunks.reserve(chunks.size());
     for (auto& chunk : chunks) {
@@ -471,6 +539,16 @@ bool ChunkData::saveToFile(const std::string& filename) {
         }
     }
 
+    if (!trailingData.empty()) {
+        out.write(
+            reinterpret_cast<const char*>(trailingData.data()),
+            static_cast<std::streamsize>(trailingData.size()));
+        if (!out) {
+            std::cerr << "Failed to write trailing data.\n";
+            return false;
+        }
+    }
+
     out.flush();
     return static_cast<bool>(out);
 }
@@ -480,6 +558,7 @@ bool ChunkData::saveToFile(const std::string& filename) {
 
 void ChunkData::clear() {
     chunks.clear();
+    trailingData.clear();
     sourceFilename.clear();
 }
 
@@ -523,6 +602,9 @@ nlohmann::ordered_json ChunkData::toJson(JsonSerializationMode mode) const {
     ordered_json root;
     root["SCHEMA_VERSION"] = 1;
     root["SERIALIZATION_MODE"] = SerializationModeToToken(mode);
+    if (!trailingData.empty()) {
+        root["TRAILING_DATA_HEX"] = EncodeHex(trailingData);
+    }
     ordered_json arr = ordered_json::array();
     for (const auto& c : chunks)
         arr.push_back(ChunkJson::toJson(*c, mode));
@@ -560,10 +642,38 @@ bool ChunkData::fromJson(
 
     ordered_json arr = ordered_json::array();
     std::string parsedSourceFilename;
+    std::vector<uint8_t> parsedTrailingData;
     bool foundChunkArray = false;
 
+    auto trailingDataIt = doc.find("TRAILING_DATA_HEX");
+    if (trailingDataIt != doc.end()) {
+        if (!trailingDataIt->is_string())
+        {
+            AppendImportWarning(
+                warnings,
+                "TRAILING_DATA_HEX must contain one to seven FF bytes.");
+            return false;
+        }
+
+        const std::string& trailingHex = trailingDataIt->get_ref<const std::string&>();
+        if (trailingHex.size() < 2
+            || trailingHex.size() > 14
+            || (trailingHex.size() % 2) != 0
+            || !DecodeHex(trailingHex, parsedTrailingData)
+            || !IsSupportedTrailingData(parsedTrailingData))
+        {
+            AppendImportWarning(
+                warnings,
+                "TRAILING_DATA_HEX must contain one to seven FF bytes.");
+            return false;
+        }
+    }
+
     for (auto it = doc.begin(); it != doc.end(); ++it) {
-        if (it.key() == "SCHEMA_VERSION" || it.key() == "SERIALIZATION_MODE") {
+        if (it.key() == "SCHEMA_VERSION"
+            || it.key() == "SERIALIZATION_MODE"
+            || it.key() == "TRAILING_DATA_HEX")
+        {
             continue;
         }
         if (it.value().is_array()) {
@@ -591,7 +701,15 @@ bool ChunkData::fromJson(
         ++chunkIndex;
     }
 
+    if (!parsedTrailingData.empty() && parsedChunks.empty()) {
+        AppendImportWarning(
+            warnings,
+            "TRAILING_DATA_HEX requires at least one top-level chunk.");
+        return false;
+    }
+
     chunks = std::move(parsedChunks);
+    trailingData = std::move(parsedTrailingData);
     sourceFilename = std::move(parsedSourceFilename);
     return true;
 }

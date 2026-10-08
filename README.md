@@ -44,7 +44,7 @@ Batch JSON import recursively mirrors the directory layout created by batch expo
 
 ## Building from source
 
-The checked-in solution targets Windows x64 and currently expects Qt in `C:\Qt\6.9.0\msvc2022_64`.
+The checked-in solution targets Windows x64 and defaults to Qt in `C:\Qt\6.9.3\msvc2022_64`. Override the MSBuild `QtRoot` property to use another compatible Qt 6.9.x MSVC 2022 installation.
 
 ### Requirements
 

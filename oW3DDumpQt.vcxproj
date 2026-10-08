@@ -26,6 +26,7 @@
     <ProjectName>oW3DEdit</ProjectName>
     <VCProjectUpgraderObjectName>NoUpgrade</VCProjectUpgraderObjectName>
     <Keyword>QtVS_v304</Keyword>
+    <QtRoot Condition="'$(QtRoot)'==''">C:\Qt\6.9.3\msvc2022_64</QtRoot>
     <QtMsBuild Condition="'$(QtMsBuild)'=='' OR !Exists('$(QtMsBuild)\qt.targets')">$(MSBuildProjectDirectory)\QtMsBuild</QtMsBuild>
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
@@ -52,10 +53,18 @@
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
   <Import Project="$(QtMsBuild)\qt_defaults.props" Condition="Exists('$(QtMsBuild)\qt_defaults.props')" />
-  <PropertyGroup Label="QtSettings" Condition="'$(Configuration)|$(Platform)'=='Debug|x64'" />
-  <PropertyGroup Label="QtSettings" Condition="'$(Configuration)|$(Platform)'=='Release|x64'" />
-  <PropertyGroup Label="QtSettings" Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'" />
-  <PropertyGroup Label="QtSettings" Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'" />
+  <PropertyGroup Label="QtSettings" Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+    <QtInstall>$(QtRoot)</QtInstall>
+  </PropertyGroup>
+  <PropertyGroup Label="QtSettings" Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
+    <QtInstall>$(QtRoot)</QtInstall>
+  </PropertyGroup>
+  <PropertyGroup Label="QtSettings" Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">
+    <QtInstall>$(QtRoot)</QtInstall>
+  </PropertyGroup>
+  <PropertyGroup Label="QtSettings" Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">
+    <QtInstall>$(QtRoot)</QtInstall>
+  </PropertyGroup>
   <Target Name="QtMsBuildNotFound" BeforeTargets="CustomBuild;ClCompile" Condition="!Exists('$(QtMsBuild)\qt.targets') OR !Exists('$(QtMsBuild)\Qt.props')">
     <Message Importance="High" Text="QtMsBuild: could not locate qt.targets, qt.props; project may not build correctly." />
   </Target>
@@ -99,7 +108,7 @@
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
     <ClCompile>
       <AdditionalIncludeDirectories>$(ProjectDir)\thirdparty;$(ProjectDir)\thirdparty\imgui;$(ProjectDir)\thirdparty\ImGuizmo;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
-      <AdditionalOptions>%(AdditionalOptions) /external:I "C:/Qt/6.9.0/msvc2022_64/include/QtWidgets" /external:I "C:/Qt/6.9.0/msvc2022_64/include" /external:I "C:/Qt/6.9.0/msvc2022_64/include/QtCore" /external:I "C:/Qt/6.9.0/msvc2022_64/mkspecs/win32-msvc" /external:I "C:/Qt/6.9.0/msvc2022_64/include/QtGui" -Zc:__cplusplus -utf-8</AdditionalOptions>
+      <AdditionalOptions>%(AdditionalOptions) /external:I "$(QtRoot)/include/QtWidgets" /external:I "$(QtRoot)/include" /external:I "$(QtRoot)/include/QtCore" /external:I "$(QtRoot)/mkspecs/win32-msvc" /external:I "$(QtRoot)/include/QtGui" -Zc:__cplusplus -utf-8</AdditionalOptions>
       <AssemblerListingLocation>$(IntDir)</AssemblerListingLocation>
       <BasicRuntimeChecks>EnableFastChecks</BasicRuntimeChecks>
       <ConformanceMode>true</ConformanceMode>
@@ -126,7 +135,7 @@
       <AdditionalIncludeDirectories>$(ProjectDir)\thirdparty;$(ProjectDir)\thirdparty\imgui;$(ProjectDir)\thirdparty\ImGuizmo;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ResourceCompile>
     <Midl>
-      <AdditionalIncludeDirectories>$(ProjectDir)\thirdparty;$(ProjectDir)\oW3DEdit_autogen\include_Debug;C:\Qt\6.9.0\msvc2022_64\include\QtWidgets;C:\Qt\6.9.0\msvc2022_64\include;C:\Qt\6.9.0\msvc2022_64\include\QtCore;C:\Qt\6.9.0\msvc2022_64\mkspecs\win32-msvc;C:\Qt\6.9.0\msvc2022_64\include\QtGui;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(ProjectDir)\thirdparty;$(ProjectDir)\oW3DEdit_autogen\include_Debug;$(QtRoot)\include\QtWidgets;$(QtRoot)\include;$(QtRoot)\include\QtCore;$(QtRoot)\mkspecs\win32-msvc;$(QtRoot)\include\QtGui;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <OutputDirectory>$(ProjectDir)/$(IntDir)</OutputDirectory>
       <HeaderFileName>%(Filename).h</HeaderFileName>
       <TypeLibraryName>%(Filename).tlb</TypeLibraryName>
@@ -134,7 +143,7 @@
       <ProxyFileName>%(Filename)_p.c</ProxyFileName>
     </Midl>
     <Link>
-      <AdditionalDependencies>C:\Qt\6.9.0\msvc2022_64\lib\Qt6Widgetsd.lib;C:\Qt\6.9.0\msvc2022_64\lib\Qt6Guid.lib;C:\Qt\6.9.0\msvc2022_64\lib\Qt6Cored.lib;mpr.lib;userenv.lib;d3d11.lib;dxgi.lib;dxguid.lib;d3d12.lib;kernel32.lib;user32.lib;gdi32.lib;winspool.lib;shell32.lib;ole32.lib;oleaut32.lib;uuid.lib;comdlg32.lib;advapi32.lib</AdditionalDependencies>
+      <AdditionalDependencies>$(QtRoot)\lib\Qt6Widgetsd.lib;$(QtRoot)\lib\Qt6Guid.lib;$(QtRoot)\lib\Qt6Cored.lib;mpr.lib;userenv.lib;d3d11.lib;dxgi.lib;dxguid.lib;d3d12.lib;kernel32.lib;user32.lib;gdi32.lib;winspool.lib;shell32.lib;ole32.lib;oleaut32.lib;uuid.lib;comdlg32.lib;advapi32.lib</AdditionalDependencies>
       <AdditionalLibraryDirectories>%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
       <AdditionalOptions>%(AdditionalOptions) /machine:x64</AdditionalOptions>
       <GenerateDebugInformation>true</GenerateDebugInformation>
@@ -147,13 +156,13 @@
       <LinkLibraryDependencies>false</LinkLibraryDependencies>
     </ProjectReference>
     <PostBuildEvent>
-      <Command>C:\Qt\6.9.0\msvc2022_64\bin\windeployqt.exe "$(OutDir)\$(TargetFileName)"</Command>
+      <Command>"$(QtRoot)\bin\windeployqt.exe" "$(OutDir)\$(TargetFileName)"</Command>
     </PostBuildEvent>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
     <ClCompile>
       <AdditionalIncludeDirectories>$(ProjectDir)\thirdparty;$(ProjectDir)\thirdparty\imgui;$(ProjectDir)\thirdparty\ImGuizmo;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
-      <AdditionalOptions>%(AdditionalOptions) /external:I "C:/Qt/6.9.0/msvc2022_64/include/QtWidgets" /external:I "C:/Qt/6.9.0/msvc2022_64/include" /external:I "C:/Qt/6.9.0/msvc2022_64/include/QtCore" /external:I "C:/Qt/6.9.0/msvc2022_64/mkspecs/win32-msvc" /external:I "C:/Qt/6.9.0/msvc2022_64/include/QtGui" -Zc:__cplusplus -utf-8</AdditionalOptions>
+      <AdditionalOptions>%(AdditionalOptions) /external:I "$(QtRoot)/include/QtWidgets" /external:I "$(QtRoot)/include" /external:I "$(QtRoot)/include/QtCore" /external:I "$(QtRoot)/mkspecs/win32-msvc" /external:I "$(QtRoot)/include/QtGui" -Zc:__cplusplus -utf-8</AdditionalOptions>
       <AssemblerListingLocation>$(IntDir)</AssemblerListingLocation>
       <BasicRuntimeChecks>Default</BasicRuntimeChecks>
       <ConformanceMode>true</ConformanceMode>
@@ -181,7 +190,7 @@
       <AdditionalIncludeDirectories>$(ProjectDir)\thirdparty;$(ProjectDir)\thirdparty\imgui;$(ProjectDir)\thirdparty\ImGuizmo;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ResourceCompile>
     <Midl>
-      <AdditionalIncludeDirectories>$(ProjectDir)\thirdparty;$(ProjectDir)\oW3DEdit_autogen\include_Release;C:\Qt\6.9.0\msvc2022_64\include\QtWidgets;C:\Qt\6.9.0\msvc2022_64\include;C:\Qt\6.9.0\msvc2022_64\include\QtCore;C:\Qt\6.9.0\msvc2022_64\mkspecs\win32-msvc;C:\Qt\6.9.0\msvc2022_64\include\QtGui;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(ProjectDir)\thirdparty;$(ProjectDir)\oW3DEdit_autogen\include_Release;$(QtRoot)\include\QtWidgets;$(QtRoot)\include;$(QtRoot)\include\QtCore;$(QtRoot)\mkspecs\win32-msvc;$(QtRoot)\include\QtGui;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <OutputDirectory>$(ProjectDir)/$(IntDir)</OutputDirectory>
       <HeaderFileName>%(Filename).h</HeaderFileName>
       <TypeLibraryName>%(Filename).tlb</TypeLibraryName>
@@ -189,7 +198,7 @@
       <ProxyFileName>%(Filename)_p.c</ProxyFileName>
     </Midl>
     <Link>
-      <AdditionalDependencies>C:\Qt\6.9.0\msvc2022_64\lib\Qt6Widgets.lib;C:\Qt\6.9.0\msvc2022_64\lib\Qt6Gui.lib;C:\Qt\6.9.0\msvc2022_64\lib\Qt6Core.lib;mpr.lib;userenv.lib;d3d11.lib;dxgi.lib;dxguid.lib;d3d12.lib;kernel32.lib;user32.lib;gdi32.lib;winspool.lib;shell32.lib;ole32.lib;oleaut32.lib;uuid.lib;comdlg32.lib;advapi32.lib</AdditionalDependencies>
+      <AdditionalDependencies>$(QtRoot)\lib\Qt6Widgets.lib;$(QtRoot)\lib\Qt6Gui.lib;$(QtRoot)\lib\Qt6Core.lib;mpr.lib;userenv.lib;d3d11.lib;dxgi.lib;dxguid.lib;d3d12.lib;kernel32.lib;user32.lib;gdi32.lib;winspool.lib;shell32.lib;ole32.lib;oleaut32.lib;uuid.lib;comdlg32.lib;advapi32.lib</AdditionalDependencies>
       <AdditionalLibraryDirectories>%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
       <AdditionalOptions>%(AdditionalOptions) /machine:x64</AdditionalOptions>
       <GenerateDebugInformation>false</GenerateDebugInformation>
@@ -202,7 +211,7 @@
       <LinkLibraryDependencies>false</LinkLibraryDependencies>
     </ProjectReference>
     <PostBuildEvent>
-      <Command>C:\Qt\6.9.0\msvc2022_64\bin\windeployqt.exe "$(OutDir)\$(TargetFileName)"
+      <Command>"$(QtRoot)\bin\windeployqt.exe" "$(OutDir)\$(TargetFileName)"
 copy /Y "$(ProjectDir)README.md" "$(OutDir)README.md"
 copy /Y "$(ProjectDir)LICENSE" "$(OutDir)LICENSE"
 copy /Y "$(ProjectDir)CHANGELOG.md" "$(OutDir)CHANGELOG.md"</Command>
@@ -211,7 +220,7 @@ copy /Y "$(ProjectDir)CHANGELOG.md" "$(OutDir)CHANGELOG.md"</Command>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">
     <ClCompile>
       <AdditionalIncludeDirectories>$(ProjectDir)\thirdparty;$(ProjectDir)\thirdparty\imgui;$(ProjectDir)\thirdparty\ImGuizmo;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
-      <AdditionalOptions>%(AdditionalOptions) /external:I "C:/Qt/6.9.0/msvc2022_64/include/QtWidgets" /external:I "C:/Qt/6.9.0/msvc2022_64/include" /external:I "C:/Qt/6.9.0/msvc2022_64/include/QtCore" /external:I "C:/Qt/6.9.0/msvc2022_64/mkspecs/win32-msvc" /external:I "C:/Qt/6.9.0/msvc2022_64/include/QtGui" -Zc:__cplusplus -utf-8</AdditionalOptions>
+      <AdditionalOptions>%(AdditionalOptions) /external:I "$(QtRoot)/include/QtWidgets" /external:I "$(QtRoot)/include" /external:I "$(QtRoot)/include/QtCore" /external:I "$(QtRoot)/mkspecs/win32-msvc" /external:I "$(QtRoot)/include/QtGui" -Zc:__cplusplus -utf-8</AdditionalOptions>
       <AssemblerListingLocation>$(IntDir)</AssemblerListingLocation>
       <BasicRuntimeChecks>Default</BasicRuntimeChecks>
       <ConformanceMode>true</ConformanceMode>
@@ -239,7 +248,7 @@ copy /Y "$(ProjectDir)CHANGELOG.md" "$(OutDir)CHANGELOG.md"</Command>
       <AdditionalIncludeDirectories>$(ProjectDir)\thirdparty;$(ProjectDir)\thirdparty\imgui;$(ProjectDir)\thirdparty\ImGuizmo;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ResourceCompile>
     <Midl>
-      <AdditionalIncludeDirectories>$(ProjectDir)\thirdparty;$(ProjectDir)\oW3DEdit_autogen\include_MinSizeRel;C:\Qt\6.9.0\msvc2022_64\include\QtWidgets;C:\Qt\6.9.0\msvc2022_64\include;C:\Qt\6.9.0\msvc2022_64\include\QtCore;C:\Qt\6.9.0\msvc2022_64\mkspecs\win32-msvc;C:\Qt\6.9.0\msvc2022_64\include\QtGui;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(ProjectDir)\thirdparty;$(ProjectDir)\oW3DEdit_autogen\include_MinSizeRel;$(QtRoot)\include\QtWidgets;$(QtRoot)\include;$(QtRoot)\include\QtCore;$(QtRoot)\mkspecs\win32-msvc;$(QtRoot)\include\QtGui;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <OutputDirectory>$(ProjectDir)/$(IntDir)</OutputDirectory>
       <HeaderFileName>%(Filename).h</HeaderFileName>
       <TypeLibraryName>%(Filename).tlb</TypeLibraryName>
@@ -247,7 +256,7 @@ copy /Y "$(ProjectDir)CHANGELOG.md" "$(OutDir)CHANGELOG.md"</Command>
       <ProxyFileName>%(Filename)_p.c</ProxyFileName>
     </Midl>
     <Link>
-      <AdditionalDependencies>C:\Qt\6.9.0\msvc2022_64\lib\Qt6Widgets.lib;C:\Qt\6.9.0\msvc2022_64\lib\Qt6Gui.lib;C:\Qt\6.9.0\msvc2022_64\lib\Qt6Core.lib;mpr.lib;userenv.lib;d3d11.lib;dxgi.lib;dxguid.lib;d3d12.lib;kernel32.lib;user32.lib;gdi32.lib;winspool.lib;shell32.lib;ole32.lib;oleaut32.lib;uuid.lib;comdlg32.lib;advapi32.lib</AdditionalDependencies>
+      <AdditionalDependencies>$(QtRoot)\lib\Qt6Widgets.lib;$(QtRoot)\lib\Qt6Gui.lib;$(QtRoot)\lib\Qt6Core.lib;mpr.lib;userenv.lib;d3d11.lib;dxgi.lib;dxguid.lib;d3d12.lib;kernel32.lib;user32.lib;gdi32.lib;winspool.lib;shell32.lib;ole32.lib;oleaut32.lib;uuid.lib;comdlg32.lib;advapi32.lib</AdditionalDependencies>
       <AdditionalLibraryDirectories>%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
       <AdditionalOptions>%(AdditionalOptions) /machine:x64</AdditionalOptions>
       <GenerateDebugInformation>false</GenerateDebugInformation>
@@ -263,7 +272,7 @@ copy /Y "$(ProjectDir)CHANGELOG.md" "$(OutDir)CHANGELOG.md"</Command>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">
     <ClCompile>
       <AdditionalIncludeDirectories>$(ProjectDir)\thirdparty;$(ProjectDir)\thirdparty\imgui;$(ProjectDir)\thirdparty\ImGuizmo;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
-      <AdditionalOptions>%(AdditionalOptions) /external:I "C:/Qt/6.9.0/msvc2022_64/include/QtWidgets" /external:I "C:/Qt/6.9.0/msvc2022_64/include" /external:I "C:/Qt/6.9.0/msvc2022_64/include/QtCore" /external:I "C:/Qt/6.9.0/msvc2022_64/mkspecs/win32-msvc" /external:I "C:/Qt/6.9.0/msvc2022_64/include/QtGui" -Zc:__cplusplus -utf-8</AdditionalOptions>
+      <AdditionalOptions>%(AdditionalOptions) /external:I "$(QtRoot)/include/QtWidgets" /external:I "$(QtRoot)/include" /external:I "$(QtRoot)/include/QtCore" /external:I "$(QtRoot)/mkspecs/win32-msvc" /external:I "$(QtRoot)/include/QtGui" -Zc:__cplusplus -utf-8</AdditionalOptions>
       <AssemblerListingLocation>$(IntDir)</AssemblerListingLocation>
       <BasicRuntimeChecks>Default</BasicRuntimeChecks>
       <ConformanceMode>true</ConformanceMode>
@@ -290,7 +299,7 @@ copy /Y "$(ProjectDir)CHANGELOG.md" "$(OutDir)CHANGELOG.md"</Command>
       <AdditionalIncludeDirectories>$(ProjectDir)\thirdparty;$(ProjectDir)\thirdparty\imgui;$(ProjectDir)\thirdparty\ImGuizmo;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ResourceCompile>
     <Midl>
-      <AdditionalIncludeDirectories>$(ProjectDir)\thirdparty;$(ProjectDir)\oW3DEdit_autogen\include_RelWithDebInfo;C:\Qt\6.9.0\msvc2022_64\include\QtWidgets;C:\Qt\6.9.0\msvc2022_64\include;C:\Qt\6.9.0\msvc2022_64\include\QtCore;C:\Qt\6.9.0\msvc2022_64\mkspecs\win32-msvc;C:\Qt\6.9.0\msvc2022_64\include\QtGui;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(ProjectDir)\thirdparty;$(ProjectDir)\oW3DEdit_autogen\include_RelWithDebInfo;$(QtRoot)\include\QtWidgets;$(QtRoot)\include;$(QtRoot)\include\QtCore;$(QtRoot)\mkspecs\win32-msvc;$(QtRoot)\include\QtGui;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <OutputDirectory>$(ProjectDir)/$(IntDir)</OutputDirectory>
       <HeaderFileName>%(Filename).h</HeaderFileName>
       <TypeLibraryName>%(Filename).tlb</TypeLibraryName>
@@ -298,7 +307,7 @@ copy /Y "$(ProjectDir)CHANGELOG.md" "$(OutDir)CHANGELOG.md"</Command>
       <ProxyFileName>%(Filename)_p.c</ProxyFileName>
     </Midl>
     <Link>
-      <AdditionalDependencies>C:\Qt\6.9.0\msvc2022_64\lib\Qt6Widgets.lib;C:\Qt\6.9.0\msvc2022_64\lib\Qt6Gui.lib;C:\Qt\6.9.0\msvc2022_64\lib\Qt6Core.lib;mpr.lib;userenv.lib;d3d11.lib;dxgi.lib;dxguid.lib;d3d12.lib;kernel32.lib;user32.lib;gdi32.lib;winspool.lib;shell32.lib;ole32.lib;oleaut32.lib;uuid.lib;comdlg32.lib;advapi32.lib</AdditionalDependencies>
+      <AdditionalDependencies>$(QtRoot)\lib\Qt6Widgets.lib;$(QtRoot)\lib\Qt6Gui.lib;$(QtRoot)\lib\Qt6Core.lib;mpr.lib;userenv.lib;d3d11.lib;dxgi.lib;dxguid.lib;d3d12.lib;kernel32.lib;user32.lib;gdi32.lib;winspool.lib;shell32.lib;ole32.lib;oleaut32.lib;uuid.lib;comdlg32.lib;advapi32.lib</AdditionalDependencies>
       <AdditionalLibraryDirectories>%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
       <AdditionalOptions>%(AdditionalOptions) /machine:x64</AdditionalOptions>
       <GenerateDebugInformation>true</GenerateDebugInformation>

@@ -9,7 +9,7 @@ viewport.
 From a Developer PowerShell prompt:
 
 ```powershell
-C:\Qt\6.9.0\msvc2022_64\bin\designer.exe MainWindow.ui
+C:\Qt\6.9.3\msvc2022_64\bin\designer.exe MainWindow.ui
 ```
 
 Useful starting forms:

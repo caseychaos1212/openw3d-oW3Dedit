@@ -35,7 +35,7 @@ Never edit or commit generated `ui_*.h` files.
 
 The checked-in solution targets Windows x64 with Visual Studio 2022, MSVC v143,
 and Qt 6.9.x. The project currently expects Qt at
-`C:\Qt\6.9.0\msvc2022_64`. Prefer the checked-in solution and project files over
+`C:\Qt\6.9.3\msvc2022_64` by default. Prefer the checked-in solution and project files over
 introducing a second build system.
 
 From Developer PowerShell, a representative Debug build is:

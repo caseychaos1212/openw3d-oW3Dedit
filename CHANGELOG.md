@@ -2,6 +2,13 @@
 
 Notable changes to oW3DEdit are documented here.
 
+## [Unreleased]
+
+### Fixed
+
+- Open and losslessly preserve W3D files with short legacy `FF` trailers after the final chunk.
+- Retarget the checked-in MSVC project to Qt 6.9.3 and centralize its overridable Qt root path.
+
 ## [0.6.0-alpha] - 2026-07-12
 
 This release expands oW3DEdit from a chunk-focused utility into a more complete asset inspection, editing, and preview workflow.
@@ -27,4 +34,5 @@ This release expands oW3DEdit from a chunk-focused utility into a more complete 
 - Prebuilt packages target Windows x64.
 - Some uncommon W3D chunks can be preserved and represented in JSON without having a dedicated graphical editor.
 
+[Unreleased]: https://github.com/caseychaos1212/openw3d-oW3Dedit/compare/v0.6.0-alpha...HEAD
 [0.6.0-alpha]: https://github.com/caseychaos1212/openw3d-oW3Dedit/compare/v0.5.0-alpha...v0.6.0-alpha
